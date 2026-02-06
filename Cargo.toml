@@ -52,7 +52,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pemfile = "2"
 
 # OIDC
-openidconnect = "3"
+openidconnect = "4"
 url = "2"
 tower-cookies = "0.10"
 
