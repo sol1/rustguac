@@ -2,7 +2,7 @@
 
 ## OIDC Single Sign-On
 
-rustguac supports OpenID Connect for user authentication. Any OIDC provider works: Authentik, Keycloak, Okta, Azure AD, Google, JumpCloud, etc.
+rustguac supports OpenID Connect for user authentication. Any OIDC provider works: Authentik, Keycloak, Okta, Azure AD, Google, etc.
 
 ### Setup
 

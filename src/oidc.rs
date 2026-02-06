@@ -10,19 +10,31 @@ use axum::{
 };
 use openidconnect::{
     core::{CoreClient, CoreProviderMetadata, CoreResponseType},
-    reqwest::async_http_client,
-    AuthType, AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl,
-    Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
+    AuthType, AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    EndpointMaybeSet, EndpointNotSet, EndpointSet, IssuerUrl, Nonce, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// The concrete CoreClient type after from_provider_metadata + set_redirect_uri.
+/// from_provider_metadata sets auth/token/userinfo to EndpointSet when present in metadata.
+type OidcClient = CoreClient<
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointMaybeSet,
+    EndpointMaybeSet,
+>;
+
 /// Shared OIDC state initialized once at startup.
 #[derive(Clone)]
 pub struct OidcState {
-    pub client: CoreClient,
+    pub client: OidcClient,
+    pub http_client: openidconnect::reqwest::Client,
     pub config: OidcConfig,
     /// Auth session TTL in seconds.
     pub session_ttl_secs: u64,
@@ -32,10 +44,15 @@ pub struct OidcState {
 
 /// Initialize OIDC client by discovering provider metadata.
 pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<OidcState, String> {
+    let http_client = openidconnect::reqwest::ClientBuilder::new()
+        .redirect(openidconnect::reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
     let issuer_url = IssuerUrl::new(config.issuer_url.clone())
         .map_err(|e| format!("Invalid issuer URL: {}", e))?;
 
-    let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, async_http_client)
+    let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, &http_client)
         .await
         .map_err(|e| format!("OIDC discovery failed: {}", e))?;
 
@@ -52,6 +69,7 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
 
     Ok(OidcState {
         client,
+        http_client,
         config: config.clone(),
         session_ttl_secs,
         pending: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -155,11 +173,21 @@ pub async fn callback(
     };
 
     // Exchange authorization code for tokens
-    let token_response = match oidc
-        .client
-        .exchange_code(AuthorizationCode::new(code))
+    let code_request = match oidc.client.exchange_code(AuthorizationCode::new(code)) {
+        Ok(req) => req,
+        Err(e) => {
+            tracing::error!("OIDC token endpoint not configured: {:?}", e);
+            return (
+                StatusCode::BAD_GATEWAY,
+                axum::Json(json!({"error": "OIDC token endpoint not available"})),
+            )
+                .into_response();
+        }
+    };
+
+    let token_response = match code_request
         .set_pkce_verifier(pkce_verifier)
-        .request_async(async_http_client)
+        .request_async(&oidc.http_client)
         .await
     {
         Ok(resp) => resp,
@@ -174,7 +202,8 @@ pub async fn callback(
     };
 
     // Extract and verify ID token
-    let id_token = match token_response.id_token() {
+    use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
+    let id_token: &CoreIdToken = match token_response.id_token() {
         Some(t) => t,
         None => {
             return (
@@ -185,7 +214,8 @@ pub async fn callback(
         }
     };
 
-    let claims = match id_token.claims(&oidc.client.id_token_verifier(), &nonce) {
+    let claims: &CoreIdTokenClaims = match id_token.claims(&oidc.client.id_token_verifier(), &nonce)
+    {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("OIDC ID token verification failed: {}", e);
@@ -199,11 +229,11 @@ pub async fn callback(
 
     // Extract user info from claims
     let subject = claims.subject().to_string();
-    let email = claims
+    let email: String = claims
         .email()
         .map(|e| e.to_string())
         .unwrap_or_else(|| subject.clone());
-    let name = claims
+    let name: String = claims
         .name()
         .and_then(|n| n.get(None).map(|v| v.to_string()))
         .unwrap_or_default();
@@ -374,7 +404,7 @@ fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect(),
-        // JumpCloud sends a plain string instead of an array when user is in one group
+        // Some OIDC providers send a plain string instead of an array when user is in one group
         Some(serde_json::Value::String(s)) => vec![s.clone()],
         _ => Vec::new(),
     }

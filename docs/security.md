@@ -70,7 +70,7 @@ rustguac supports two parallel authentication paths. See [Roles and Access Contr
 - Cookie: `rustguac_session` with `HttpOnly`, `Secure` (when TLS enabled), `SameSite=Lax`
 - Configurable TTL (default: 24 hours)
 - PKCE and nonce validation on every login flow
-- Works with any OIDC provider (JumpCloud, Okta, Azure AD, Google, Keycloak, etc.)
+- Works with any OIDC provider (Authentik, Keycloak, Okta, Azure AD, Google, etc.)
 
 ## Rate limiting
 

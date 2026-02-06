@@ -114,7 +114,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # ─── OIDC (Single Sign-On) ───────────────────────────────────────────────────
 #
 # Enables OpenID Connect authentication. Works with any OIDC provider:
-# Authentik, Keycloak, Okta, Azure AD, Google, JumpCloud, etc.
+# Authentik, Keycloak, Okta, Azure AD, Google, etc.
 #
 # The client_secret can also be set via the OIDC_CLIENT_SECRET environment
 # variable, which takes precedence over this config file. Recommended for
