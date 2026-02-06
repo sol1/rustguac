@@ -93,6 +93,9 @@ enum Command {
         /// Output directory for cert.pem and key.pem
         #[arg(long, default_value = ".")]
         out_dir: String,
+        /// Additional Subject Alternative Names (hostnames or IPs). localhost and 127.0.0.1 are always included.
+        #[arg(long = "san")]
+        extra_sans: Vec<String>,
     },
 
     /// List all OIDC users
@@ -151,8 +154,12 @@ async fn main() {
         Some(Command::EnableAdmin { name }) => cmd_enable_admin(&database, &name),
         Some(Command::DeleteAdmin { name }) => cmd_delete_admin(&database, &name),
         Some(Command::RotateKey { name }) => cmd_rotate_key(&database, &name),
-        Some(Command::GenerateCert { hostname, out_dir }) => {
-            cmd_generate_cert(&hostname, &out_dir);
+        Some(Command::GenerateCert {
+            hostname,
+            out_dir,
+            extra_sans,
+        }) => {
+            cmd_generate_cert(&hostname, &out_dir, &extra_sans);
         }
         Some(Command::ListUsers) => cmd_list_users(&database),
         Some(Command::SetRole { email, role }) => cmd_set_role(&database, &email, &role),
@@ -267,12 +274,22 @@ fn cmd_rotate_key(database: &Db, name: &str) {
     }
 }
 
-fn cmd_generate_cert(hostname: &str, out_dir: &str) {
+fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
     use rcgen::{generate_simple_self_signed, CertifiedKey};
 
-    let subject_alt_names = vec![hostname.to_string(), "localhost".to_string()];
+    let mut sans = vec![
+        hostname.to_string(),
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+    ];
+    for san in extra_sans {
+        if !sans.contains(san) {
+            sans.push(san.clone());
+        }
+    }
+
     let CertifiedKey { cert, key_pair } =
-        generate_simple_self_signed(subject_alt_names).expect("Failed to generate certificate");
+        generate_simple_self_signed(sans.clone()).expect("Failed to generate certificate");
 
     let cert_path = std::path::Path::new(out_dir).join("cert.pem");
     let key_path = std::path::Path::new(out_dir).join("key.pem");
@@ -283,7 +300,7 @@ fn cmd_generate_cert(hostname: &str, out_dir: &str) {
     println!("Generated self-signed certificate:");
     println!("  Certificate: {}", cert_path.display());
     println!("  Private key: {}", key_path.display());
-    println!("  Hostnames:   {}, localhost", hostname);
+    println!("  SANs:        {}", sans.join(", "));
     println!();
     println!("Add to config.toml:");
     println!("  [tls]");

@@ -4,6 +4,17 @@ set -e
 # Ensure data directories have correct ownership
 chown -R rustguac:rustguac /opt/rustguac/data
 chown -R rustguac:rustguac /opt/rustguac/recordings
+
+# Generate self-signed TLS certificate if none exists
+if [ ! -f /opt/rustguac/tls/cert.pem ] || [ ! -f /opt/rustguac/tls/key.pem ]; then
+    CERT_HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+    echo "Generating self-signed TLS certificate for ${CERT_HOSTNAME}..."
+    /opt/rustguac/bin/rustguac generate-cert \
+        --hostname "$CERT_HOSTNAME" \
+        --out-dir /opt/rustguac/tls
+    chmod 600 /opt/rustguac/tls/key.pem
+    chmod 644 /opt/rustguac/tls/cert.pem
+fi
 chown -R rustguac:rustguac /opt/rustguac/tls
 
 # Update shared library cache for guacd libs

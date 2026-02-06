@@ -2,11 +2,13 @@
 
 ## Option A: Debian package (recommended)
 
-Pre-built `.deb` packages are available for Debian 13 (Trixie) and compatible distributions.
+Pre-built `.deb` packages are available from the [releases page](https://github.com/sol1/rustguac/releases) for Debian 13 (Trixie) and compatible distributions.
 
 ```bash
-sudo dpkg -i rustguac_*.deb
+sudo apt install ./rustguac_*.deb
 ```
+
+Using `apt install` (not `dpkg -i`) ensures all runtime dependencies are resolved automatically.
 
 The package installs to `/opt/rustguac` and creates systemd services for both guacd and rustguac.
 

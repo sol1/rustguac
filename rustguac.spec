@@ -98,7 +98,18 @@ if ! getent passwd rustguac >/dev/null 2>&1; then
 fi
 
 %post
-chown -R rustguac:rustguac %{_prefix}/data %{_prefix}/recordings %{_prefix}/tls
+chown -R rustguac:rustguac %{_prefix}/data %{_prefix}/recordings
+# Generate self-signed TLS certificate if none exists
+if [ ! -f %{_prefix}/tls/cert.pem ] || [ ! -f %{_prefix}/tls/key.pem ]; then
+    CERT_HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+    echo "Generating self-signed TLS certificate for ${CERT_HOSTNAME}..."
+    %{_prefix}/bin/rustguac generate-cert \
+        --hostname "$CERT_HOSTNAME" \
+        --out-dir %{_prefix}/tls
+    chmod 600 %{_prefix}/tls/key.pem
+    chmod 644 %{_prefix}/tls/cert.pem
+fi
+chown -R rustguac:rustguac %{_prefix}/tls
 /sbin/ldconfig
 %systemd_post rustguac.service rustguac-guacd.service
 echo ""
