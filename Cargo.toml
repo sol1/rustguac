@@ -28,7 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = "0.3"
 
 # Config
-toml = "0.8"
+toml = "0.9"
 
 # Crypto/random
 rand = "0.9"
