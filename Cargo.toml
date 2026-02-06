@@ -72,4 +72,4 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls-webpki-roots"], de
 libc = "0.2"
 
 [build-dependencies]
-pulldown-cmark = "0.12"
+pulldown-cmark = "0.13"
