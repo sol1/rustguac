@@ -49,8 +49,11 @@ impl Instruction {
                 .map_err(|_| ParseError::InvalidLength)?;
             remaining = &remaining[dot_pos + 1..];
 
-            // Extract element value
+            // Extract element value (length is in bytes per Guacamole spec)
             if remaining.len() < len {
+                return Err(ParseError::Truncated);
+            }
+            if !remaining.is_char_boundary(len) {
                 return Err(ParseError::Truncated);
             }
             elements.push(remaining[..len].to_string());

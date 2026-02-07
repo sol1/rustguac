@@ -1,0 +1,28 @@
+[package]
+name = "rustguac-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.rustguac]
+path = ".."
+
+[[bin]]
+name = "protocol_parse"
+path = "fuzz_targets/protocol_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protocol_stream"
+path = "fuzz_targets/protocol_stream.rs"
+test = false
+doc = false
+bench = false
