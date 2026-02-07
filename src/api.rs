@@ -359,10 +359,7 @@ pub async fn delete_recording(
 /// Validate a recording filename: must end in .guac, no path separators,
 /// and the resolved path must stay within the recording directory.
 fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path) -> bool {
-    if !name.ends_with(".guac")
-        || name.contains('/')
-        || name.contains('\\')
-        || name.contains("..")
+    if !name.ends_with(".guac") || name.contains('/') || name.contains('\\') || name.contains("..")
     {
         return false;
     }

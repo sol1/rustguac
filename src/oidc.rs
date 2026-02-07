@@ -40,8 +40,7 @@ pub struct OidcState {
     /// Auth session TTL in seconds.
     pub session_ttl_secs: u64,
     /// Pending OIDC flows: state -> (pkce_verifier, nonce, created_at)
-    pub pending:
-        Arc<Mutex<std::collections::HashMap<String, (PkceCodeVerifier, Nonce, Instant)>>>,
+    pub pending: Arc<Mutex<std::collections::HashMap<String, (PkceCodeVerifier, Nonce, Instant)>>>,
 }
 
 /// Initialize OIDC client by discovering provider metadata.
