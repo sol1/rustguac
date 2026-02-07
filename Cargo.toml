@@ -45,7 +45,7 @@ clap = { version = "4", features = ["derive"] }
 ipnetwork = "0.20"
 
 # TLS
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 rcgen = "0.13"
 tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
