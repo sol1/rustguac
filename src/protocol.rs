@@ -119,15 +119,14 @@ impl fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 /// Streaming parser that accumulates data and yields complete instructions.
+#[derive(Default)]
 pub struct InstructionParser {
     buffer: String,
 }
 
 impl InstructionParser {
     pub fn new() -> Self {
-        Self {
-            buffer: String::new(),
-        }
+        Self::default()
     }
 
     /// Feed data into the parser and return any complete instructions.
