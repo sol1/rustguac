@@ -42,7 +42,7 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 clap = { version = "4", features = ["derive"] }
 
 # IP matching
-ipnetwork = "0.20"
+ipnetwork = "0.21"
 
 # TLS
 axum-server = { version = "0.8", features = ["tls-rustls"] }
