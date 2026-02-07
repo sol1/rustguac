@@ -7,15 +7,52 @@
         :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; }
         body { font-family: monospace; background: var(--bg); color: var(--text); padding: 2em; font-size: 18px; }
         h1 { color: var(--primary); }
-        form {
+        #error { color: var(--primary); margin-top: 0.8em; }
+
+        .login-container { max-width: 360px; margin: 2em 0; }
+
+        #sso-section {
+            display: none;
+            margin-bottom: 1.5em;
+        }
+        #sso-btn {
+            width: 100%;
+            padding: 0.8em;
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            font-family: monospace;
+            font-size: 1.2em;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        #sso-btn:hover { background: var(--accent-hover); }
+
+        .api-key-toggle {
+            color: var(--text-muted);
+            font-size: 0.85em;
+            cursor: pointer;
+            user-select: none;
+            margin-top: 1em;
+            display: none;
+        }
+        .api-key-toggle:hover { color: var(--text); }
+        .api-key-toggle .chevron {
+            display: inline-block;
+            transition: transform 0.2s;
+            margin-right: 0.3em;
+        }
+        .api-key-toggle .chevron.open { transform: rotate(90deg); }
+
+        #login-form {
             background: var(--surface);
             padding: 1.5em;
             border-radius: 6px;
-            max-width: 360px;
-            margin: 2em 0;
+            margin-top: 0.5em;
         }
-        label { display: block; margin-top: 0.8em; color: var(--text-muted); font-size: 0.9em; }
-        input {
+        #login-form label { display: block; margin-top: 0.8em; color: var(--text-muted); font-size: 0.9em; }
+        #login-form input {
             display: block;
             width: 100%;
             padding: 0.4em;
@@ -28,8 +65,8 @@
             border-radius: 3px;
             box-sizing: border-box;
         }
-        input:focus { outline: none; border-color: var(--primary); }
-        button {
+        #login-form input:focus { outline: none; border-color: var(--primary); }
+        #login-form button {
             margin-top: 1.2em;
             padding: 0.5em 1.5em;
             background: var(--primary);
@@ -40,27 +77,31 @@
             border-radius: 3px;
             cursor: pointer;
         }
-        button:hover { background: var(--primary-hover); }
-        button:disabled { background: #555; cursor: default; }
-        #error { color: var(--primary); margin-top: 0.8em; }
+        #login-form button:hover { background: var(--primary-hover); }
+        #login-form button:disabled { background: #555; cursor: default; }
     </style>
 </head>
 <body>
     <img id="site-logo" src="/logo.svg" style="max-height:64px;margin-bottom:0.5em" alt="">
     <h1>rustguac</h1>
 
-    <form id="login-form">
-        <strong>Login</strong>
-        <label>API Key
-            <input type="password" id="api-key" placeholder="Bearer API key" required>
-        </label>
-        <button type="submit" id="login-btn">Login</button>
-        <div id="error"></div>
-    </form>
+    <div class="login-container">
+        <div id="sso-section">
+            <button id="sso-btn">Sign in with SSO</button>
+        </div>
 
-    <div id="sso-section" style="display:none; max-width: 360px; margin: 0;">
-        <div style="text-align: center; color: #666; margin: 1em 0;">— or —</div>
-        <button id="sso-btn" style="width:100%;padding:0.6em;background:var(--accent);color:var(--bg);border:none;font-family:monospace;font-size:1em;border-radius:3px;cursor:pointer;">Sign in with SSO</button>
+        <div class="api-key-toggle" id="api-key-toggle">
+            <span class="chevron" id="api-key-chevron">&#9654;</span> Sign in with API key
+        </div>
+
+        <form id="login-form">
+            <strong>Login</strong>
+            <label>API Key
+                <input type="password" id="api-key" placeholder="Bearer API key" required>
+            </label>
+            <button type="submit" id="login-btn">Login</button>
+            <div id="error"></div>
+        </form>
     </div>
 
     <script>
@@ -89,12 +130,19 @@
             if (theme.logo_url) { var logo = document.getElementById('site-logo'); if (logo) { logo.src = theme.logo_url; logo.style.display = ''; } }
         }
 
+        var loginForm = document.getElementById('login-form');
+        var apiKeyToggle = document.getElementById('api-key-toggle');
+        var chevron = document.getElementById('api-key-chevron');
+
         // Check if OIDC is enabled
         fetch('/api/auth/status')
         .then(function(res) { return res.json(); })
         .then(function(data) {
             if (data.oidc_enabled) {
                 document.getElementById('sso-section').style.display = 'block';
+                apiKeyToggle.style.display = 'block';
+                // Hide API key form by default when SSO is available
+                loginForm.style.display = 'none';
             }
             if (data.site_title) {
                 document.title = data.site_title;
@@ -107,11 +155,17 @@
             window.location.href = '/auth/login';
         });
 
-        var form = document.getElementById('login-form');
+        // Toggle API key form
+        apiKeyToggle.addEventListener('click', function() {
+            var hidden = loginForm.style.display === 'none';
+            loginForm.style.display = hidden ? '' : 'none';
+            chevron.className = hidden ? 'chevron open' : 'chevron';
+        });
+
         var errorEl = document.getElementById('error');
         var btn = document.getElementById('login-btn');
 
-        form.addEventListener('submit', function(e) {
+        loginForm.addEventListener('submit', function(e) {
             e.preventDefault();
             errorEl.textContent = '';
             btn.disabled = true;
