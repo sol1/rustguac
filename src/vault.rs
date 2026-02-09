@@ -72,6 +72,12 @@ pub struct AddressBookEntry {
     pub display_name: Option<String>,
     /// Override drive/file transfer setting for this entry.
     pub enable_drive: Option<bool>,
+    /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
+    pub auth_pkg: Option<String>,
+    /// Kerberos KDC URL (optional).
+    pub kdc_url: Option<String>,
+    /// Whether to prompt for credentials at connect time (even if stored creds exist).
+    pub prompt_credentials: Option<bool>,
 }
 
 /// Entry metadata returned to non-admin users (credentials stripped).
@@ -88,6 +94,14 @@ pub struct EntryInfo {
     pub security: Option<String>,
     pub ignore_cert: Option<bool>,
     pub enable_drive: Option<bool>,
+    /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
+    pub auth_pkg: Option<String>,
+    /// Kerberos KDC URL (optional).
+    pub kdc_url: Option<String>,
+    /// Whether to prompt for credentials at connect time.
+    pub prompt_credentials: Option<bool>,
+    /// Whether the entry has a stored password or private key.
+    pub has_credentials: bool,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -104,6 +118,11 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             security: e.security.clone(),
             ignore_cert: e.ignore_cert,
             enable_drive: e.enable_drive,
+            auth_pkg: e.auth_pkg.clone(),
+            kdc_url: e.kdc_url.clone(),
+            prompt_credentials: e.prompt_credentials,
+            has_credentials: e.password.as_ref().is_some_and(|p| !p.is_empty())
+                || e.private_key.as_ref().is_some_and(|k| !k.is_empty()),
         }
     }
 }

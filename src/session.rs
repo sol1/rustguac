@@ -45,6 +45,12 @@ pub struct CreateSessionRequest {
     pub domain: Option<String>,
     pub security: Option<String>,
     pub ignore_cert: Option<bool>,
+    /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
+    pub auth_pkg: Option<String>,
+    /// Kerberos KDC URL (optional).
+    pub kdc_url: Option<String>,
+    /// Kerberos ticket cache path (optional).
+    pub kerberos_cache: Option<String>,
     // Common
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -392,6 +398,9 @@ impl SessionManager {
                     drive_name: drive_cfg.drive_name.clone(),
                     disable_download: !drive_cfg.allow_download,
                     disable_upload: !drive_cfg.allow_upload,
+                    auth_pkg: req.auth_pkg.clone(),
+                    kdc_url: req.kdc_url.clone(),
+                    kerberos_cache: req.kerberos_cache.clone(),
                 });
                 (
                     params,

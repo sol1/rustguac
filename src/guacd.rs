@@ -53,6 +53,12 @@ pub struct RdpParams {
     pub drive_name: String,
     pub disable_download: bool,
     pub disable_upload: bool,
+    /// NLA authentication package: "kerberos", "ntlm", or empty (negotiate).
+    pub auth_pkg: Option<String>,
+    /// Kerberos KDC URL (optional, uses system krb5.conf if unset).
+    pub kdc_url: Option<String>,
+    /// Path to Kerberos ticket cache file (optional).
+    pub kerberos_cache: Option<String>,
 }
 
 /// Connection parameters — SSH, VNC, or RDP.
@@ -223,6 +229,9 @@ pub async fn connect_and_handshake(
                 "drive-name" => p.drive_name.clone(),
                 "disable-download" => if p.disable_download { "true" } else { "false" }.into(),
                 "disable-upload" => if p.disable_upload { "true" } else { "false" }.into(),
+                "auth-pkg" => p.auth_pkg.clone().unwrap_or_default(),
+                "kdc-url" => p.kdc_url.clone().unwrap_or_default(),
+                "kerberos-cache" => p.kerberos_cache.clone().unwrap_or_default(),
                 _ => {
                     tracing::debug!("Unknown guacd RDP parameter '{}', sending empty", name);
                     String::new()

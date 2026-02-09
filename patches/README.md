@@ -23,6 +23,32 @@ These patches are applied to the [apache/guacamole-server](https://github.com/ap
 | `src/protocols/rdp/input-queue.c` | Replace all `->input->MouseEvent()` calls with `freerdp_input_send_mouse_event()` |
 | `src/protocols/rdp/channels/disp.c` | Add NULL guards in `guac_rdp_disp_channel_connected()` and `guac_rdp_disp_channel_disconnected()` |
 
+## 002-kerberos-nla.patch
+
+**Feature:** Adds Kerberos NLA authentication support to guacd's RDP protocol, based on [GUACAMOLE-2057](https://issues.apache.org/jira/browse/GUACAMOLE-2057) ([PR #581](https://github.com/apache/guacamole-server/pull/581)). This allows RDP connections to use Kerberos instead of NTLM for NLA, which is required as Microsoft phases out NTLM.
+
+Three new connection parameters:
+
+| Parameter | Values | FreeRDP3 Setting |
+|-----------|--------|------------------|
+| `auth-pkg` | `""` (negotiate), `"kerberos"`, `"ntlm"` | `FreeRDP_AuthenticationPackageList` |
+| `kdc-url` | KDC server URL (optional) | `FreeRDP_KerberosKdcUrl` |
+| `kerberos-cache` | Path to ccache file (optional) | `FreeRDP_KerberosCache` |
+
+**Files patched:**
+
+| File | Fix |
+|------|-----|
+| `src/protocols/rdp/settings.h` | Add `guac_rdp_auth_package` enum, add `auth_pkg`, `kdc_url`, `kerberos_cache` fields to `guac_rdp_settings` |
+| `src/protocols/rdp/settings.c` | Add connection parameter parsing, FreeRDP3 settings push, memory cleanup |
+
+**Differences from upstream PR #581:**
+- Dropped FreeRDP2 code path (not needed on Debian 13)
+- Fixed `guac_strdup()` leak in `freerdp_settings_set_string()` calls (FreeRDP3 copies internally)
+- Fixed typos ("NTML" -> "NTLM", "negotiatoin" -> "negotiation")
+
+**Requires:** FreeRDP 3.x built with Kerberos support (`-DWITH_KRB5=ON`). Debian 13's `freerdp3-dev` includes this by default.
+
 ## Applying patches
 
 Patches are applied automatically by all build scripts (`build-deb.sh`, `build-rpm.sh`, `install.sh`, `dev.sh`, `Dockerfile`). To apply manually:

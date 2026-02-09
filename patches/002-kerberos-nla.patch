@@ -1,0 +1,178 @@
+diff --git a/src/protocols/rdp/settings.c b/src/protocols/rdp/settings.c
+index 49a38af0..d97d98e1 100644
+--- a/src/protocols/rdp/settings.c
++++ b/src/protocols/rdp/settings.c
+@@ -79,6 +79,9 @@ const char* GUAC_RDP_CLIENT_ARGS[] = {
+     "server-layout",
+     "security",
+     "ignore-cert",
++    "auth-pkg",
++    "kdc-url",
++    "kerberos-cache",
+     "cert-tofu",
+     "cert-fingerprints",
+     "disable-auth",
+@@ -303,6 +306,24 @@ enum RDP_ARGS_IDX {
+      */
+     IDX_IGNORE_CERT,
+ 
++    /**
++     * The authentication package to use for NLA. Valid values are "ntlm",
++     * "kerberos", or blank (negotiate both).
++     */
++    IDX_AUTH_PKG,
++
++    /**
++     * When using Kerberos authentication, the URL of the KDC server. If
++     * blank, the system krb5.conf default will be used.
++     */
++    IDX_KDC_URL,
++
++    /**
++     * When using Kerberos authentication, the path to the Kerberos ticket
++     * cache file. If blank, the default credential cache will be used.
++     */
++    IDX_KERBEROS_CACHE,
++
+     /**
+      * "true" if a server certificate should be trusted the first time that
+      * a connection is established, and then subsequently checked for validity,
+@@ -832,6 +853,29 @@ guac_rdp_settings* guac_rdp_parse_args(guac_user* user,
+         settings->security_mode = GUAC_SECURITY_ANY;
+     }
+ 
++    /* Parse authentication package */
++    if (strcmp(argv[IDX_AUTH_PKG], "kerberos") == 0) {
++        guac_user_log(user, GUAC_LOG_INFO, "Authentication package: Kerberos");
++        settings->auth_pkg = GUAC_AUTH_PKG_KERBEROS;
++    }
++    else if (strcmp(argv[IDX_AUTH_PKG], "ntlm") == 0) {
++        guac_user_log(user, GUAC_LOG_INFO, "Authentication package: NTLM");
++        settings->auth_pkg = GUAC_AUTH_PKG_NTLM;
++    }
++    else {
++        guac_user_log(user, GUAC_LOG_INFO,
++                "No authentication package specified. Defaulting to negotiate.");
++        settings->auth_pkg = GUAC_AUTH_PKG_ANY;
++    }
++
++    /* Kerberos KDC URL */
++    settings->kdc_url = guac_user_parse_args_string(user,
++            GUAC_RDP_CLIENT_ARGS, argv, IDX_KDC_URL, NULL);
++
++    /* Kerberos ticket cache */
++    settings->kerberos_cache = guac_user_parse_args_string(user,
++            GUAC_RDP_CLIENT_ARGS, argv, IDX_KERBEROS_CACHE, NULL);
++
+     /* Set hostname */
+     settings->hostname =
+         guac_user_parse_args_string(user, GUAC_RDP_CLIENT_ARGS, argv,
+@@ -1412,6 +1456,10 @@ void guac_rdp_settings_free(guac_rdp_settings* settings) {
+     guac_mem_free(settings->username);
+     guac_mem_free(settings->printer_name);
+ 
++    /* Free Kerberos settings */
++    guac_mem_free(settings->kdc_url);
++    guac_mem_free(settings->kerberos_cache);
++
+     /* Free channel name array */
+     if (settings->svc_names != NULL) {
+ 
+@@ -1698,12 +1746,36 @@ void guac_rdp_push_settings(guac_client* client,
+ 
+     }
+ 
++    /* Authentication package (Kerberos/NTLM) */
++    switch (guac_settings->auth_pkg) {
++        case GUAC_AUTH_PKG_NTLM:
++            freerdp_settings_set_string(rdp_settings,
++                    FreeRDP_AuthenticationPackageList, "ntlm,!kerberos");
++            break;
++        case GUAC_AUTH_PKG_KERBEROS:
++            freerdp_settings_set_string(rdp_settings,
++                    FreeRDP_AuthenticationPackageList, "!ntlm,kerberos");
++            break;
++        case GUAC_AUTH_PKG_ANY:
++            freerdp_settings_set_string(rdp_settings,
++                    FreeRDP_AuthenticationPackageList, "ntlm,kerberos");
++            break;
++    }
++
++    if (guac_settings->kdc_url != NULL)
++        freerdp_settings_set_string(rdp_settings,
++                FreeRDP_KerberosKdcUrl, guac_settings->kdc_url);
++
++    if (guac_settings->kerberos_cache != NULL)
++        freerdp_settings_set_string(rdp_settings,
++                FreeRDP_KerberosCache, guac_settings->kerberos_cache);
++
+     /* Security */
+     freerdp_settings_set_bool(rdp_settings, FreeRDP_Authentication, !guac_settings->disable_authentication);
+     freerdp_settings_set_bool(rdp_settings, FreeRDP_IgnoreCertificate, guac_settings->ignore_certificate);
+     freerdp_settings_set_bool(rdp_settings, FreeRDP_AutoAcceptCertificate, guac_settings->certificate_tofu);
+     if (guac_settings->certificate_fingerprints != NULL)
+-        freerdp_settings_set_string(rdp_settings, FreeRDP_CertificateAcceptedFingerprints, 
++        freerdp_settings_set_string(rdp_settings, FreeRDP_CertificateAcceptedFingerprints,
+                 guac_strdup(guac_settings->certificate_fingerprints));
+ 
+ 
+diff --git a/src/protocols/rdp/settings.h b/src/protocols/rdp/settings.h
+index b4bb098d..87745cf5 100644
+--- a/src/protocols/rdp/settings.h
++++ b/src/protocols/rdp/settings.h
+@@ -124,6 +124,31 @@ typedef enum guac_rdp_security {
+ 
+ } guac_rdp_security;
+ 
++/**
++ * All supported authentication packages for RDP NLA.
++ */
++typedef enum guac_rdp_auth_package {
++
++    /**
++     * NTLM-based authentication. Still the default for Windows, but being
++     * phased out in favor of Kerberos due to security concerns.
++     */
++    GUAC_AUTH_PKG_NTLM,
++
++    /**
++     * Kerberos-based authentication, supported by FreeRDP3. Preferred over
++     * NTLM for its superior security properties.
++     */
++    GUAC_AUTH_PKG_KERBEROS,
++
++    /**
++     * Allow the client and server to negotiate without preferring one
++     * authentication package over the other.
++     */
++    GUAC_AUTH_PKG_ANY
++
++} guac_rdp_auth_package;
++
+ /**
+  * All supported combinations screen resize methods.
+  */
+@@ -295,6 +320,23 @@ typedef struct guac_rdp_settings {
+      */
+     guac_rdp_security security_mode;
+ 
++    /**
++     * The authentication package to use for NLA.
++     */
++    guac_rdp_auth_package auth_pkg;
++
++    /**
++     * When using Kerberos authentication, the URL of the KDC. May be NULL
++     * to use the system default from krb5.conf.
++     */
++    char* kdc_url;
++
++    /**
++     * When using Kerberos authentication, the path to the ticket cache file.
++     * May be NULL to use the default credential cache.
++     */
++    char* kerberos_cache;
++
+     /**
+      * Whether bad server certificates should be ignored.
+      */

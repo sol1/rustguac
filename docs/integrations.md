@@ -207,10 +207,220 @@ Address book entries can be SSH, RDP, or Web connections. Each entry stores:
 - Connection type and target (hostname, port, URL)
 - Credentials (username, password, private key)
 - Protocol-specific settings (domain, security mode, certificate ignore, drive override)
+- **Prompt for credentials** — when enabled, users are asked for username/password at connect time, even if stored credentials exist
+- **NLA auth package** (RDP only) — force Kerberos or NTLM for NLA authentication
+- **KDC URL** (RDP only) — Kerberos Key Distribution Center proxy URL
 
 ### Name validation
 
 Folder and entry names are validated: alphanumeric characters, hyphens, underscores, and dots only. Length 1-64. Characters like `/`, `\`, and `..` are blocked to prevent path traversal in Vault.
+
+### Credential prompting
+
+Address book entries can be configured to prompt users for credentials at connect time. This is useful for:
+
+- **Entries without stored credentials** — e.g., RDP servers where each user has their own AD account. The admin creates the entry with just hostname/port, and users supply their own credentials when connecting.
+- **Entries with stored credentials but prompt enabled** — e.g., a jump host where the stored credentials are a fallback, but users should normally use their own.
+
+The credential prompt appears automatically when:
+1. The entry has **Prompt for credentials** enabled, OR
+2. The entry has no stored password or private key (SSH/RDP only; Web sessions don't use credentials)
+
+Prompted credentials are **never stored** — they're used for the current session only and discarded.
+
+---
+
+## RDP Kerberos NLA Authentication
+
+rustguac includes a patched guacd with Kerberos NLA (Network Level Authentication) support. This allows RDP connections to authenticate using Kerberos instead of NTLM, which is important as Microsoft is phasing out NTLM.
+
+### Background
+
+Windows NLA (Network Level Authentication) normally negotiates the authentication protocol. By default, this typically uses NTLM. Microsoft has announced a multi-phase NTLM deprecation:
+
+- **Phase 1** (current): Auditing and awareness
+- **Phase 2** (H2 2026): New Kerberos features, NTLMv1 blocked by default
+- **Phase 3** (future): NTLM disabled by default
+
+AD accounts in the **Protected Users** security group already cannot use NTLM at all. The `auth_pkg` setting forces Kerberos for NLA, ensuring compatibility as NTLM is deprecated and enabling connections to Protected Users accounts.
+
+### How it works
+
+FreeRDP does not implement its own Kerberos stack. The chain is:
+
+```
+guacd -> libfreerdp3 -> libwinpr3 (SSPI/Negotiate) -> libgssapi_krb5 -> libkrb5 (MIT Kerberos)
+```
+
+FreeRDP's WinPR layer implements Windows SSPI on top of the system's MIT Kerberos libraries. This means it reads `/etc/krb5.conf`, uses the system credential cache, and respects `KRB5_CONFIG` and `KRB5_TRACE` environment variables. Username and password are still required — Kerberos replaces the wire authentication protocol (NTLM -> Kerberos), not the credential input.
+
+### Per-entry configuration
+
+These settings are configured per address book entry in the admin UI:
+
+| Setting | Values | Description |
+|---------|--------|-------------|
+| **NLA Auth Package** | `(default)`, `ntlm`, `kerberos` | Force a specific NLA authentication method. Default lets the client and server negotiate. |
+| **KDC URL** | URL | KDC or KDC Proxy URL. Overrides DNS SRV and krb5.conf for KDC discovery. |
+| **Prompt for credentials** | checkbox | Prompt users for username/password/domain at connect time. |
+
+### System prerequisites
+
+#### Packages
+
+On Debian 13, the Kerberos runtime libraries (`libkrb5-3`, `libgssapi-krb5-2`) are already installed as dependencies of FreeRDP 3 (`libwinpr3-3`). No extra packages are required for Kerberos to work.
+
+For **testing and debugging**, install the Kerberos user tools:
+
+```bash
+apt install krb5-user
+```
+
+This provides `kinit`, `klist`, and `kdestroy`, and creates `/etc/krb5.conf` during installation.
+
+#### Network requirements
+
+| Port | Direction | Purpose |
+|------|-----------|---------|
+| TCP 88 | guacd -> Domain Controller | Kerberos AS-REQ/TGS-REQ |
+| TCP 443 | guacd -> KDC Proxy | HTTPS KDC Proxy tunnel (only if using `kdc-url`) |
+| TCP 3389 | guacd -> RDP target | RDP connection |
+
+If using a **KDC Proxy URL** (`kdc-url`), direct access to port 88 is not needed. The KDC Proxy protocol tunnels Kerberos messages over HTTPS, making it ideal for environments where the guacd server is on a different network than the domain controller.
+
+#### Time synchronisation
+
+Kerberos has a default clock skew tolerance of **5 minutes**. Ensure NTP is configured on the rustguac server:
+
+```bash
+timedatectl status   # verify time is synced
+```
+
+#### DNS requirements
+
+**The RDP target hostname MUST be a fully-qualified domain name (FQDN).** Kerberos constructs a service principal name (`TERMSRV/server.example.com@REALM`) from the hostname. Using IP addresses or NetBIOS short names will cause Kerberos ticket acquisition to fail.
+
+For automatic KDC discovery (without `kdc-url` or `krb5.conf`), the domain needs DNS SRV records:
+
+```
+_kerberos._tcp.EXAMPLE.COM.  SRV  0 0 88  dc1.example.com.
+```
+
+The guacd server itself does not need to be domain-joined — it only needs network access to the KDC.
+
+### KDC discovery: three options
+
+FreeRDP/libkrb5 finds the KDC in this order of priority:
+
+**Option 1: KDC Proxy URL (simplest for remote networks)**
+
+Set the **KDC URL** field on the address book entry to your KDC Proxy endpoint (e.g., `https://dc.example.com/KdcProxy`). This bypasses DNS SRV and krb5.conf entirely. Windows Server's KDC Proxy Service can serve this role.
+
+**Option 2: DNS SRV records (simplest for on-network)**
+
+If the guacd server uses the domain's DNS servers and `_kerberos._tcp.REALM` SRV records exist, Kerberos will discover the KDC automatically. No configuration needed on the guacd host.
+
+**Option 3: /etc/krb5.conf (explicit configuration)**
+
+If DNS SRV records are not available and you're not using a KDC proxy, create `/etc/krb5.conf`:
+
+```ini
+[libdefaults]
+    default_realm = EXAMPLE.COM
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    udp_preference_limit = 1
+
+[realms]
+    EXAMPLE.COM = {
+        kdc = tcp/dc1.example.com
+        admin_server = dc1.example.com
+    }
+    example.com = {
+        kdc = tcp/dc1.example.com
+        admin_server = dc1.example.com
+    }
+
+[domain_realm]
+    .example.com = EXAMPLE.COM
+    example.com = EXAMPLE.COM
+```
+
+Important notes for krb5.conf:
+
+- **Define realms in both uppercase AND lowercase** — GSSAPI on Linux is case-sensitive (unlike Windows)
+- **Use `tcp/` prefix** for KDC entries to force TCP transport (avoids UDP response size issues)
+- **A broken krb5.conf is worse than none** — if krb5.conf points to unreachable KDCs, FreeRDP 3 can **hang indefinitely** during authentication (deadlock in the SSPI/Negotiate layer). Delete or fix any stale krb5.conf.
+
+### Username format
+
+Use **UPN format** for usernames: `user@EXAMPLE.COM` (e.g., `jdoe@CORP.EXAMPLE.COM`). This is more reliable with GSSAPI on Linux than the `DOMAIN\user` format.
+
+The **Domain** field should be the AD domain name (e.g., `EXAMPLE.COM`).
+
+### Example: Kerberos RDP entry
+
+Create an address book entry with:
+
+- **Type**: RDP
+- **Hostname**: `fileserver.corp.example.com` (must be FQDN)
+- **Port**: 3389
+- **Security**: NLA
+- **NLA Auth Package**: Kerberos
+- **KDC URL**: `https://dc.corp.example.com/KdcProxy` (if KDC is not directly reachable)
+- **Prompt for credentials**: checked (users supply their own AD credentials)
+- **Domain**: `CORP.EXAMPLE.COM`
+
+When a user connects, they'll be prompted for username, password, and domain. The connection will authenticate via Kerberos NLA to the target.
+
+### guacd patch details
+
+The Kerberos NLA support is provided by patch `002-kerberos-nla.patch`, which adds three connection parameters to guacd's RDP handler:
+
+| Parameter | FreeRDP 3 setting | Description |
+|-----------|-------------------|-------------|
+| `auth-pkg` | `AuthenticationPackageList` | `kerberos` sets `!ntlm,kerberos`; `ntlm` sets `ntlm,!kerberos`; empty negotiates |
+| `kdc-url` | `KerberosKdcUrl` | KDC or KDC Proxy URL — overrides DNS SRV and krb5.conf |
+| `kerberos-cache` | `KerberosCache` | Path to a credential cache (ccache) file — advanced use |
+
+This patch is based on the upstream [GUACAMOLE-2057](https://issues.apache.org/jira/browse/GUACAMOLE-2057) work (guacamole-server PR #581), adapted for FreeRDP 3.x on Debian 13. Differences from upstream: dropped the FreeRDP 2 code path, fixed a `guac_strdup()` memory leak, and fixed typos.
+
+### Troubleshooting
+
+**Enable Kerberos tracing** by adding to the rustguac environment file:
+
+```bash
+echo 'KRB5_TRACE=/dev/stderr' >> /opt/rustguac/env
+sudo systemctl restart rustguac
+# View trace output:
+journalctl -u rustguac -f
+```
+
+**Test Kerberos manually** from the guacd server:
+
+```bash
+# Check DNS SRV records
+dig SRV _kerberos._tcp.EXAMPLE.COM
+
+# Test obtaining a ticket
+kinit user@EXAMPLE.COM
+klist
+
+# Test RDP directly with xfreerdp3
+xfreerdp3 /v:server.example.com /u:user@EXAMPLE.COM /d:EXAMPLE.COM \
+  /auth-pkg-list:'!ntlm,kerberos' /cert:ignore
+```
+
+**Common issues:**
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| Connection hangs indefinitely | Broken `/etc/krb5.conf` with unreachable KDC entries | Delete or fix krb5.conf, or use `kdc-url` instead |
+| "Authentication failed" | Wrong username format, unreachable KDC, or wrong domain | Use UPN format (`user@REALM`), verify KDC connectivity |
+| "Clock skew too great" | Time out of sync by more than 5 minutes | Configure NTP: `timedatectl set-ntp true` |
+| Kerberos fails, no NTLM fallback | `auth-pkg` set to `kerberos` disables NTLM | Fix Kerberos setup, or use default (negotiate) to allow fallback |
+| "Cannot resolve host" / SPN failure | RDP hostname is an IP or short name | Use FQDN (e.g., `server.example.com` not `server` or `10.0.1.5`) |
+| TGT succeeds but TGS fails | SPN mismatch — hostname doesn't match AD computer object | Verify the hostname matches the AD computer account's DNS name |
 
 ---
 

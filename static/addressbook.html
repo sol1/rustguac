@@ -264,6 +264,10 @@
                 <label>Private key (PEM)
                     <textarea id="em-private-key" rows="3" style="resize:vertical;font-size:0.85em" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
                 </label>
+                <label style="margin-top:0.8em">
+                    <input type="checkbox" id="em-ssh-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
+                </label>
+                <div class="field-hint">When enabled, users will be asked for username/password even if credentials are stored.</div>
             </div>
             <div id="em-rdp-fields" style="display:none">
                 <label>Hostname
@@ -293,6 +297,22 @@
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-rdp-ignore-cert" style="display:inline;width:auto;margin-right:0.4em"> Ignore certificate errors
                 </label>
+                <label>NLA Auth Package
+                    <select id="em-rdp-auth-pkg">
+                        <option value="">Default (negotiate)</option>
+                        <option value="ntlm">NTLM</option>
+                        <option value="kerberos">Kerberos</option>
+                    </select>
+                </label>
+                <div class="field-hint">Force a specific NLA authentication package. Kerberos requires domain-joined machines.</div>
+                <label>KDC URL <span style="color:#666;font-size:0.85em">(Kerberos only)</span>
+                    <input type="text" id="em-rdp-kdc-url" placeholder="e.g. https://dc.example.com/KdcProxy">
+                </label>
+                <div class="field-hint">Optional. Kerberos Key Distribution Center proxy URL.</div>
+                <label style="margin-top:0.8em">
+                    <input type="checkbox" id="em-rdp-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
+                </label>
+                <div class="field-hint">When enabled, users will be asked for username/password even if credentials are stored.</div>
             </div>
             <div id="em-web-fields" style="display:none">
                 <label>URL
@@ -316,6 +336,32 @@
             <div class="modal-actions">
                 <button id="em-save">Save</button>
                 <button class="btn-cancel" id="em-cancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Credential prompt modal -->
+    <div class="modal-overlay" id="cred-modal">
+        <div class="modal">
+            <h3 id="cred-modal-title">Enter Credentials</h3>
+            <p style="color:var(--text-muted);font-size:0.9em;margin-top:0" id="cred-modal-desc">This entry requires credentials to connect.</p>
+            <div id="cred-username-row">
+                <label>Username
+                    <input type="text" id="cred-username" autocomplete="username">
+                </label>
+            </div>
+            <label>Password
+                <input type="password" id="cred-password" autocomplete="current-password">
+            </label>
+            <div id="cred-domain-row">
+                <label>Domain
+                    <input type="text" id="cred-domain" placeholder="optional">
+                </label>
+            </div>
+            <div id="cred-error" style="color:var(--primary);margin-top:0.5em"></div>
+            <div class="modal-actions">
+                <button class="btn-connect" id="cred-connect">Connect</button>
+                <button class="btn-cancel" id="cred-cancel">Cancel</button>
             </div>
         </div>
     </div>
@@ -565,10 +611,16 @@
 
                 html += '<tr>';
                 html += '<td>' + escapeHtml(label) + '</td>';
-                html += '<td><span class="type-badge ' + typeCls + '">' + e.session_type.toUpperCase() + '</span></td>';
+                var typeLabel = e.session_type.toUpperCase();
+                if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
+                html += '<td><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
                 html += '<td>' + escapeHtml(host) + '</td>';
-                html += '<td>' + escapeHtml(e.username || '') + '</td>';
-                html += '<td><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">Connect</button></td>';
+                var userCol = e.username ? escapeHtml(e.username) : '';
+                var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web';
+                if (needsPrompt) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials will be prompted at connect time">[prompt]</span>';
+                html += '<td>' + userCol + '</td>';
+                var connectLabel = needsPrompt ? 'Login...' : 'Connect';
+                html += '<td><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">' + connectLabel + '</button></td>';
                 if (isAdmin) {
                     html += '<td><button class="btn-small" data-edit-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '" data-type="' + escapeAttr(e.session_type) + '">edit</button></td>';
                     html += '<td><button class="btn-small" data-delete-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">delete</button></td>';
@@ -590,37 +642,108 @@
             return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
 
-        // Connect to an entry
+        // Connect to an entry (with optional credential prompt)
+        var pendingConnect = null; // { scope, folder, name, btn }
+
+        function doConnect(scope, folder, name, btn, extraBody) {
+            btn.disabled = true;
+            btn.textContent = 'Connecting...';
+            clearError();
+            var body = extraBody || {};
+            fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect', {
+                method: 'POST',
+                headers: apiHeaders({ 'Content-Type': 'application/json' }),
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            })
+            .then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                return res.json();
+            })
+            .then(function(data) {
+                window.open(data.client_url, '_blank');
+            })
+            .catch(function(err) {
+                showError(err.message);
+            })
+            .finally(function() {
+                btn.disabled = false;
+                btn.textContent = 'Connect';
+            });
+        }
+
+        function showCredPrompt(entry, scope, folder, btn) {
+            pendingConnect = { scope: scope, folder: folder, name: entry.name, btn: btn };
+            var label = entry.display_name || entry.name;
+            document.getElementById('cred-modal-title').textContent = 'Credentials for ' + label;
+            var isRdp = entry.session_type === 'rdp';
+            document.getElementById('cred-domain-row').style.display = isRdp ? '' : 'none';
+            // Pre-fill username if the entry has one stored
+            document.getElementById('cred-username').value = entry.username || '';
+            document.getElementById('cred-password').value = '';
+            document.getElementById('cred-domain').value = entry.domain || '';
+            document.getElementById('cred-error').textContent = '';
+            document.getElementById('cred-modal').classList.add('active');
+            // Focus password if username is pre-filled, otherwise focus username
+            if (entry.username) {
+                document.getElementById('cred-password').focus();
+            } else {
+                document.getElementById('cred-username').focus();
+            }
+        }
+
+        document.getElementById('cred-cancel').addEventListener('click', function() {
+            document.getElementById('cred-modal').classList.remove('active');
+            if (pendingConnect && pendingConnect.btn) {
+                pendingConnect.btn.disabled = false;
+                pendingConnect.btn.textContent = 'Connect';
+            }
+            pendingConnect = null;
+        });
+
+        document.getElementById('cred-connect').addEventListener('click', function() {
+            if (!pendingConnect) return;
+            var pw = document.getElementById('cred-password').value;
+            if (!pw) {
+                document.getElementById('cred-error').textContent = 'Password is required.';
+                return;
+            }
+            var body = { password: pw };
+            var u = document.getElementById('cred-username').value.trim();
+            if (u) body.username = u;
+            var d = document.getElementById('cred-domain').value.trim();
+            if (d) body.domain = d;
+            document.getElementById('cred-modal').classList.remove('active');
+            doConnect(pendingConnect.scope, pendingConnect.folder, pendingConnect.name, pendingConnect.btn, body);
+            pendingConnect = null;
+        });
+
+        // Submit on Enter in the credential prompt
+        document.getElementById('cred-password').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') document.getElementById('cred-connect').click();
+        });
+
         document.getElementById('entries-content').addEventListener('click', function(e) {
             var btn = e.target;
             if (btn.getAttribute('data-connect')) {
                 var name = btn.getAttribute('data-connect');
                 var scope = btn.getAttribute('data-scope');
                 var folder = btn.getAttribute('data-folder');
-                btn.disabled = true;
-                btn.textContent = 'Connecting...';
                 clearError();
 
-                fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect', {
-                    method: 'POST',
-                    headers: apiHeaders({ 'Content-Type': 'application/json' }),
-                    credentials: 'same-origin',
-                    body: JSON.stringify({})
-                })
-                .then(function(res) {
-                    if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
-                    return res.json();
-                })
-                .then(function(data) {
-                    window.open(data.client_url, '_blank');
-                })
-                .catch(function(err) {
-                    showError(err.message);
-                })
-                .finally(function() {
-                    btn.disabled = false;
-                    btn.textContent = 'Connect';
-                });
+                // Find the entry data to check if credentials are stored
+                var entry = null;
+                for (var i = 0; i < currentEntries.length; i++) {
+                    if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
+                }
+
+                // Prompt for credentials if prompt_credentials is set or no stored creds
+                // (RDP and SSH entries without passwords/keys)
+                if (entry && (entry.prompt_credentials || !entry.has_credentials) && entry.session_type !== 'web') {
+                    showCredPrompt(entry, scope, folder, btn);
+                } else {
+                    doConnect(scope, folder, name, btn);
+                }
                 return;
             }
 
@@ -820,6 +943,10 @@
             document.getElementById('em-rdp-domain').value = '';
             document.getElementById('em-rdp-security').value = '';
             document.getElementById('em-rdp-ignore-cert').checked = false;
+            document.getElementById('em-rdp-auth-pkg').value = '';
+            document.getElementById('em-rdp-kdc-url').value = '';
+            document.getElementById('em-rdp-prompt-creds').checked = false;
+            document.getElementById('em-ssh-prompt-creds').checked = false;
             document.getElementById('em-url').value = '';
             document.getElementById('em-enable-drive').checked = false;
         }
@@ -869,6 +996,7 @@
                     document.getElementById('em-hostname').value = entryData.hostname || '';
                     document.getElementById('em-port').value = entryData.port || '22';
                     document.getElementById('em-username').value = entryData.username || '';
+                    document.getElementById('em-ssh-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'rdp') {
                     document.getElementById('em-rdp-hostname').value = entryData.hostname || '';
                     document.getElementById('em-rdp-port').value = entryData.port || '3389';
@@ -878,6 +1006,9 @@
                         document.getElementById('em-rdp-security').value = entryData.security;
                     }
                     document.getElementById('em-rdp-ignore-cert').checked = !!entryData.ignore_cert;
+                    document.getElementById('em-rdp-auth-pkg').value = entryData.auth_pkg || '';
+                    document.getElementById('em-rdp-kdc-url').value = entryData.kdc_url || '';
+                    document.getElementById('em-rdp-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'web') {
                     document.getElementById('em-url').value = entryData.url || '';
                 }
@@ -919,6 +1050,7 @@
                 if (pw) entry.password = pw;
                 var pk = document.getElementById('em-private-key').value.trim();
                 if (pk) entry.private_key = pk;
+                if (document.getElementById('em-ssh-prompt-creds').checked) entry.prompt_credentials = true;
             } else if (type === 'rdp') {
                 var h = document.getElementById('em-rdp-hostname').value.trim();
                 if (h) entry.hostname = h;
@@ -933,6 +1065,11 @@
                 var sec = document.getElementById('em-rdp-security').value;
                 if (sec) entry.security = sec;
                 entry.ignore_cert = document.getElementById('em-rdp-ignore-cert').checked;
+                var authPkg = document.getElementById('em-rdp-auth-pkg').value;
+                if (authPkg) entry.auth_pkg = authPkg;
+                var kdcUrl = document.getElementById('em-rdp-kdc-url').value.trim();
+                if (kdcUrl) entry.kdc_url = kdcUrl;
+                if (document.getElementById('em-rdp-prompt-creds').checked) entry.prompt_credentials = true;
             } else if (type === 'web') {
                 var url = document.getElementById('em-url').value.trim();
                 if (url) entry.url = url;

@@ -1032,6 +1032,13 @@ pub struct ConnectRequest {
     pub dpi: Option<u32>,
     #[serde(default)]
     pub banner: Option<String>,
+    /// Override or supply credentials at connect time (never stored).
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
 }
 
 /// POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect — Create session from entry.
@@ -1098,19 +1105,23 @@ pub async fn ab_connect_entry(
         }
     };
 
-    // Build CreateSessionRequest from the Vault entry + connect request display params
+    // Build CreateSessionRequest from the Vault entry + connect request display params.
+    // ConnectRequest credentials override address book values (for prompted credentials).
     let create_req = CreateSessionRequest {
         session_type,
         hostname: ab_entry.hostname,
         port: ab_entry.port,
-        username: ab_entry.username,
-        password: ab_entry.password,
+        username: req.username.or(ab_entry.username),
+        password: req.password.or(ab_entry.password),
         private_key: ab_entry.private_key,
         generate_keypair: None,
         url: ab_entry.url,
-        domain: ab_entry.domain,
+        domain: req.domain.or(ab_entry.domain),
         security: ab_entry.security,
         ignore_cert: ab_entry.ignore_cert,
+        auth_pkg: ab_entry.auth_pkg,
+        kdc_url: ab_entry.kdc_url,
+        kerberos_cache: None,
         width: req.width,
         height: req.height,
         dpi: req.dpi,
