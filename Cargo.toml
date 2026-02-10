@@ -69,7 +69,7 @@ base64 = "0.22"
 reqwest = { version = "0.12", features = ["json", "rustls-tls-webpki-roots"], default-features = false }
 
 # SSH tunneling (jump host / bastion)
-russh = "0.49"
+russh = "0.54"
 russh-keys = "0.49"
 async-trait = "0.1"
 
