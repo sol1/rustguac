@@ -38,6 +38,8 @@ Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Cr
 
 When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the address book (credentials from Vault). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode — if the target requires authentication, the user will see guacd's login prompt.
 
+If the address book entry has `prompt_credentials: true` or has no stored password/key, the endpoint returns an inline credential form instead of creating the session immediately. The user enters credentials, which are POSTed to the connect endpoint and used for that session only (never stored).
+
 See [NetBox Integration](netbox.md) for usage with NetBox Custom Links.
 
 ## Sessions
@@ -383,7 +385,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 ```json
 {
   "name": "prod-db",
-  "session_type": "ssh",
+  "type": "ssh",
   "hostname": "db.internal.example.com",
   "port": 22,
   "username": "admin",
@@ -403,7 +405,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 
 | Field | Type | Used by | Description |
 |-------|------|---------|-------------|
-| `session_type` | string | All | `ssh`, `rdp`, `vnc`, or `web` |
+| `type` | string | All | `ssh`, `rdp`, `vnc`, or `web` |
 | `hostname` | string | SSH, RDP, VNC | Target hostname or IP |
 | `port` | integer | SSH, RDP, VNC | Target port |
 | `username` | string | SSH, RDP | Username |

@@ -2,7 +2,7 @@
 
 rustguac integrates with [NetBox](https://netbox.dev/) to provide one-click remote console access from device pages. No NetBox plugin is required — the integration uses NetBox's built-in Custom Links, Custom Fields, and Event Rules.
 
-**Note:** NetBox Custom Links use **Jinja2** template syntax. Filter arguments use parentheses — `default('ssh')` — not Django's colon syntax (`default:'ssh'`).
+**Note:** NetBox Custom Links and Webhook body templates use **Jinja2** template syntax. Filter arguments use parentheses — `default('ssh')` — not Django's colon syntax (`default:'ssh'`). Only standard Jinja2 filters are available (e.g. `lower`, `default`, `split`). Ansible filters like `regex_replace` and Django filters like `cut` are **not** available. Custom Links use `object.cf.field_name` for custom fields; Webhook body templates use `data.custom_fields.field_name` (the REST API serialization).
 
 ## Custom Fields
 
@@ -150,14 +150,16 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
    - Body template:
      ```json
      {
-       "name": "{{ data.name | lower | regex_replace('[^a-z0-9_.\\-]', '-') }}",
-       "session_type": "{{ data.custom_fields.remote_protocol | default('ssh') }}",
-       "hostname": "{{ data.primary_ip4.address | cut('/') }}",
+       "name": "{{ data.name | lower }}",
+       "type": "{{ data.custom_fields.remote_protocol | default('ssh') }}",
+       "hostname": "{{ data.primary_ip4.address.split('/')[0] }}",
        "port": {{ data.custom_fields.remote_port | default(22) }},
        "display_name": "{{ data.name }} ({{ data.site.name }})",
        "prompt_credentials": true
      }
      ```
+
+     **Important:** The entry field is `type`, not `session_type` (it matches the Vault storage format). The hostname uses `.split('/')[0]` to strip the CIDR prefix from NetBox IP addresses (e.g. `10.0.0.1/24` → `10.0.0.1`). Avoid `regex_replace` and `cut` filters — they are not available in NetBox's Jinja2 environment.
 
 ### Create webhook: device deleted
 
@@ -169,7 +171,7 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 
 2. **Create the Webhook**:
    - Name: `rustguac-sync-delete`
-   - URL: `https://console.example.com/api/addressbook/folders/shared/netbox-sync/entries/{{ data.name | lower | regex_replace("[^a-z0-9_.-]", "-") }}`
+   - URL: `https://console.example.com/api/addressbook/folders/shared/netbox-sync/entries/{{ data.name | lower }}`
    - HTTP method: DELETE
    - Additional headers:
      ```

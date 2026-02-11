@@ -406,6 +406,9 @@
             jumpSection.style.display = '';
         });
 
+        // Show jump section on initial load (default is SSH)
+        jumpSection.style.display = '';
+
         document.getElementById('jump-toggle').addEventListener('click', function() {
             var fields = document.getElementById('jump-fields');
             var arrow = document.getElementById('jump-arrow');

@@ -2170,6 +2170,24 @@ pub async fn quick_connect(
             }
         };
 
+        // Check if we need to prompt for credentials before connecting
+        let needs_prompt = ab_entry.session_type != "web"
+            && (ab_entry.prompt_credentials == Some(true)
+                || (ab_entry.password.as_ref().is_none_or(|p| p.is_empty())
+                    && ab_entry.private_key.as_ref().is_none_or(|k| k.is_empty())));
+
+        if needs_prompt {
+            return quick_connect_credential_form(
+                scope,
+                folder,
+                entry,
+                &ab_entry.session_type,
+                ab_entry.username.as_deref(),
+                ab_entry.domain.as_deref(),
+                ab_entry.display_name.as_deref(),
+            );
+        }
+
         let session_type = match ab_entry.session_type.as_str() {
             "ssh" => SessionType::Ssh,
             "rdp" => SessionType::Rdp,
@@ -2291,6 +2309,123 @@ pub async fn quick_connect(
         Ok(info) => Redirect::temporary(&format!("/client/{}", info.session_id)).into_response(),
         Err(e) => quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
+}
+
+/// Return an inline HTML credential form for quick-connect when prompting is needed.
+fn quick_connect_credential_form(
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    session_type: &str,
+    username: Option<&str>,
+    domain: Option<&str>,
+    display_name: Option<&str>,
+) -> Response {
+    let title = display_name.unwrap_or(entry);
+    let user_val = html_escape(username.unwrap_or(""));
+    let domain_val = html_escape(domain.unwrap_or(""));
+    let domain_display = if session_type == "rdp" {
+        "block"
+    } else {
+        "none"
+    };
+    let html = format!(
+        r##"<!DOCTYPE html>
+<html><head><title>Connect — {title}</title>
+<style>
+*{{box-sizing:border-box}}
+body{{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;margin:0;
+  display:flex;justify-content:center;align-items:center;min-height:100vh}}
+.card{{background:#16213e;border-radius:12px;padding:32px;width:100%;max-width:400px;
+  box-shadow:0 4px 24px rgba(0,0,0,.4)}}
+h2{{margin:0 0 4px;color:#fff;font-size:1.3em}}
+.sub{{color:#8899aa;font-size:.85em;margin-bottom:20px}}
+label{{display:block;color:#aab;font-size:.85em;margin-bottom:4px;margin-top:14px}}
+input{{width:100%;padding:10px 12px;border:1px solid #2a3a5e;border-radius:6px;
+  background:#0f1629;color:#e0e0e0;font-size:1em}}
+input:focus{{outline:none;border-color:#4a6fa5}}
+.domain-row{{display:{domain_display}}}
+button{{width:100%;margin-top:20px;padding:12px;border:none;border-radius:6px;
+  background:#4a6fa5;color:#fff;font-size:1em;cursor:pointer;font-weight:600}}
+button:hover{{background:#5a8fbf}}
+button:disabled{{opacity:.6;cursor:wait}}
+.error{{color:#f66;font-size:.85em;margin-top:12px;display:none}}
+</style></head>
+<body>
+<div class="card">
+<h2>{title}</h2>
+<div class="sub">{session_type_upper} connection</div>
+<form id="cred-form" autocomplete="on"
+  data-scope="{scope}" data-folder="{folder}" data-entry="{entry}">
+<label for="username">Username</label>
+<input id="username" name="username" type="text" value="{user_val}" autocomplete="username" autofocus>
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="current-password">
+<div class="domain-row">
+<label for="domain">Domain</label>
+<input id="domain" name="domain" type="text" value="{domain_val}">
+</div>
+<button type="submit" id="btn">Connect</button>
+<div class="error" id="err"></div>
+</form>
+</div>
+<script>
+document.getElementById('cred-form').addEventListener('submit', async function(e) {{
+  e.preventDefault();
+  const form = e.target;
+  const btn = document.getElementById('btn');
+  const err = document.getElementById('err');
+  btn.disabled = true;
+  btn.textContent = 'Connecting…';
+  err.style.display = 'none';
+  const apiPath = '/api/addressbook/folders/'
+    + encodeURIComponent(form.dataset.scope) + '/'
+    + encodeURIComponent(form.dataset.folder) + '/entries/'
+    + encodeURIComponent(form.dataset.entry) + '/connect';
+  const body = {{
+    username: document.getElementById('username').value || undefined,
+    password: document.getElementById('password').value || undefined,
+    domain: document.getElementById('domain').value || undefined,
+    width: window.innerWidth,
+    height: window.innerHeight,
+    dpi: Math.round(window.devicePixelRatio * 96) || 96,
+  }};
+  try {{
+    const headers = {{'Content-Type': 'application/json'}};
+    const apiKey = sessionStorage.getItem('api_key');
+    if (apiKey) headers['X-API-Key'] = apiKey;
+    const resp = await fetch(apiPath, {{
+      method: 'POST',
+      headers: headers,
+      credentials: 'same-origin',
+      body: JSON.stringify(body),
+    }});
+    if (resp.ok) {{
+      const data = await resp.json();
+      window.location.href = '/client/' + data.session_id;
+    }} else {{
+      const data = await resp.json().catch(() => ({{}}));
+      throw new Error(data.error || ('HTTP ' + resp.status));
+    }}
+  }} catch (ex) {{
+    err.textContent = ex.message;
+    err.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Connect';
+  }}
+}});
+</script>
+</body></html>"##,
+        title = html_escape(title),
+        session_type_upper = session_type.to_uppercase(),
+        domain_display = domain_display,
+        scope = html_escape(scope),
+        folder = html_escape(folder),
+        entry = html_escape(entry),
+        user_val = user_val,
+        domain_val = domain_val,
+    );
+    (StatusCode::OK, axum::response::Html(html)).into_response()
 }
 
 /// Return an HTML error page for quick-connect failures (browser redirect flow).
