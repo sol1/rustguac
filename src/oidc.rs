@@ -81,8 +81,13 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
     })
 }
 
+#[derive(Deserialize)]
+pub struct LoginParams {
+    pub next: Option<String>,
+}
+
 /// GET /auth/login — redirect user to OIDC provider.
-pub async fn login(State(oidc): State<OidcState>) -> Response {
+pub async fn login(State(oidc): State<OidcState>, Query(params): Query<LoginParams>) -> Response {
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let mut auth_request = oidc
@@ -113,13 +118,26 @@ pub async fn login(State(oidc): State<OidcState>) -> Response {
     drop(pending);
 
     // Set state in a cookie so we can verify on callback, then redirect
-    let cookie = format!(
+    let state_cookie = format!(
         "rustguac_oidc_state={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
         state_key
     );
 
+    let mut cookies = vec![(header::SET_COOKIE, state_cookie)];
+
+    // Store post-login redirect URL in a cookie if provided and safe
+    if let Some(ref next) = params.next {
+        if next.starts_with('/') && !next.contains("://") {
+            let next_cookie = format!(
+                "rustguac_next={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
+                next
+            );
+            cookies.push((header::SET_COOKIE, next_cookie));
+        }
+    }
+
     (
-        [(header::SET_COOKIE, cookie)],
+        AppendHeaders(cookies),
         Redirect::temporary(auth_url.as_str()),
     )
         .into_response()
@@ -137,6 +155,7 @@ pub struct CallbackParams {
 pub async fn callback(
     State(oidc): State<OidcState>,
     Extension(database): Extension<Db>,
+    headers: axum::http::HeaderMap,
     Query(params): Query<CallbackParams>,
 ) -> Response {
     // Handle SSO error responses (e.g. user denied consent, timeout)
@@ -345,21 +364,27 @@ pub async fn callback(
 
     tracing::info!(email = %email, role = %effective_role, "OIDC login successful");
 
-    // Set session cookie and redirect to sessions page
-    // Clear the OIDC state cookie too
+    // Check for post-login redirect cookie
+    let redirect_to = extract_cookie_from_headers(&headers, "rustguac_next")
+        .filter(|n| n.starts_with('/') && !n.contains("://"))
+        .unwrap_or_else(|| "/addressbook.html".to_string());
+
+    // Set session cookie and redirect; clear OIDC state and next cookies
     let session_cookie = format!(
         "rustguac_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
         session_token, ttl_secs
     );
     let clear_state_cookie =
         "rustguac_oidc_state=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".to_string();
+    let clear_next_cookie = "rustguac_next=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".to_string();
 
     (
         AppendHeaders([
             (header::SET_COOKIE, session_cookie),
             (header::SET_COOKIE, clear_state_cookie),
+            (header::SET_COOKIE, clear_next_cookie),
         ]),
-        Redirect::temporary("/addressbook.html"),
+        Redirect::temporary(&redirect_to),
     )
         .into_response()
 }
@@ -418,8 +443,12 @@ fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
 
 /// Extract a cookie value from request headers.
 fn extract_cookie_value(request: &axum::extract::Request, name: &str) -> Option<String> {
-    request
-        .headers()
+    extract_cookie_from_headers(request.headers(), name)
+}
+
+/// Extract a cookie value from a HeaderMap.
+fn extract_cookie_from_headers(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+    headers
         .get("cookie")
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {

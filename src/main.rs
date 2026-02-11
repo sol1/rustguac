@@ -736,6 +736,15 @@ async fn run_server(config: Config, database: Db) {
         .layer(middleware::from_fn(auth::optional_auth))
         .layer(Extension(database.clone()));
 
+    // Quick-connect route with optional auth (handles its own redirect-to-login)
+    let connect_route = Router::new()
+        .route("/api/connect", get(api::quick_connect))
+        .with_state(manager.clone())
+        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(vault_client.clone()))
+        .layer(Extension(oidc_enabled.clone()))
+        .layer(Extension(database.clone()));
+
     // Unauthenticated stateful routes
     let unauth_routes = Router::new()
         .route("/api/health", get(api::health))
@@ -749,6 +758,7 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/auth/status", get(api::auth_status))
         .merge(api_routes)
         .merge(ws_route)
+        .merge(connect_route)
         .merge(unauth_routes);
 
     // Add OIDC routes if configured

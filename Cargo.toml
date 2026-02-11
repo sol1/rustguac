@@ -1,6 +1,6 @@
 [package]
 name = "rustguac"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Lightweight Rust replacement for Apache Guacamole client"
 
@@ -73,6 +73,10 @@ russh = "0.54"
 
 # LUKS drive management (uid/gid for chown)
 libc = "0.2"
+
+# URL encoding/decoding (quick-connect redirect)
+urlencoding = "2"
+serde_urlencoded = "0.7"
 
 [build-dependencies]
 pulldown-cmark = "0.13"

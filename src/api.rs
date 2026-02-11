@@ -8,7 +8,7 @@ use axum::{
     body::Body,
     extract::{ConnectInfo, Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     Extension, Json,
 };
 use serde::Deserialize;
@@ -2054,4 +2054,263 @@ pub async fn admin_token_audit(
         )
             .into_response(),
     }
+}
+
+// ── Quick Connect (external integrations) ──
+
+#[derive(Deserialize)]
+pub struct QuickConnectQuery {
+    /// "ssh", "rdp", "vnc", "web"
+    pub protocol: Option<String>,
+    pub hostname: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub url: Option<String>,
+    // Display
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub dpi: Option<u32>,
+    // Address book mode
+    pub scope: Option<String>,
+    pub folder: Option<String>,
+    pub entry: Option<String>,
+}
+
+/// GET /api/connect — Quick-connect endpoint for external integrations.
+/// Creates a session and 302-redirects to the client page.
+/// If not authenticated, redirects to /auth/login?next=<original-url>.
+#[allow(clippy::too_many_arguments)]
+pub async fn quick_connect(
+    State(manager): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(vault): Extension<VaultState>,
+    Extension(oidc_enabled): Extension<OidcEnabled>,
+    request: axum::extract::Request,
+) -> Response {
+    // Reconstruct query string from the request URI
+    let query_string = request.uri().query().unwrap_or("");
+
+    let query: QuickConnectQuery = match serde_urlencoded::from_str(query_string) {
+        Ok(q) => q,
+        Err(e) => {
+            return quick_connect_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid query parameters: {}", e),
+            );
+        }
+    };
+
+    let id = match identity {
+        Some(Extension(ref id)) => id.clone(),
+        None => {
+            // Not authenticated — redirect to login with next= param
+            if oidc_enabled.0 {
+                let next = format!("/api/connect?{}", query_string);
+                let encoded = urlencoding::encode(&next);
+                return Redirect::temporary(&format!("/auth/login?next={}", encoded))
+                    .into_response();
+            }
+            return quick_connect_error(
+                StatusCode::UNAUTHORIZED,
+                "Authentication required. Sign in via SSO or provide an API key.",
+            );
+        }
+    };
+
+    let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
+    let client_ip = client_ip(&headers, addr.ip(), &proxies);
+    let admin_name = id.display_name().to_string();
+
+    // Address book mode: scope + folder + entry all provided
+    if let (Some(scope), Some(folder), Some(entry)) = (
+        query.scope.as_ref(),
+        query.folder.as_ref(),
+        query.entry.as_ref(),
+    ) {
+        if !id.has_role("operator") {
+            return quick_connect_error(
+                StatusCode::FORBIDDEN,
+                "Operator role or higher required for address book connections.",
+            );
+        }
+
+        let vault = match require_vault(&vault).await {
+            Ok(v) => v,
+            Err(_) => {
+                return quick_connect_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Address book is temporarily unavailable (Vault offline).",
+                );
+            }
+        };
+
+        if check_folder_access(&vault, scope, folder, &id)
+            .await
+            .is_err()
+        {
+            return quick_connect_error(StatusCode::FORBIDDEN, "No access to this folder.");
+        }
+
+        let ab_entry = match vault.get_entry(scope, folder, entry).await {
+            Ok(e) => e,
+            Err(VaultError::NotFound) => {
+                return quick_connect_error(
+                    StatusCode::NOT_FOUND,
+                    &format!("Entry '{}' not found in {}/{}.", entry, scope, folder),
+                );
+            }
+            Err(e) => {
+                return quick_connect_error(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("Failed to read address book entry: {}", e),
+                );
+            }
+        };
+
+        let session_type = match ab_entry.session_type.as_str() {
+            "ssh" => SessionType::Ssh,
+            "rdp" => SessionType::Rdp,
+            "vnc" => SessionType::Vnc,
+            "web" => SessionType::Web,
+            other => {
+                return quick_connect_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("Unknown session type: {}", other),
+                );
+            }
+        };
+
+        let create_req = CreateSessionRequest {
+            session_type,
+            hostname: ab_entry.hostname,
+            port: ab_entry.port,
+            username: ab_entry.username,
+            password: ab_entry.password,
+            private_key: ab_entry.private_key,
+            generate_keypair: None,
+            url: ab_entry.url,
+            domain: ab_entry.domain,
+            security: ab_entry.security,
+            ignore_cert: ab_entry.ignore_cert,
+            auth_pkg: ab_entry.auth_pkg,
+            kdc_url: ab_entry.kdc_url,
+            kerberos_cache: None,
+            color_depth: ab_entry.color_depth,
+            jump_hosts: ab_entry.jump_hosts,
+            jump_host: None,
+            jump_port: None,
+            jump_username: None,
+            jump_password: None,
+            jump_private_key: None,
+            width: query.width,
+            height: query.height,
+            dpi: query.dpi,
+            banner: ab_entry.display_name,
+            enable_drive: ab_entry.enable_drive,
+        };
+
+        tracing::info!(
+            user = %admin_name,
+            client_ip = %client_ip,
+            scope = %scope,
+            folder = %folder,
+            entry = %entry,
+            "Quick connect (address book)"
+        );
+
+        return match manager.create_session(create_req, admin_name).await {
+            Ok(info) => {
+                Redirect::temporary(&format!("/client/{}", info.session_id)).into_response()
+            }
+            Err(e) => quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string()),
+        };
+    }
+
+    // Ad-hoc mode: requires poweruser+
+    if !id.has_role("poweruser") {
+        return quick_connect_error(
+            StatusCode::FORBIDDEN,
+            "Poweruser role or higher required for ad-hoc connections.",
+        );
+    }
+
+    let session_type = match query.protocol.as_deref() {
+        Some("rdp") => SessionType::Rdp,
+        Some("vnc") => SessionType::Vnc,
+        Some("web") => SessionType::Web,
+        Some("ssh") | None => SessionType::Ssh,
+        Some(other) => {
+            return quick_connect_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Unknown protocol '{}'. Use ssh, rdp, vnc, or web.", other),
+            );
+        }
+    };
+
+    tracing::info!(
+        user = %admin_name,
+        client_ip = %client_ip,
+        protocol = query.protocol.as_deref().unwrap_or("ssh"),
+        hostname = query.hostname.as_deref().unwrap_or("?"),
+        "Quick connect (ad-hoc)"
+    );
+
+    let create_req = CreateSessionRequest {
+        session_type,
+        hostname: query.hostname,
+        port: query.port,
+        username: query.username,
+        password: None,
+        private_key: None,
+        generate_keypair: None,
+        url: query.url,
+        domain: None,
+        security: None,
+        ignore_cert: None,
+        auth_pkg: None,
+        kdc_url: None,
+        kerberos_cache: None,
+        color_depth: None,
+        jump_hosts: None,
+        jump_host: None,
+        jump_port: None,
+        jump_username: None,
+        jump_password: None,
+        jump_private_key: None,
+        width: query.width,
+        height: query.height,
+        dpi: query.dpi,
+        banner: None,
+        enable_drive: None,
+    };
+
+    match manager.create_session(create_req, admin_name).await {
+        Ok(info) => Redirect::temporary(&format!("/client/{}", info.session_id)).into_response(),
+        Err(e) => quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string()),
+    }
+}
+
+/// Return an HTML error page for quick-connect failures (browser redirect flow).
+fn quick_connect_error(status: StatusCode, message: &str) -> Response {
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head><title>Connection Error</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 20px}}
+h1{{color:#c00}}a{{color:#06c}}</style></head>
+<body><h1>Connection Error</h1><p>{}</p>
+<p><a href="/">Return to home page</a></p></body></html>"#,
+        html_escape(message)
+    );
+    (status, axum::response::Html(html)).into_response()
+}
+
+/// Minimal HTML escaping for error messages.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

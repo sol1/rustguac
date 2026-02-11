@@ -8,6 +8,38 @@ All API endpoints are under `/api/`. Authentication is via `Authorization: Beare
 
 No authentication required. Returns 200 OK when the server is running.
 
+## Quick Connect
+
+### `GET /api/connect`
+
+Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Creates a session and redirects to the client page. If the user is not authenticated and OIDC is configured, redirects to SSO login and back after authentication.
+
+**Ad-hoc mode** (poweruser+):
+
+    /api/connect?hostname=10.0.1.50&protocol=ssh
+
+**Address book mode** (operator+):
+
+    /api/connect?scope=shared&folder=production&entry=web-server-01
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `protocol` | string | `ssh`, `rdp`, `vnc`, or `web` (default: ssh) |
+| `hostname` | string | Target hostname or IP |
+| `port` | integer | Target port (uses protocol default if omitted) |
+| `username` | string | Username (optional) |
+| `url` | string | Target URL (web sessions) |
+| `scope` | string | Address book scope: `shared` or `instance` |
+| `folder` | string | Address book folder name |
+| `entry` | string | Address book entry name |
+| `width` | integer | Display width in pixels |
+| `height` | integer | Display height in pixels |
+| `dpi` | integer | Display DPI |
+
+When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the address book (credentials from Vault). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode — if the target requires authentication, the user will see guacd's login prompt.
+
+See [NetBox Integration](netbox.md) for usage with NetBox Custom Links.
+
 ## Sessions
 
 ### `POST /api/sessions`
@@ -190,8 +222,8 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 ```json
 {
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
-  "client_url": "/client.html?session_id=550e8400-e29b-41d4-a716-446655440000",
-  "share_url": "/client.html?session_id=550e8400-e29b-41d4-a716-446655440000&key=abc123"
+  "client_url": "/client/550e8400-e29b-41d4-a716-446655440000",
+  "share_url": "/client/550e8400-e29b-41d4-a716-446655440000&key=abc123"
 }
 ```
 
