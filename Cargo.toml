@@ -70,7 +70,7 @@ base64 = "0.22"
 reqwest = { version = "0.12", features = ["json", "rustls-tls-webpki-roots"], default-features = false }
 
 # SSH tunneling (jump host / bastion)
-russh = "0.54"
+russh = "0.57"
 
 # LUKS drive management (uid/gid for chown)
 libc = "0.2"
