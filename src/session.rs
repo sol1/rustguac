@@ -70,6 +70,16 @@ pub struct CreateSessionRequest {
     pub banner: Option<String>,
     /// Override drive/file transfer setting for this session.
     pub enable_drive: Option<bool>,
+    // RDP RemoteApp (RAIL)
+    pub remote_app: Option<String>,
+    pub remote_app_dir: Option<String>,
+    pub remote_app_args: Option<String>,
+    // Recording overrides
+    pub enable_recording: Option<bool>,
+    /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
+    pub address_book_entry: Option<String>,
+    /// Per-entry max recordings to keep.
+    pub max_recordings: Option<u32>,
 }
 
 /// Session status in the lifecycle.
@@ -135,6 +145,12 @@ pub struct Session {
     pub drive_path: Option<std::path::PathBuf>,
     /// SSH tunnel chain (jump hosts) — kept alive for the session duration.
     pub tunnels: Vec<tunnel::SshTunnel>,
+    /// Whether recording is enabled for this session.
+    pub recording_enabled: bool,
+    /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
+    pub address_book_entry: Option<String>,
+    /// Per-entry max recordings to keep (from address book entry).
+    pub max_recordings: Option<u32>,
 }
 
 fn generate_share_token() -> String {
@@ -225,16 +241,14 @@ pub struct SessionManager {
 impl SessionManager {
     pub fn new(config: Config, guacd_tls: Option<TlsConnector>) -> Self {
         // Ensure recording directory exists with restrictive permissions
-        if let Err(e) = std::fs::create_dir_all(&config.recording_path) {
+        let rec_path = config.effective_recording_path();
+        if let Err(e) = std::fs::create_dir_all(rec_path) {
             tracing::warn!("Failed to create recording directory: {}", e);
         } else {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &config.recording_path,
-                    std::fs::Permissions::from_mode(0o750),
-                );
+                let _ = std::fs::set_permissions(rec_path, std::fs::Permissions::from_mode(0o750));
             }
         }
 
@@ -394,7 +408,7 @@ impl SessionManager {
                     has_password = req.password.is_some(),
                     "RDP session params"
                 );
-                let params = guacd::ConnectionParams::Rdp(guacd::RdpParams {
+                let params = guacd::ConnectionParams::Rdp(Box::new(guacd::RdpParams {
                     hostname: hostname.clone(),
                     port,
                     username: username.clone(),
@@ -415,7 +429,10 @@ impl SessionManager {
                     auth_pkg: req.auth_pkg.clone(),
                     kdc_url: req.kdc_url.clone(),
                     kerberos_cache: req.kerberos_cache.clone(),
-                });
+                    remote_app: req.remote_app.clone(),
+                    remote_app_dir: req.remote_app_dir.clone(),
+                    remote_app_args: req.remote_app_args.clone(),
+                }));
                 (
                     params,
                     hostname,
@@ -678,6 +695,10 @@ impl SessionManager {
             (Some(stream), connection_id, None)
         };
 
+        let recording_enabled = req
+            .enable_recording
+            .unwrap_or(self.config.recording_enabled());
+
         let session = Session {
             id: session_id,
             session_type: req.session_type,
@@ -699,6 +720,9 @@ impl SessionManager {
             deferred_params,
             drive_path: session_drive_path,
             tunnels: ssh_tunnels,
+            recording_enabled,
+            address_book_entry: req.address_book_entry,
+            max_recordings: req.max_recordings,
         };
 
         let info = session.info();
@@ -955,11 +979,34 @@ impl SessionManager {
     }
 
     pub fn recording_path(&self) -> &std::path::Path {
-        &self.config.recording_path
+        self.config.effective_recording_path()
+    }
+
+    /// Check if recording is enabled for a given session.
+    pub async fn is_recording_enabled(&self, id: Uuid) -> bool {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(&id) {
+            let session = session.lock().await;
+            session.recording_enabled
+        } else {
+            false
+        }
+    }
+
+    /// Get recording metadata for a session (address_book_entry, max_recordings).
+    pub async fn get_recording_meta(&self, id: Uuid) -> Option<(Option<String>, Option<u32>)> {
+        let sessions = self.sessions.read().await;
+        let session = sessions.get(&id)?;
+        let session = session.lock().await;
+        Some((session.address_book_entry.clone(), session.max_recordings))
     }
 
     pub fn session_max_duration_secs(&self) -> u64 {
         self.config.session_max_duration_secs
+    }
+
+    pub fn recording_config(&self) -> crate::config::RecordingConfig {
+        self.config.recording_config()
     }
 }
 

@@ -61,13 +61,19 @@ pub struct RdpParams {
     pub kdc_url: Option<String>,
     /// Path to Kerberos ticket cache file (optional).
     pub kerberos_cache: Option<String>,
+    /// RemoteApp program path (RAIL).
+    pub remote_app: Option<String>,
+    /// RemoteApp working directory.
+    pub remote_app_dir: Option<String>,
+    /// RemoteApp command-line arguments.
+    pub remote_app_args: Option<String>,
 }
 
 /// Connection parameters — SSH, VNC, or RDP.
 pub enum ConnectionParams {
     Ssh(SshParams),
     Vnc(VncParams),
-    Rdp(RdpParams),
+    Rdp(Box<RdpParams>),
 }
 
 /// Connect to guacd and perform the Guacamole protocol handshake.
@@ -234,6 +240,9 @@ pub async fn connect_and_handshake(
                 "auth-pkg" => p.auth_pkg.clone().unwrap_or_default(),
                 "kdc-url" => p.kdc_url.clone().unwrap_or_default(),
                 "kerberos-cache" => p.kerberos_cache.clone().unwrap_or_default(),
+                "remote-app" => p.remote_app.clone().unwrap_or_default(),
+                "remote-app-dir" => p.remote_app_dir.clone().unwrap_or_default(),
+                "remote-app-args" => p.remote_app_args.clone().unwrap_or_default(),
                 _ => {
                     tracing::debug!("Unknown guacd RDP parameter '{}', sending empty", name);
                     String::new()

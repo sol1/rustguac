@@ -1,6 +1,14 @@
 listen_addr = "0.0.0.0:8089"
 guacd_addr = "127.0.0.1:4822"
-recording_path = "/opt/rustguac/recordings"
+# DEPRECATED: use [recording] section below
+# recording_path = "/opt/rustguac/recordings"
+
+[recording]
+path = "/opt/rustguac/recordings"
+enabled = true
+max_disk_percent = 80
+max_recordings = 0
+rotation_interval_secs = 300
 static_path = "/opt/rustguac/static"
 db_path = "/opt/rustguac/data/rustguac.db"
 session_pending_timeout_secs = 60

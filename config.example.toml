@@ -20,6 +20,7 @@ guacd_addr = "127.0.0.1:4822"
 
 # Directory for session recording files (.guac format).
 # Default: "./recordings"
+# DEPRECATED: use [recording] section below. Kept for backwards compatibility.
 recording_path = "./recordings"
 
 # Directory containing static web files (HTML, JS, CSS).
@@ -162,6 +163,20 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # # namespace = "my-ns"       # optional, Vault Enterprise / OpenBao namespaces
 # # instance_name = "prod-1"  # optional, enables instance-scoped entries
 # # tls_skip_verify = false   # skip TLS cert verification (dev only, default: false)
+
+# ─── Recording ──────────────────────────────────────────────────────────────
+#
+# Controls session recording and automatic rotation.
+# If omitted, recordings are enabled with no automatic cleanup.
+# The path can also be set via the top-level recording_path key
+# (the [recording] section takes precedence).
+
+# [recording]
+# path = "./recordings"              # recording directory (default: "./recordings")
+# enabled = true                     # master switch (default: true)
+# max_disk_percent = 80              # delete oldest when disk usage exceeds % (0 = disable)
+# max_recordings = 0                 # global max recording count (0 = unlimited)
+# rotation_interval_secs = 300       # how often to check rotation (seconds, default: 300)
 
 # ─── Drive / File Transfer ──────────────────────────────────────────────────
 #

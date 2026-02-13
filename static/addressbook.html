@@ -432,11 +432,49 @@
                     <input type="text" id="em-url" placeholder="https://example.com">
                 </label>
             </div>
+            <div id="em-remoteapp-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
+                <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-remoteapp-toggle">
+                    <span id="em-remoteapp-arrow">&#9654;</span> RemoteApp (RAIL)
+                </label>
+                <div id="em-remoteapp-fields" style="display:none">
+                    <div class="field-hint" style="margin-bottom:0.5em">Launch a specific application instead of the full desktop.</div>
+                    <label>Program path
+                        <input type="text" id="em-remote-app" placeholder="e.g. ||calc or C:\Windows\notepad.exe">
+                    </label>
+                    <div class="field-hint">Use || prefix for alternate shell, or full path to executable.</div>
+                    <label>Working directory
+                        <input type="text" id="em-remote-app-dir" placeholder="e.g. C:\Users\Public">
+                    </label>
+                    <label>Arguments
+                        <input type="text" id="em-remote-app-args" placeholder="e.g. /path/to/file">
+                    </label>
+                </div>
+            </div>
             <div id="em-drive-section" style="display:none;margin-top:0.8em;">
                 <label>
                     <input type="checkbox" id="em-enable-drive" style="display:inline;width:auto;margin-right:0.4em"> Enable file transfer
                     <div style="color:#888;font-size:0.75em;margin-top:0.2em;">RDP: mounts a shared drive. SSH: enables SFTP file browser.</div>
                 </label>
+            </div>
+            <div id="em-recording-section" style="display:none;margin-top:0.8em;padding-top:0.8em;border-top:1px solid var(--border)">
+                <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-recording-toggle">
+                    <span id="em-recording-arrow">&#9654;</span> Recording Settings
+                </label>
+                <div id="em-recording-fields" style="display:none">
+                    <div class="field-hint" style="margin-bottom:0.5em">Override global recording settings for this entry.</div>
+                    <label style="margin-top:0.5em">
+                        <input type="checkbox" id="em-override-recording" style="display:inline;width:auto;margin-right:0.4em"> Override recording settings
+                    </label>
+                    <div id="em-recording-sub" style="display:none;margin-left:1.5em;margin-top:0.5em">
+                        <label>
+                            <input type="checkbox" id="em-enable-recording" style="display:inline;width:auto;margin-right:0.4em" checked> Enable recording
+                        </label>
+                        <label style="margin-top:0.5em">Max recordings to keep
+                            <input type="number" id="em-max-recordings" value="0" min="0" style="width:100px">
+                        </label>
+                        <div class="field-hint">0 = unlimited. Oldest recordings are deleted when the limit is exceeded.</div>
+                    </div>
+                </div>
             </div>
             <div id="em-tunnel-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-tunnel-toggle">
@@ -1044,8 +1082,12 @@
             else if (val === 'web') document.getElementById('em-web-fields').style.display = '';
             // Show drive option for SSH and RDP only
             document.getElementById('em-drive-section').style.display = (val === 'ssh' || val === 'rdp') ? '' : 'none';
+            // Show RemoteApp for RDP only
+            document.getElementById('em-remoteapp-section').style.display = val === 'rdp' ? '' : 'none';
             // Show tunnel option for all session types
             document.getElementById('em-tunnel-section').style.display = '';
+            // Show recording settings for all types
+            document.getElementById('em-recording-section').style.display = '';
         });
 
         // Toggle tunnel fields visibility
@@ -1059,6 +1101,37 @@
                 fields.style.display = 'none';
                 arrow.innerHTML = '&#9654;';
             }
+        });
+
+        // Toggle RemoteApp fields visibility
+        document.getElementById('em-remoteapp-toggle').addEventListener('click', function() {
+            var fields = document.getElementById('em-remoteapp-fields');
+            var arrow = document.getElementById('em-remoteapp-arrow');
+            if (fields.style.display === 'none') {
+                fields.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                fields.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
+        });
+
+        // Toggle Recording Settings fields visibility
+        document.getElementById('em-recording-toggle').addEventListener('click', function() {
+            var fields = document.getElementById('em-recording-fields');
+            var arrow = document.getElementById('em-recording-arrow');
+            if (fields.style.display === 'none') {
+                fields.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                fields.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
+        });
+
+        // Toggle recording sub-fields when override checkbox changes
+        document.getElementById('em-override-recording').addEventListener('change', function() {
+            document.getElementById('em-recording-sub').style.display = this.checked ? '' : 'none';
         });
 
         // ── Multi-hop management ──
@@ -1242,6 +1315,17 @@
             document.getElementById('em-vnc-prompt-creds').checked = false;
             document.getElementById('em-url').value = '';
             document.getElementById('em-enable-drive').checked = false;
+            document.getElementById('em-remote-app').value = '';
+            document.getElementById('em-remote-app-dir').value = '';
+            document.getElementById('em-remote-app-args').value = '';
+            document.getElementById('em-remoteapp-fields').style.display = 'none';
+            document.getElementById('em-remoteapp-arrow').innerHTML = '&#9654;';
+            document.getElementById('em-override-recording').checked = false;
+            document.getElementById('em-enable-recording').checked = true;
+            document.getElementById('em-max-recordings').value = '0';
+            document.getElementById('em-recording-sub').style.display = 'none';
+            document.getElementById('em-recording-fields').style.display = 'none';
+            document.getElementById('em-recording-arrow').innerHTML = '&#9654;';
             hopList = [];
             renderHops();
             document.getElementById('em-tunnel-fields').style.display = 'none';
@@ -1316,6 +1400,30 @@
                 }
                 if (type === 'ssh' || type === 'rdp') {
                     document.getElementById('em-enable-drive').checked = !!entryData.enable_drive;
+                }
+                // Populate RemoteApp fields (RDP)
+                if (type === 'rdp' && (entryData.remote_app || entryData.remote_app_dir || entryData.remote_app_args)) {
+                    document.getElementById('em-remote-app').value = entryData.remote_app || '';
+                    document.getElementById('em-remote-app-dir').value = entryData.remote_app_dir || '';
+                    document.getElementById('em-remote-app-args').value = entryData.remote_app_args || '';
+                    document.getElementById('em-remoteapp-fields').style.display = '';
+                    document.getElementById('em-remoteapp-arrow').innerHTML = '&#9660;';
+                }
+                // Populate recording override fields
+                if (entryData.enable_recording !== null && entryData.enable_recording !== undefined) {
+                    document.getElementById('em-override-recording').checked = true;
+                    document.getElementById('em-recording-sub').style.display = '';
+                    document.getElementById('em-enable-recording').checked = entryData.enable_recording !== false;
+                    document.getElementById('em-max-recordings').value = entryData.max_recordings || '0';
+                    document.getElementById('em-recording-fields').style.display = '';
+                    document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
+                } else if (entryData.max_recordings) {
+                    document.getElementById('em-override-recording').checked = true;
+                    document.getElementById('em-recording-sub').style.display = '';
+                    document.getElementById('em-enable-recording').checked = true;
+                    document.getElementById('em-max-recordings').value = entryData.max_recordings;
+                    document.getElementById('em-recording-fields').style.display = '';
+                    document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
                 }
                 // Populate hop list from jump_hosts array
                 if (entryData.jump_hosts && entryData.jump_hosts.length > 0) {
@@ -1402,8 +1510,25 @@
                 entry.enable_drive = document.getElementById('em-enable-drive').checked;
             }
 
-            // Tunnel / jump host settings (SSH, RDP, VNC) — multi-hop
-            if (type === 'ssh' || type === 'rdp' || type === 'vnc') {
+            // RemoteApp (RDP only)
+            if (type === 'rdp') {
+                var ra = document.getElementById('em-remote-app').value.trim();
+                var raDir = document.getElementById('em-remote-app-dir').value.trim();
+                var raArgs = document.getElementById('em-remote-app-args').value.trim();
+                if (ra) entry.remote_app = ra;
+                if (raDir) entry.remote_app_dir = raDir;
+                if (raArgs) entry.remote_app_args = raArgs;
+            }
+
+            // Recording overrides
+            if (document.getElementById('em-override-recording').checked) {
+                entry.enable_recording = document.getElementById('em-enable-recording').checked;
+                var maxRec = parseInt(document.getElementById('em-max-recordings').value) || 0;
+                if (maxRec > 0) entry.max_recordings = maxRec;
+            }
+
+            // Tunnel / jump host settings — multi-hop (all types)
+            if (type === 'ssh' || type === 'rdp' || type === 'vnc' || type === 'web') {
                 var hops = hopList.filter(function(h) { return h.hostname && h.hostname.trim(); });
                 if (hops.length > 0) {
                     entry.jump_hosts = hops.map(function(h) {

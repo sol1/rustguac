@@ -99,6 +99,21 @@ pub struct AddressBookEntry {
     /// Legacy: SSH tunnel jump private key (PEM).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jump_private_key: Option<String>,
+    /// RDP RemoteApp program path (RAIL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_app: Option<String>,
+    /// RDP RemoteApp working directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_app_dir: Option<String>,
+    /// RDP RemoteApp command-line arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_app_args: Option<String>,
+    /// Override recording enabled/disabled for this entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_recording: Option<bool>,
+    /// Maximum number of recordings to keep for this entry (0 = unlimited).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_recordings: Option<u32>,
 }
 
 impl AddressBookEntry {
@@ -155,6 +170,21 @@ pub struct EntryInfo {
     /// SSH tunnel jump hosts (no credentials exposed).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jump_hosts: Option<Vec<tunnel::JumpHostInfo>>,
+    /// RDP RemoteApp program path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_app: Option<String>,
+    /// RDP RemoteApp working directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_app_dir: Option<String>,
+    /// RDP RemoteApp command-line arguments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_app_args: Option<String>,
+    /// Override recording enabled/disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_recording: Option<bool>,
+    /// Maximum recordings to keep for this entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_recordings: Option<u32>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -187,6 +217,11 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
                 || e.private_key.as_ref().is_some_and(|k| !k.is_empty()),
             color_depth: e.color_depth,
             jump_hosts,
+            remote_app: e.remote_app.clone(),
+            remote_app_dir: e.remote_app_dir.clone(),
+            remote_app_args: e.remote_app_args.clone(),
+            enable_recording: e.enable_recording,
+            max_recordings: e.max_recordings,
         }
     }
 }

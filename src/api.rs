@@ -1115,6 +1115,7 @@ pub async fn ab_connect_entry(
 
     // Build CreateSessionRequest from the Vault entry + connect request display params.
     // ConnectRequest credentials override address book values (for prompted credentials).
+    let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
     let create_req = CreateSessionRequest {
         session_type,
         hostname: ab_entry.hostname,
@@ -1142,6 +1143,12 @@ pub async fn ab_connect_entry(
         dpi: req.dpi,
         banner: req.banner.or(ab_entry.display_name),
         enable_drive: ab_entry.enable_drive,
+        remote_app: ab_entry.remote_app,
+        remote_app_dir: ab_entry.remote_app_dir,
+        remote_app_args: ab_entry.remote_app_args,
+        enable_recording: ab_entry.enable_recording,
+        address_book_entry: Some(ab_entry_key),
+        max_recordings: ab_entry.max_recordings,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -2201,6 +2208,7 @@ pub async fn quick_connect(
             }
         };
 
+        let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
         let create_req = CreateSessionRequest {
             session_type,
             hostname: ab_entry.hostname,
@@ -2228,6 +2236,12 @@ pub async fn quick_connect(
             dpi: query.dpi,
             banner: ab_entry.display_name,
             enable_drive: ab_entry.enable_drive,
+            remote_app: ab_entry.remote_app,
+            remote_app_dir: ab_entry.remote_app_dir,
+            remote_app_args: ab_entry.remote_app_args,
+            enable_recording: ab_entry.enable_recording,
+            address_book_entry: Some(ab_entry_key),
+            max_recordings: ab_entry.max_recordings,
         };
 
         tracing::info!(
@@ -2303,6 +2317,12 @@ pub async fn quick_connect(
         dpi: query.dpi,
         banner: None,
         enable_drive: None,
+        remote_app: None,
+        remote_app_dir: None,
+        remote_app_args: None,
+        enable_recording: None,
+        address_book_entry: None,
+        max_recordings: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

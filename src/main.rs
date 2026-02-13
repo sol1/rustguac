@@ -7,6 +7,7 @@ mod drive;
 mod guacd;
 mod oidc;
 mod protocol;
+mod recording;
 mod session;
 mod tunnel;
 mod vault;
@@ -619,6 +620,30 @@ async fn run_server(config: Config, database: Db) {
                 }
             }
         });
+    }
+
+    // Spawn recording rotation background task
+    {
+        let rec_config = manager.recording_config();
+        if rec_config.max_disk_percent > 0 || rec_config.max_recordings > 0 {
+            let interval_secs = rec_config.rotation_interval_secs.max(30);
+            tracing::info!(
+                "Recording rotation enabled (max_disk={}%, max_count={}, interval={}s)",
+                rec_config.max_disk_percent,
+                rec_config.max_recordings,
+                interval_secs
+            );
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                interval.tick().await; // skip immediate first tick
+                loop {
+                    interval.tick().await;
+                    let cfg = rec_config.clone();
+                    let _ = tokio::task::spawn_blocking(move || recording::rotate(&cfg)).await;
+                }
+            });
+        }
     }
 
     // Rate limit configs

@@ -122,6 +122,45 @@ impl Default for DriveConfig {
     }
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct RecordingConfig {
+    /// Path for recording files. Overrides top-level `recording_path`.
+    #[serde(default = "default_recording_path")]
+    pub path: PathBuf,
+    /// Whether recording is enabled globally. Default: true.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Delete oldest recordings when disk usage exceeds this percent. 0 = disabled.
+    #[serde(default = "default_max_disk_percent")]
+    pub max_disk_percent: u8,
+    /// Keep at most this many recordings globally. 0 = unlimited.
+    #[serde(default)]
+    pub max_recordings: u32,
+    /// How often (in seconds) to run the rotation check. Default: 300 (5 min).
+    #[serde(default = "default_rotation_interval_secs")]
+    pub rotation_interval_secs: u64,
+}
+
+fn default_max_disk_percent() -> u8 {
+    80
+}
+
+fn default_rotation_interval_secs() -> u64 {
+    300
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            path: default_recording_path(),
+            enabled: true,
+            max_disk_percent: default_max_disk_percent(),
+            max_recordings: 0,
+            rotation_interval_secs: default_rotation_interval_secs(),
+        }
+    }
+}
+
 fn default_vault_mount() -> String {
     "secret".into()
 }
@@ -201,6 +240,7 @@ pub struct Config {
     pub vault: Option<VaultConfig>,
     pub drive: Option<DriveConfig>,
     pub theme: Option<ThemeConfig>,
+    pub recording: Option<RecordingConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -311,6 +351,7 @@ impl Default for Config {
             vault: None,
             drive: None,
             theme: None,
+            recording: None,
         }
     }
 }
@@ -365,5 +406,30 @@ impl Config {
         }
 
         config
+    }
+
+    /// Effective recording path: `[recording].path` overrides top-level `recording_path`.
+    pub fn effective_recording_path(&self) -> &std::path::Path {
+        if let Some(ref rec) = self.recording {
+            &rec.path
+        } else {
+            &self.recording_path
+        }
+    }
+
+    /// Whether recording is globally enabled. Defaults to true.
+    pub fn recording_enabled(&self) -> bool {
+        self.recording.as_ref().is_none_or(|r| r.enabled)
+    }
+
+    /// Get recording config (or synthesized default that respects legacy `recording_path`).
+    pub fn recording_config(&self) -> RecordingConfig {
+        match self.recording.clone() {
+            Some(r) => r,
+            None => RecordingConfig {
+                path: self.recording_path.clone(),
+                ..RecordingConfig::default()
+            },
+        }
     }
 }

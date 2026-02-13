@@ -119,11 +119,12 @@ async fn handle_ws(
 
     tracing::info!(session_id = %session_id, client_ip = %client_addr, "Starting proxy");
 
-    // Set up recording file (only for owner connections)
+    // Set up recording file (only for owner connections, and only if recording is enabled)
+    let is_recording_enabled = manager.is_recording_enabled(session_id).await;
     let recording_path = manager
         .recording_path()
         .join(format!("{}.guac", session_id));
-    let recording_file = if !recording_path.exists() {
+    let recording_file = if is_recording_enabled && !recording_path.exists() {
         match tokio::fs::File::create(&recording_path).await {
             Ok(f) => {
                 // Set restrictive permissions on recording file
@@ -136,6 +137,20 @@ async fn handle_ws(
                     )
                     .await;
                 }
+
+                // Write sidecar .meta file if this session has an address book entry
+                if let Some((ab_entry, _)) = manager.get_recording_meta(session_id).await {
+                    if ab_entry.is_some() {
+                        let meta = crate::recording::RecordingMeta {
+                            address_book_entry: ab_entry,
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                        };
+                        if let Err(e) = crate::recording::write_meta(&recording_path, &meta) {
+                            tracing::warn!(session_id = %session_id, error = %e, "Failed to write recording .meta");
+                        }
+                    }
+                }
+
                 Some(f)
             }
             Err(e) => {
@@ -144,7 +159,7 @@ async fn handle_ws(
             }
         }
     } else {
-        None // Viewer connections don't record (owner already is)
+        None // Viewer connections don't record, or recording is disabled
     };
 
     // Run the bidirectional proxy
@@ -161,6 +176,20 @@ async fn handle_ws(
         if let Some(info) = info {
             if info.active_connections == 0 {
                 manager.complete_session(session_id).await;
+            }
+        }
+    }
+
+    // Per-entry recording rotation (after session ends, recording file is complete)
+    if is_recording_enabled {
+        if let Some((Some(entry_key), Some(max_recs))) =
+            manager.get_recording_meta(session_id).await
+        {
+            if max_recs > 0 {
+                let rec_dir = manager.recording_path().to_path_buf();
+                tokio::task::spawn_blocking(move || {
+                    crate::recording::rotate_per_entry(&rec_dir, &entry_key, max_recs);
+                });
             }
         }
     }
