@@ -5,6 +5,76 @@ set -e
 chown -R rustguac:rustguac /opt/rustguac/data
 chown -R rustguac:rustguac /opt/rustguac/recordings
 
+# ── Config migration: fix keys accidentally nested inside [recording] ──
+# Versions prior to 0.4.1 shipped a config.toml with db_path, static_path,
+# and other top-level keys placed after the [recording] header, causing them
+# to be silently ignored.  Detect and fix this.
+CONFIG="/opt/rustguac/config.toml"
+if [ -f "$CONFIG" ]; then
+    # Check if db_path appears ONLY after a [recording] header (i.e. is missing
+    # from the top-level section).  A quick heuristic: if "db_path" exists in
+    # the file but only after a line matching [recording], it's broken.
+    if grep -q '^db_path' "$CONFIG" && \
+       ! awk '/^\[recording\]/{stop=1} !stop && /^db_path/{found=1} END{exit !found}' "$CONFIG"; then
+        echo "Migrating config.toml: moving misplaced keys out of [recording] section..."
+        cp "$CONFIG" "${CONFIG}.bak-$(date +%Y%m%d%H%M%S)"
+
+        # Extract the misplaced keys from inside [recording]
+        # Strategy: rewrite the file, pulling known top-level keys out of [recording]
+        python3 -c "
+import re, sys
+
+with open('$CONFIG') as f:
+    lines = f.readlines()
+
+top_keys = {'db_path', 'static_path', 'session_pending_timeout_secs',
+            'xvnc_path', 'chromium_path', 'display_range_start',
+            'display_range_end'}
+
+in_section = None
+extracted = []
+remaining = []
+
+for line in lines:
+    stripped = line.strip()
+    # Track which TOML section we're in
+    m = re.match(r'^\[(\w+)\]', stripped)
+    if m:
+        in_section = m.group(1)
+        remaining.append(line)
+        continue
+
+    # If inside a non-top-level section, check if this key belongs at top level
+    if in_section and not stripped.startswith('#') and '=' in stripped:
+        key = stripped.split('=', 1)[0].strip()
+        if key in top_keys:
+            extracted.append(line)
+            continue
+
+    remaining.append(line)
+
+if extracted:
+    # Insert extracted keys right after the last top-level key before any section
+    insert_at = 0
+    for i, line in enumerate(remaining):
+        if re.match(r'^\[\w+\]', line.strip()):
+            insert_at = i
+            break
+    # Back up past blank lines to keep formatting nice
+    while insert_at > 0 and remaining[insert_at - 1].strip() == '':
+        insert_at -= 1
+
+    result = remaining[:insert_at] + ['\n'] + extracted + ['\n'] + remaining[insert_at:]
+
+    with open('$CONFIG', 'w') as f:
+        f.writelines(result)
+    print('  Moved {} key(s) to top-level section.'.format(len(extracted)))
+else:
+    print('  No migration needed.')
+" 2>/dev/null || echo "  Config migration skipped (python3 not available)."
+    fi
+fi
+
 # Generate self-signed TLS certificate if none exists
 if [ ! -f /opt/rustguac/tls/cert.pem ] || [ ! -f /opt/rustguac/tls/key.pem ]; then
     CERT_HOSTNAME=$(hostname -f 2>/dev/null || hostname)

@@ -1,14 +1,5 @@
 listen_addr = "0.0.0.0:8089"
 guacd_addr = "127.0.0.1:4822"
-# DEPRECATED: use [recording] section below
-# recording_path = "/opt/rustguac/recordings"
-
-[recording]
-path = "/opt/rustguac/recordings"
-enabled = true
-max_disk_percent = 80
-max_recordings = 0
-rotation_interval_secs = 300
 static_path = "/opt/rustguac/static"
 db_path = "/opt/rustguac/data/rustguac.db"
 session_pending_timeout_secs = 60
@@ -21,11 +12,20 @@ display_range_end = 199
 # trusted_proxies = ["127.0.0.0/8"]
 
 # Connection allowlists — CIDR ranges that sessions can connect to.
-# Defaults to localhost only. Must be placed above [tls] (TOML section headers
-# scope all subsequent keys, so these would be silently ignored if placed after).
+# Defaults to localhost only.
 # ssh_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "192.168.0.0/16"]
 # rdp_allowed_networks = ["10.0.0.0/8"]
 # web_allowed_networks = ["0.0.0.0/0", "::/0"]
+
+# DEPRECATED: use [recording] section below
+# recording_path = "/opt/rustguac/recordings"
+
+[recording]
+path = "/opt/rustguac/recordings"
+enabled = true
+max_disk_percent = 80
+max_recordings = 0
+rotation_interval_secs = 300
 
 [tls]
 cert_path = "/opt/rustguac/tls/cert.pem"
