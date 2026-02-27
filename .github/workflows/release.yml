@@ -231,19 +231,19 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download deb artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: deb-package
           path: artifacts/deb-package
 
       - name: Download rpm artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: rpm-package
           path: artifacts/rpm-package
 
       - name: Download tarball artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: tarball
           path: artifacts/tarball
