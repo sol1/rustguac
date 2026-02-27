@@ -79,7 +79,7 @@ jobs:
           cp ../*.deb .
 
       - name: Upload .deb artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: deb-package
           path: "*.deb"
@@ -109,7 +109,7 @@ jobs:
             "rustguac-${TAG_VERSION}-linux-amd64"
 
       - name: Upload tarball artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: tarball
           path: rustguac-*-linux-amd64.tar.gz
@@ -179,7 +179,7 @@ jobs:
           cp "$RPMBUILD_DIR"/RPMS/*/*.rpm .
 
       - name: Upload .rpm artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: rpm-package
           path: "*.rpm"
