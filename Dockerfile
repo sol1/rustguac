@@ -10,7 +10,7 @@
 #   docker build -t rustguac .
 #
 # Run:
-#   docker run -d -p 8080:8080 rustguac
+#   docker run -d -p 8089:8089 rustguac
 #
 # The image runs both guacd and rustguac under a simple entrypoint script.
 # =============================================================================
@@ -114,7 +114,7 @@ RUN /opt/rustguac/bin/rustguac generate-cert --hostname localhost --out-dir /opt
 
 # Default config (guacd TLS enabled by default)
 RUN cat > /opt/rustguac/config.toml <<'EOF'
-listen_addr = "0.0.0.0:8080"
+listen_addr = "0.0.0.0:8089"
 guacd_addr = "127.0.0.1:4822"
 recording_path = "/opt/rustguac/recordings"
 static_path = "/opt/rustguac/static"
@@ -135,6 +135,16 @@ EOF
 RUN cat > /opt/rustguac/entrypoint.sh <<'SCRIPT'
 #!/bin/sh
 set -e
+
+# Create admin API key on first run (if no DB exists yet)
+DB_PATH="/opt/rustguac/data/rustguac.db"
+if [ ! -f "$DB_PATH" ]; then
+    echo "First run detected — creating admin API key..."
+    /opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml add-admin --name docker-admin
+    echo ""
+    echo "==> SAVE THE API KEY ABOVE — it is only shown once! <=="
+    echo ""
+fi
 
 # Start guacd in background
 echo "Starting guacd..."
@@ -161,7 +171,7 @@ SCRIPT
 RUN chmod +x /opt/rustguac/entrypoint.sh
 
 WORKDIR /opt/rustguac
-EXPOSE 8080
+EXPOSE 8089
 VOLUME ["/opt/rustguac/data", "/opt/rustguac/recordings"]
 
 ENV RUST_LOG=info

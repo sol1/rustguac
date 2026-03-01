@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>rustguac</title>
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; }
+        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #888; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1a3a2a; --type-ssh-fg: #5bc0be; --type-rdp-bg: #2a1a3a; --type-rdp-fg: #a78bfa; --type-vnc-bg: #3a2a1a; --type-vnc-fg: #f0c040; --type-web-bg: #1a2a3a; --type-web-fg: #60a5fa; --hop-bg: #1e3a5f; --hop-fg: #7ec8e3; }
         body { font-family: monospace; background: var(--bg); color: var(--text); padding: 2em; font-size: 18px; }
         h1 { color: var(--primary); }
         #error { color: var(--primary); margin-top: 0.8em; }
@@ -70,7 +70,7 @@
             margin-top: 1.2em;
             padding: 0.5em 1.5em;
             background: var(--primary);
-            color: #fff;
+            color: var(--text-on-primary);
             border: none;
             font-family: monospace;
             font-size: 1em;
@@ -78,7 +78,7 @@
             cursor: pointer;
         }
         #login-form button:hover { background: var(--primary-hover); }
-        #login-form button:disabled { background: #555; cursor: default; }
+        #login-form button:disabled { background: var(--btn-disabled); cursor: default; }
     </style>
 </head>
 <body>
@@ -122,13 +122,10 @@
             if (res.ok) window.location.href = '/addressbook.html';
         });
 
-        function applyTheme(theme) {
-            if (!theme) return;
-            var props = {primary_color:'--primary',primary_hover:'--primary-hover',accent_color:'--accent',accent_hover:'--accent-hover',bg_color:'--bg',surface_color:'--surface',input_color:'--input',text_color:'--text',text_muted:'--text-muted',border_color:'--border'};
-            var r = document.documentElement.style;
-            for (var k in props) { if (theme[k]) r.setProperty(props[k], theme[k]); }
-            if (theme.logo_url) { var logo = document.getElementById('site-logo'); if (logo) { logo.src = theme.logo_url; logo.style.display = ''; } }
-        }
+        (function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k])}catch(e){}}})();
+        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
+        var _themePresets={},_adminPreset='dark';
+        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'dark';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){l.src=t.logo_url;l.style.display=''}}}
 
         var loginForm = document.getElementById('login-form');
         var apiKeyToggle = document.getElementById('api-key-toggle');
@@ -148,7 +145,7 @@
                 document.title = data.site_title;
                 document.querySelector('h1').textContent = data.site_title;
             }
-            applyTheme(data.theme);
+            initTheme(data.theme);
         });
 
         document.getElementById('sso-btn').addEventListener('click', function() {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>rustguac - SSH Session</title>
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; }
+        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #888; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1a3a2a; --type-ssh-fg: #5bc0be; --type-rdp-bg: #2a1a3a; --type-rdp-fg: #a78bfa; --type-vnc-bg: #3a2a1a; --type-vnc-fg: #f0c040; --type-web-bg: #1a2a3a; --type-web-fg: #60a5fa; --hop-bg: #1e3a5f; --hop-fg: #7ec8e3; }
         html, body {
             margin: 0;
             padding: 0;
@@ -60,7 +60,7 @@
         #banner-continue {
             padding: 0.6em 2em;
             background: var(--primary);
-            color: #fff;
+            color: var(--text-on-primary);
             border: none;
             font-family: monospace;
             font-size: 1em;
@@ -116,15 +116,13 @@
     <div id="display"></div>
 
     <script>
-        function applyTheme(theme) {
-            if (!theme) return;
-            var props = {primary_color:'--primary',primary_hover:'--primary-hover',accent_color:'--accent',accent_hover:'--accent-hover',bg_color:'--bg',surface_color:'--surface',input_color:'--input',text_color:'--text',text_muted:'--text-muted',border_color:'--border'};
-            var r = document.documentElement.style;
-            for (var k in props) { if (theme[k]) r.setProperty(props[k], theme[k]); }
-        }
+        (function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k])}catch(e){}}})();
+        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
+        var _themePresets={},_adminPreset='dark';
+        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'dark';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);}
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             if(d.site_title){document.title=d.site_title+' - Session';}
-            applyTheme(d.theme);
+            initTheme(d.theme);
         });
         var pathParts = window.location.pathname.split('/');
         var sessionId = pathParts[pathParts.length - 1];
@@ -232,7 +230,7 @@
                 clipboardPanel.innerHTML =
                     '<div style="display:flex;align-items:center;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
                         '<h3 style="margin:0;flex:1;color:var(--primary);font-size:1.1em;">Clipboard</h3>' +
-                        '<button id="cp-close" style="background:none;border:none;color:#888;font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
+                        '<button id="cp-close" style="background:none;border:none;color:var(--text-dim);font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
                     '</div>' +
                     '<div style="flex:1;display:flex;flex-direction:column;padding:1em;gap:0.8em;overflow-y:auto;min-height:0;">' +
                         '<div style="color:var(--text-muted);font-size:0.95em;">Shared clipboard. Paste text below and click Send, or copy text received from the remote session.</div>' +
@@ -243,7 +241,7 @@
                             '<button id="cp-clear" style="padding:0.4em 0.8em;background:var(--border);color:var(--text-muted);border:none;font-family:monospace;font-size:0.95em;border-radius:3px;cursor:pointer;">Clear</button>' +
                         '</div>' +
                         '<div id="cp-status" style="color:var(--accent);font-size:0.9em;min-height:1.2em;"></div>' +
-                        '<div style="color:#888;font-size:0.85em;line-height:1.4;">Press <b>Ctrl+Alt+Shift</b> to toggle this panel.<br>Text copied in the remote session appears here automatically.</div>' +
+                        '<div style="color:var(--text-dim);font-size:0.85em;line-height:1.4;">Press <b>Ctrl+Alt+Shift</b> to toggle this panel.<br>Text copied in the remote session appears here automatically.</div>' +
                     '</div>';
 
                 document.body.appendChild(clipboardPanel);
@@ -283,7 +281,7 @@
             var toggleTab = document.createElement('div');
             toggleTab.textContent = '📋 Clipboard';
             toggleTab.title = 'Toggle clipboard panel (Ctrl+Alt+Shift)';
-            toggleTab.style.cssText = 'position:fixed;left:-1px;top:50%;transform:translateY(-50%);writing-mode:vertical-rl;background:var(--primary);color:#fff;padding:0.6em 0.3em;font-family:monospace;font-size:0.75em;cursor:pointer;z-index:3001;border-radius:0 4px 4px 0;opacity:0.6;letter-spacing:0.1em;';
+            toggleTab.style.cssText = 'position:fixed;left:-1px;top:50%;transform:translateY(-50%);writing-mode:vertical-rl;background:var(--primary);color:var(--text-on-primary);padding:0.6em 0.3em;font-family:monospace;font-size:0.75em;cursor:pointer;z-index:3001;border-radius:0 4px 4px 0;opacity:0.6;letter-spacing:0.1em;';
             toggleTab.addEventListener('mouseenter', function() { toggleTab.style.opacity = '1'; });
             toggleTab.addEventListener('mouseleave', function() { toggleTab.style.opacity = '0.6'; });
             toggleTab.addEventListener('click', function() { toggleClipboardPanel(); });
@@ -368,7 +366,7 @@
             var fileTab = document.createElement('div');
             fileTab.textContent = 'Files';
             fileTab.title = 'Toggle file manager';
-            fileTab.style.cssText = 'display:none;position:fixed;left:-1px;top:calc(50% + 60px);transform:translateY(-50%);writing-mode:vertical-rl;background:var(--accent);color:var(--bg);padding:0.6em 0.3em;font-family:monospace;font-size:0.75em;cursor:pointer;z-index:3001;border-radius:0 4px 4px 0;opacity:0.6;letter-spacing:0.1em;font-weight:bold;';
+            fileTab.style.cssText = 'display:none;position:fixed;left:-1px;top:calc(50% + 60px);transform:translateY(-50%);writing-mode:vertical-rl;background:var(--accent);color:var(--text-on-primary);padding:0.6em 0.3em;font-family:monospace;font-size:0.75em;cursor:pointer;z-index:3001;border-radius:0 4px 4px 0;opacity:0.6;letter-spacing:0.1em;font-weight:bold;';
             fileTab.addEventListener('mouseenter', function() { fileTab.style.opacity = '1'; });
             fileTab.addEventListener('mouseleave', function() { fileTab.style.opacity = '0.6'; });
             fileTab.addEventListener('click', function() { toggleFilePanel(); });
@@ -381,16 +379,16 @@
                 filePanel.innerHTML =
                     '<div style="display:flex;align-items:center;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
                         '<h3 style="margin:0;flex:1;color:var(--accent);font-size:1.1em;">File Manager</h3>' +
-                        '<button id="fp-close" style="background:none;border:none;color:#888;font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
+                        '<button id="fp-close" style="background:none;border:none;color:var(--text-dim);font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
                     '</div>' +
-                    '<div id="fp-breadcrumb" style="padding:0.5em 1em;color:var(--text-muted);font-size:0.95em;border-bottom:1px solid #222;background:#0f1a2e;word-break:break-all;"></div>' +
-                    '<div style="padding:0.5em 1em;display:flex;gap:0.5em;border-bottom:1px solid #222;">' +
+                    '<div id="fp-breadcrumb" style="padding:0.5em 1em;color:var(--text-muted);font-size:0.95em;border-bottom:1px solid var(--border);background:var(--input);word-break:break-all;"></div>' +
+                    '<div style="padding:0.5em 1em;display:flex;gap:0.5em;border-bottom:1px solid var(--border);">' +
                         '<button id="fp-upload" style="padding:0.4em 0.8em;background:var(--accent);color:var(--bg);font-weight:bold;border:none;font-family:monospace;font-size:0.95em;border-radius:3px;cursor:pointer;">Upload</button>' +
                         '<button id="fp-refresh" style="padding:0.4em 0.8em;background:var(--input);color:var(--accent);border:1px solid var(--border);font-family:monospace;font-size:0.95em;border-radius:3px;cursor:pointer;">Refresh</button>' +
                     '</div>' +
                     '<div id="fp-list" style="flex:1;overflow-y:auto;min-height:0;"></div>' +
-                    '<div id="fp-status" style="padding:0.5em 1em;color:var(--accent);font-size:0.9em;min-height:1.5em;border-top:1px solid #222;"></div>' +
-                    '<div style="padding:0.6em 1em;color:#888;font-size:0.85em;border-top:1px solid #222;">Drag files here to upload. Files are temporary and will be deleted when the session ends.</div>';
+                    '<div id="fp-status" style="padding:0.5em 1em;color:var(--accent);font-size:0.9em;min-height:1.5em;border-top:1px solid var(--border);"></div>' +
+                    '<div style="padding:0.6em 1em;color:var(--text-dim);font-size:0.85em;border-top:1px solid var(--border);">Drag files here to upload. Files are temporary and will be deleted when the session ends.</div>';
 
                 document.body.appendChild(filePanel);
                 fileListEl = document.getElementById('fp-list');
@@ -522,13 +520,13 @@
                     return;
                 }
 
-                if (fileListEl) fileListEl.innerHTML = '<div style="padding:1em;color:#888;">Loading...</div>';
+                if (fileListEl) fileListEl.innerHTML = '<div style="padding:1em;color:var(--text-dim);">Loading...</div>';
                 fetchDirectoryListing(path);
             }
 
             function refreshDirectory() {
                 delete cachedListings[currentPath];
-                if (fileListEl) fileListEl.innerHTML = '<div style="padding:1em;color:#888;">Loading...</div>';
+                if (fileListEl) fileListEl.innerHTML = '<div style="padding:1em;color:var(--text-dim);">Loading...</div>';
                 fetchDirectoryListing(currentPath);
             }
 
@@ -536,7 +534,7 @@
                 if (!fileListEl) return;
                 var entries = Object.keys(listing);
                 if (entries.length === 0) {
-                    fileListEl.innerHTML = '<div style="padding:1em;color:#888;">Empty directory</div>';
+                    fileListEl.innerHTML = '<div style="padding:1em;color:var(--text-dim);">Empty directory</div>';
                     return;
                 }
 
@@ -570,7 +568,7 @@
                 files.sort(function(a, b) { return a.displayName.localeCompare(b.displayName); });
 
                 if (dirs.length === 0 && files.length === 0) {
-                    fileListEl.innerHTML = '<div style="padding:1em;color:#888;">Empty directory</div>';
+                    fileListEl.innerHTML = '<div style="padding:1em;color:var(--text-dim);">Empty directory</div>';
                     return;
                 }
 
@@ -710,8 +708,6 @@
                     case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; break;
                     case Guacamole.Client.State.CONNECTED:
                         statusEl.textContent = 'Connected'; statusEl.className = 'connected';
-                        // Send actual browser dimensions so guacd can resize the remote display
-                        client.sendSize(window.innerWidth, window.innerHeight);
                         break;
                     case Guacamole.Client.State.DISCONNECTING: statusEl.textContent = 'Disconnecting...'; statusEl.className = ''; break;
                     case Guacamole.Client.State.DISCONNECTED: statusEl.textContent = 'Disconnected'; statusEl.className = ''; break;

@@ -178,6 +178,40 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # max_recordings = 0                 # global max recording count (0 = unlimited)
 # rotation_interval_secs = 300       # how often to check rotation (seconds, default: 300)
 
+# ─── Theme ────────────────────────────────────────────────────────────────────
+#
+# Customize the web UI appearance. Pick a built-in preset and optionally
+# override individual colors. Users can switch themes in the browser via
+# the theme switcher (persisted in localStorage).
+#
+# Built-in presets: dark (default), light, high-contrast, terminal, nord, corporate
+#
+# All color values are CSS color strings (hex, rgb(), hsl(), named colors).
+
+# [theme]
+# preset = "dark"                    # built-in preset to use as the base
+# logo_url = "/logo.svg"            # custom logo URL (shown on login + nav)
+#
+# # Override individual colors on top of the preset:
+# # primary_color = "#e94560"
+# # accent_color = "#5bc0be"
+# # bg_color = "#1a1a2e"
+# # surface_color = "#16213e"
+# # text_color = "#e0e0e0"
+# # text_muted = "#aaa"
+# # border_color = "#333"
+# # input_color = "#0f3460"
+# # primary_hover = "#c73652"
+# # accent_hover = "#4aa3a1"
+# # text_dim = "#888"
+# # text_on_primary = "#fff"
+# # btn_disabled = "#555"
+# # status_pending = "#f0c040"
+# # status_active = "#5bc0be"
+# # status_completed = "#888"
+# # status_error = "#e94560"
+# # status_expired = "#666"
+
 # ─── Drive / File Transfer ──────────────────────────────────────────────────
 #
 # Enables file transfer for RDP (drive redirection) and SSH (SFTP) sessions.

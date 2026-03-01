@@ -1,0 +1,31 @@
+diff --git a/src/protocols/rdp/channels/disp.c b/src/protocols/rdp/channels/disp.c
+index 0293843c..a1b2c3d4 100644
+--- a/src/protocols/rdp/channels/disp.c
++++ b/src/protocols/rdp/channels/disp.c
+@@ -161,6 +161,10 @@ void guac_rdp_disp_load_plugin(rdpContext* context) {
+ void guac_rdp_disp_set_size(guac_rdp_disp* disp, guac_rdp_settings* settings,
+         freerdp* rdp_inst, int width, int height) {
+
++    /* Abort if display module or settings are not yet initialized */
++    if (disp == NULL || settings == NULL)
++        return;
++
+     guac_rect resize = {
+         .left = 0,
+         .top = 0,
+diff --git a/src/protocols/rdp/input.c b/src/protocols/rdp/input.c
+index 06bfac13..c8e1d2f7 100644
+--- a/src/protocols/rdp/input.c
++++ b/src/protocols/rdp/input.c
+@@ -105,6 +105,11 @@ int guac_rdp_user_size_handler(guac_user* user, int width, int height) {
+     guac_rdp_settings* settings = rdp_client->settings;
+     freerdp* rdp_inst = rdp_client->rdp_inst;
+
++    /* Abort if not yet fully initialized (browser may send size instruction
++     * before the RDP connection is fully established) */
++    if (settings == NULL || rdp_client->disp == NULL)
++        return 0;
++
+     /* Convert client pixels to remote pixels */
+     width  = width  * settings->resolution / user->info.optimal_resolution;
+     height = height * settings->resolution / user->info.optimal_resolution;

@@ -3,6 +3,11 @@
   <path d="M64 8C40 8 24 28 20 52c-4 24 4 48 20 60 8 6 16 8 24 8s16-2 24-8c16-12 24-36 20-60C104 28 88 8 64 8z" fill="#5bc0be"/>
   <!-- Avocado pit / terminal screen -->
   <ellipse cx="64" cy="72" rx="26" ry="30" fill="#1a1a2e"/>
+  <!-- Eyes -->
+  <circle cx="55" cy="62" r="3" fill="#e0e0e0"/>
+  <circle cx="73" cy="62" r="3" fill="#e0e0e0"/>
+  <!-- Smile -->
+  <path d="M56 72 Q64 80 72 72" fill="none" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round"/>
   <!-- Terminal prompt -->
-  <text x="48" y="80" font-family="monospace" font-weight="bold" font-size="28" fill="#e94560">&gt;_</text>
+  <text x="48" y="92" font-family="monospace" font-weight="bold" font-size="18" fill="#e94560">&gt;_</text>
 </svg>

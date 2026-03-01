@@ -559,7 +559,25 @@ async fn run_server(config: Config, database: Db) {
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
     let vault_configured = VaultConfigured(config.vault.is_some());
     let site_title = SiteTitle(config.site_title.clone());
-    let theme_data = ThemeData(config.theme.clone());
+    let theme_data = {
+        let (admin_preset, admin_colors) = config
+            .theme
+            .as_ref()
+            .map(|t| t.resolve())
+            .unwrap_or_else(|| ("dark".into(), crate::config::builtin_presets()[0].1.clone()));
+        let logo_url = config.theme.as_ref().and_then(|t| t.logo_url.clone());
+        let presets: std::collections::HashMap<String, crate::config::ThemeColors> =
+            crate::config::builtin_presets()
+                .into_iter()
+                .map(|(name, colors)| (name.to_string(), colors))
+                .collect();
+        ThemeData {
+            admin_preset,
+            admin_colors,
+            logo_url,
+            presets,
+        }
+    };
     let trusted_proxies = auth::TrustedProxies(config.trusted_proxies.clone());
 
     // Periodically clean up expired auth sessions from the database

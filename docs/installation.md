@@ -118,6 +118,21 @@ The Docker image:
 - Enables TLS between rustguac and guacd by default
 - Exposes HTTP on port 8089 (put a reverse proxy in front for HTTPS)
 
+### API key setup
+
+On first run (when no database exists), the container automatically generates an admin API key and prints it to the logs:
+
+```bash
+docker logs rustguac
+```
+
+Save the printed key — it is only shown once. To generate additional keys later:
+
+```bash
+docker exec rustguac /opt/rustguac/bin/rustguac \
+    --config /opt/rustguac/config.toml add-admin --name my-admin
+```
+
 ### Docker Compose example
 
 ```yaml
@@ -128,11 +143,13 @@ services:
       - "8089:8089"
     volumes:
       - rustguac-data:/opt/rustguac/data
+      - rustguac-recordings:/opt/rustguac/recordings
     environment:
       - RUST_LOG=info
 
 volumes:
   rustguac-data:
+  rustguac-recordings:
 ```
 
 ## Option D: RPM package

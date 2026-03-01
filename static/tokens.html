@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>rustguac - API Tokens</title>
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; }
+        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #666; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1b4332; --type-ssh-fg: #52b788; --type-rdp-bg: #3d1f00; --type-rdp-fg: #f0a050; --type-vnc-bg: #2d1b4e; --type-vnc-fg: #b07ff0; --type-web-bg: #1a1a4e; --type-web-fg: #7b8ff0; --hop-bg: #1b4332; --hop-fg: #52b788; }
         body { font-family: monospace; background: var(--bg); color: var(--text); padding: 2em; font-size: 18px; }
         h1 { color: var(--primary); }
         h2 { color: var(--primary); font-size: 1em; margin-top: 2em; }
@@ -13,8 +13,21 @@
         nav a { margin-right: 1.5em; text-decoration: none; }
         nav a:hover { text-decoration: underline; }
         nav .active { color: var(--primary); font-weight: bold; }
-        nav .logout { color: #888; float: right; cursor: pointer; }
-        nav .logout:hover { color: var(--primary); }
+        #user-menu-wrapper { position: relative; float: right; }
+        #user-menu-btn { cursor: pointer; font-size: 1.3em; color: var(--text-muted); }
+        #user-menu-btn:hover { color: var(--text); }
+        #user-menu { display:none; position:absolute; right:0; top:1.8em; background:var(--surface); border:1px solid var(--border); border-radius:6px; min-width:220px; z-index:50; padding:0.4em 0; }
+        .um-section-label { padding:0.4em 0.9em; font-size:0.8em; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
+        .um-item { padding:0.5em 0.9em; cursor:pointer; display:flex; align-items:center; gap:0.6em; font-size:0.9em; }
+        .um-item:hover { background:var(--input); }
+        .um-item.active { color:var(--accent); }
+        .um-theme-info { display:flex; flex-direction:column; }
+        .um-theme-name { font-weight:bold; }
+        .um-theme-desc { font-size:0.8em; color:var(--text-dim); }
+        .um-swatch { display:inline-block; width:16px; height:16px; border-radius:50%; border:1px solid var(--border); flex-shrink:0; }
+        .um-divider { height:1px; background:var(--border); margin:0.3em 0; }
+        .um-logout { color:var(--text-muted); }
+        .um-logout:hover { color:var(--primary); background:var(--input); }
 
         table { border-collapse: collapse; width: 100%; margin-top: 0.5em; }
         th, td { text-align: left; padding: 0.4em 0.8em; border-bottom: 1px solid var(--border); }
@@ -26,7 +39,7 @@
         .btn-small:hover { text-decoration: underline; }
         .btn-action { color: var(--accent); }
         button.btn-primary {
-            padding: 0.4em 1.2em; background: var(--primary); color: #fff; border: none;
+            padding: 0.4em 1.2em; background: var(--primary); color: var(--text-on-primary); border: none;
             font-family: monospace; font-size: 0.9em; border-radius: 3px; cursor: pointer;
         }
         button.btn-primary:hover { background: var(--primary-hover); }
@@ -75,7 +88,7 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" class="active">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
-        <span class="logout" id="logout-btn">logout</span>
+        <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881;</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item um-logout" id="logout-item">Logout</div></div></span>
     </nav>
 
     <div id="loading">Loading...</div>
@@ -118,16 +131,15 @@
     <div id="error"></div>
 
     <script>
-        function applyTheme(theme) {
-            if (!theme) return;
-            var props = {primary_color:'--primary',primary_hover:'--primary-hover',accent_color:'--accent',accent_hover:'--accent-hover',bg_color:'--bg',surface_color:'--surface',input_color:'--input',text_color:'--text',text_muted:'--text-muted',border_color:'--border'};
-            var r = document.documentElement.style;
-            for (var k in props) { if (theme[k]) r.setProperty(props[k], theme[k]); }
-            if (theme.logo_url) { var logo = document.getElementById('site-logo'); if (logo) { logo.src = theme.logo_url; logo.style.display = ''; } }
-        }
+        (function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k])}catch(e){}}})();
+        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
+        var _themePresets={},_adminPreset='dark';
+        var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',avocado:'Natural greens & warm brown'};
+        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'dark';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
+        var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             if(d.site_title){document.title=d.site_title+' - API Tokens';document.querySelector('h1').textContent=d.site_title;}
-            applyTheme(d.theme);
+            initTheme(d.theme);
         });
 
         var apiKey = sessionStorage.getItem('rustguac_api_key');
@@ -145,7 +157,7 @@
         var errorEl = document.getElementById('error');
         function showError(msg) { errorEl.textContent = msg; setTimeout(function(){ errorEl.textContent = ''; }, 5000); }
 
-        document.getElementById('logout-btn').addEventListener('click', function() {
+        document.getElementById('logout-item').addEventListener('click', function() {
             sessionStorage.removeItem('rustguac_api_key');
             fetch('/auth/logout', { credentials: 'same-origin' })
             .finally(function() { window.location.href = '/'; });

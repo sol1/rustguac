@@ -79,7 +79,7 @@ jobs:
           cp ../*.deb .
 
       - name: Upload .deb artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: deb-package
           path: "*.deb"
@@ -109,7 +109,7 @@ jobs:
             "rustguac-${TAG_VERSION}-linux-amd64"
 
       - name: Upload tarball artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: tarball
           path: rustguac-*-linux-amd64.tar.gz
@@ -179,14 +179,115 @@ jobs:
           cp "$RPMBUILD_DIR"/RPMS/*/*.rpm .
 
       - name: Upload .rpm artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: rpm-package
           path: "*.rpm"
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # Build and push Docker image
+  # Build .deb + tarball (ARM64 / Debian 13)
+  # ---------------------------------------------------------------------------
+  build-deb-arm64:
+    name: Build .deb (arm64)
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates gcc g++ pkg-config make git \
+            autoconf automake libtool \
+            libcairo2-dev libjpeg-dev libpng-dev libwebp-dev \
+            libssh2-1-dev libssl-dev libvncserver-dev \
+            libpango1.0-dev libpulse-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libcunit1-dev libtelnet-dev libwebsockets-dev \
+            uuid-dev freerdp3-dev \
+            dpkg-dev debhelper fakeroot build-essential
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Clone and build guacd
+        run: |
+          git clone --depth 1 $GUACD_REPO /tmp/guacamole-server
+          for patch in patches/*.patch; do
+            [ -f "$patch" ] || continue
+            echo "Applying: $patch"
+            git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch"
+          done
+          cd /tmp/guacamole-server && autoreconf -fi
+          mkdir /tmp/guacd-build && cd /tmp/guacd-build
+          /tmp/guacamole-server/configure \
+            --prefix=/opt/rustguac \
+            --with-ssh --with-vnc --with-rdp \
+            --without-telnet --without-kubernetes \
+            --disable-guacenc --disable-guaclog --disable-static
+          make -j"$(nproc)"
+          make DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
+
+      - name: Build rustguac
+        run: $HOME/.cargo/bin/cargo build --release
+
+      - name: Build .deb package
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          GIT_HASH=$(echo "$GITHUB_SHA" | cut -c1-7)
+          DEB_VERSION="${VERSION}+g${GIT_HASH}"
+          cat > debian/changelog <<EOF
+          rustguac (${DEB_VERSION}) unstable; urgency=medium
+
+            * Release ${GITHUB_REF_NAME}
+
+           -- rustguac build <rustguac@localhost>  $(date -R)
+          EOF
+          dpkg-buildpackage -us -uc -b
+          cp ../*.deb .
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: deb-package-arm64
+          path: "*.deb"
+          if-no-files-found: error
+
+      - name: Build release tarball
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TARBALL_DIR="/tmp/rustguac-${TAG_VERSION}-linux-arm64"
+          mkdir -p "$TARBALL_DIR/bin" "$TARBALL_DIR/sbin" "$TARBALL_DIR/lib" "$TARBALL_DIR/static" "$TARBALL_DIR/systemd"
+
+          cp target/release/rustguac "$TARBALL_DIR/bin/"
+          cp debian/staging/opt/rustguac/sbin/guacd "$TARBALL_DIR/sbin/"
+          cp -a debian/staging/opt/rustguac/lib/*.so* "$TARBALL_DIR/lib/"
+          cp -r static/* "$TARBALL_DIR/static/"
+          cp debian/config.toml.default "$TARBALL_DIR/config.toml.default"
+          cp debian/rustguac.service "$TARBALL_DIR/systemd/"
+          cp debian/rustguac-guacd.service "$TARBALL_DIR/systemd/"
+          cp install-release.sh "$TARBALL_DIR/install.sh"
+          chmod +x "$TARBALL_DIR/install.sh"
+          [ -d scripts ] && cp -r scripts "$TARBALL_DIR/" || true
+
+          cd /tmp
+          tar czf "$GITHUB_WORKSPACE/rustguac-${TAG_VERSION}-linux-arm64.tar.gz" \
+            "rustguac-${TAG_VERSION}-linux-arm64"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tarball-arm64
+          path: rustguac-*-linux-arm64.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Build and push Docker image (amd64 + arm64)
   # ---------------------------------------------------------------------------
   build-docker:
     name: Build Docker image
@@ -194,6 +295,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Set up QEMU (for ARM64 cross-build)
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -208,10 +312,11 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push
+      - name: Build and push (amd64 + arm64)
         uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             sol1/rustguac:${{ steps.version.outputs.version }}
@@ -224,29 +329,41 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Create Release
-    needs: [build-deb, build-rpm, build-docker]
+    needs: [build-deb, build-deb-arm64, build-rpm, build-docker]
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
 
       - name: Download deb artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: deb-package
           path: artifacts/deb-package
 
       - name: Download rpm artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: rpm-package
           path: artifacts/rpm-package
 
       - name: Download tarball artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: tarball
           path: artifacts/tarball
+
+      - name: Download deb artifact (arm64)
+        uses: actions/download-artifact@v8
+        with:
+          name: deb-package-arm64
+          path: artifacts/deb-package-arm64
+
+      - name: Download tarball artifact (arm64)
+        uses: actions/download-artifact@v8
+        with:
+          name: tarball-arm64
+          path: artifacts/tarball-arm64
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -254,5 +371,7 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/deb-package/*.deb
+            artifacts/deb-package-arm64/*.deb
             artifacts/rpm-package/*.rpm
             artifacts/tarball/*.tar.gz
+            artifacts/tarball-arm64/*.tar.gz

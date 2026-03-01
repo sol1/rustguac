@@ -274,9 +274,20 @@ impl SessionManager {
         created_by: String,
     ) -> Result<SessionInfo, SessionError> {
         let session_id = Uuid::new_v4();
-        let width = req.width.unwrap_or(1920);
-        let height = req.height.unwrap_or(1080);
-        let dpi = req.dpi.unwrap_or(96);
+        let raw_width = req.width.unwrap_or(1920);
+        let raw_height = req.height.unwrap_or(1080);
+        let raw_dpi = req.dpi.unwrap_or(96);
+        let width = raw_width.clamp(640, 8192);
+        let height = raw_height.clamp(480, 8192);
+        let dpi = raw_dpi.clamp(16, 384);
+        if width != raw_width || height != raw_height || dpi != raw_dpi {
+            tracing::warn!(
+                session_id = %session_id,
+                raw_width, raw_height, raw_dpi,
+                clamped_width = width, clamped_height = height, clamped_dpi = dpi,
+                "Clamped session dimensions to safe range"
+            );
+        }
 
         let (
             mut conn_params,
@@ -377,6 +388,7 @@ impl SessionManager {
                     session_id = %session_id,
                     hostname = %hostname,
                     username = %username,
+                    width, height, dpi,
                     "Creating new RDP session"
                 );
 
@@ -455,6 +467,7 @@ impl SessionManager {
                 tracing::info!(
                     session_id = %session_id,
                     hostname = %hostname,
+                    width, height, dpi,
                     "Creating new VNC session"
                 );
 

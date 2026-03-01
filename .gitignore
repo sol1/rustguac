@@ -45,5 +45,8 @@ debian/rustguac.substvars
 rpm/staging/
 *.rpm
 
+# Playwright MCP artifacts
+.playwright-mcp/
+
 # Claude Code project memory
 .claude/

@@ -206,11 +206,17 @@ pub async fn auth_status(
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
 ) -> impl IntoResponse {
-    let mut resp = json!({ "oidc_enabled": oidc_enabled.0, "site_title": site_title.0 });
-    if let Some(ref t) = theme.0 {
-        if let Ok(v) = serde_json::to_value(t) {
-            resp["theme"] = v;
-        }
+    let mut resp = json!({
+        "oidc_enabled": oidc_enabled.0,
+        "site_title": site_title.0,
+    });
+    resp["theme"] = json!({
+        "admin_preset": theme.admin_preset,
+        "admin_colors": theme.admin_colors,
+        "presets": theme.presets,
+    });
+    if let Some(ref url) = theme.logo_url {
+        resp["theme"]["logo_url"] = json!(url);
     }
     Json(resp)
 }
@@ -219,9 +225,18 @@ pub async fn auth_status(
 #[derive(Clone)]
 pub struct SiteTitle(pub String);
 
-/// Theme configuration from config, shared via Extension.
+/// Resolved theme data shared via Extension.
 #[derive(Clone)]
-pub struct ThemeData(pub Option<crate::config::ThemeConfig>);
+pub struct ThemeData {
+    /// Admin-configured preset name (e.g. "dark").
+    pub admin_preset: String,
+    /// Fully-resolved admin theme colors (preset + overrides).
+    pub admin_colors: crate::config::ThemeColors,
+    /// Optional custom logo URL.
+    pub logo_url: Option<String>,
+    /// All built-in preset palettes for client-side switching.
+    pub presets: std::collections::HashMap<String, crate::config::ThemeColors>,
+}
 
 /// Marker for whether OIDC is configured.
 #[derive(Clone)]

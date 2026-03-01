@@ -18,9 +18,20 @@ use serde::Deserialize;
 use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+/// Which side terminated the proxy connection.
+enum ProxyResult {
+    /// guacd closed the connection (with optional error).
+    GuacdEnded(Option<String>),
+    /// Browser/WebSocket closed the connection (with optional error).
+    BrowserEnded(Option<String>),
+    /// Session was cancelled externally.
+    Cancelled,
+}
 
 #[derive(Deserialize)]
 pub struct WsQuery {
@@ -163,12 +174,52 @@ async fn handle_ws(
     };
 
     // Run the bidirectional proxy
-    let result = proxy_ws_guacd(ws, guacd_stream, recording_file, cancel).await;
+    let start = Instant::now();
+    let proxy_result = proxy_ws_guacd(ws, guacd_stream, recording_file, cancel).await;
+    let elapsed = start.elapsed();
 
     manager.disconnect_viewer(session_id).await;
 
-    if let Err(e) = result {
-        tracing::warn!(session_id = %session_id, client_ip = %client_addr, error = %e, "WebSocket proxy ended with error");
+    // Log termination direction and timing
+    let mark_error = match &proxy_result {
+        ProxyResult::GuacdEnded(err) => {
+            if elapsed.as_secs() < 5 {
+                tracing::warn!(
+                    session_id = %session_id, client_ip = %client_addr,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    error = ?err,
+                    "guacd closed connection quickly (possible connection failure)"
+                );
+                true // mark as error
+            } else {
+                tracing::info!(
+                    session_id = %session_id, client_ip = %client_addr,
+                    elapsed_secs = elapsed.as_secs(),
+                    "Proxy ended: guacd closed connection"
+                );
+                false
+            }
+        }
+        ProxyResult::BrowserEnded(err) => {
+            tracing::info!(
+                session_id = %session_id, client_ip = %client_addr,
+                elapsed_secs = elapsed.as_secs(),
+                error = ?err,
+                "Proxy ended: browser disconnected"
+            );
+            false
+        }
+        ProxyResult::Cancelled => {
+            tracing::info!(
+                session_id = %session_id, client_ip = %client_addr,
+                elapsed_secs = elapsed.as_secs(),
+                "Proxy ended: session cancelled"
+            );
+            false
+        }
+    };
+
+    if mark_error {
         manager.error_session(session_id).await;
     } else {
         // Only mark completed if no more active connections
@@ -203,7 +254,7 @@ async fn proxy_ws_guacd(
     guacd: GuacdStream,
     recording_file: Option<tokio::fs::File>,
     cancel: CancellationToken,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> ProxyResult {
     let (guacd_read, guacd_write) = tokio::io::split(guacd);
     let (ws_write, ws_read) = ws.split();
 
@@ -220,21 +271,25 @@ async fn proxy_ws_guacd(
     // Wait for either direction to finish, or cancellation
     tokio::select! {
         result = guacd_to_browser => {
-            if let Ok(Err(e)) = result {
-                tracing::debug!("guacd→browser ended: {}", e);
-            }
+            let err = match result {
+                Ok(Err(e)) => Some(e.to_string()),
+                Err(e) => Some(e.to_string()),
+                _ => None,
+            };
+            ProxyResult::GuacdEnded(err)
         }
         result = browser_to_guacd => {
-            if let Ok(Err(e)) = result {
-                tracing::debug!("browser→guacd ended: {}", e);
-            }
+            let err = match result {
+                Ok(Err(e)) => Some(e.to_string()),
+                Err(e) => Some(e.to_string()),
+                _ => None,
+            };
+            ProxyResult::BrowserEnded(err)
         }
         _ = cancel.cancelled() => {
-            tracing::info!("Session cancelled, shutting down proxy");
+            ProxyResult::Cancelled
         }
     }
-
-    Ok(())
 }
 
 /// Forward data from guacd to WebSocket, recording along the way.
