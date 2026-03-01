@@ -6,7 +6,7 @@ Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.6.2
 
 Package: rustguac
-Architecture: amd64
+Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends},
  libcairo2,
  libjpeg62-turbo,
