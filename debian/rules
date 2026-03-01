@@ -35,8 +35,9 @@ override_dh_auto_install:
 	cp -a debian/staging/opt/rustguac/lib/*.so* debian/rustguac/opt/rustguac/lib/
 
 	# FreeRDP plugin for RDPDR/RDPSND channels (drive redirection, audio, printing)
-	install -d debian/rustguac/usr/lib/x86_64-linux-gnu/freerdp3
-	cp -a debian/staging/usr/lib/x86_64-linux-gnu/freerdp3/*.so* debian/rustguac/usr/lib/x86_64-linux-gnu/freerdp3/ 2>/dev/null || true
+	DEB_HOST_MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+	install -d debian/rustguac/usr/lib/$(DEB_HOST_MULTIARCH)/freerdp3
+	cp -a debian/staging/usr/lib/$(DEB_HOST_MULTIARCH)/freerdp3/*.so* debian/rustguac/usr/lib/$(DEB_HOST_MULTIARCH)/freerdp3/ 2>/dev/null || true
 
 	# Static web assets
 	cp -r static/* debian/rustguac/opt/rustguac/static/
