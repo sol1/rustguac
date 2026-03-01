@@ -2,6 +2,8 @@
 
 export DH_VERBOSE = 1
 
+DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+
 %:
 	dh $@
 
@@ -35,7 +37,6 @@ override_dh_auto_install:
 	cp -a debian/staging/opt/rustguac/lib/*.so* debian/rustguac/opt/rustguac/lib/
 
 	# FreeRDP plugin for RDPDR/RDPSND channels (drive redirection, audio, printing)
-	DEB_HOST_MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
 	install -d debian/rustguac/usr/lib/$(DEB_HOST_MULTIARCH)/freerdp3
 	cp -a debian/staging/usr/lib/$(DEB_HOST_MULTIARCH)/freerdp3/*.so* debian/rustguac/usr/lib/$(DEB_HOST_MULTIARCH)/freerdp3/ 2>/dev/null || true
 
