@@ -11,7 +11,7 @@ index 774316f4..d4e70243 100644
  #include "plugins/channels.h"
  #include "rdp.h"
 diff --git a/src/protocols/rdp/channels/disp.c b/src/protocols/rdp/channels/disp.c
-index da1ca800..616b77d7 100644
+index 0293843c..616b77d7 100644
 --- a/src/protocols/rdp/channels/disp.c
 +++ b/src/protocols/rdp/channels/disp.c
 @@ -17,6 +17,7 @@
@@ -22,29 +22,7 @@ index da1ca800..616b77d7 100644
  #include "channels/disp.h"
  #include "plugins/channels.h"
  #include "fs.h"
-@@ -85,6 +86,10 @@ static void guac_rdp_disp_channel_connected(rdpContext* context,
-     if (strcmp(args->name, DISP_DVC_CHANNEL_NAME) != 0)
-         return;
- 
-+    /* Abort if display update module is not yet initialized */
-+    if (guac_disp == NULL)
-+        return;
-+
-     /* Init module with current display size */
-     guac_rdp_disp_set_size(guac_disp, rdp_client->settings,
-             context->instance, guac_rdp_get_width(context->instance),
-@@ -127,6 +132,10 @@ static void guac_rdp_disp_channel_disconnected(rdpContext* context,
-     if (strcmp(args->name, DISP_DVC_CHANNEL_NAME) != 0)
-         return;
- 
-+    /* Abort if display update module is not yet initialized */
-+    if (guac_disp == NULL)
-+        return;
-+
-     /* Channel is no longer connected */
-     guac_disp->disp = NULL;
- 
-@@ -153,6 +162,10 @@ void guac_rdp_disp_load_plugin(rdpContext* context) {
+@@ -161,6 +162,10 @@ void guac_rdp_disp_load_plugin(rdpContext* context) {
  void guac_rdp_disp_set_size(guac_rdp_disp* disp, guac_rdp_settings* settings,
          freerdp* rdp_inst, int width, int height) {
  
