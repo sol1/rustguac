@@ -274,6 +274,13 @@ pub struct ThemeColors {
     pub type_web_fg: String,
     pub hop_bg: String,
     pub hop_fg: String,
+    /// CSS background-image value (gradient, pattern, or "none").
+    #[serde(default = "default_bg_pattern")]
+    pub bg_pattern: String,
+}
+
+fn default_bg_pattern() -> String {
+    "none".into()
 }
 
 /// Returns all 6 built-in theme presets.
@@ -310,6 +317,7 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_web_fg: "#7b8ff0".into(),
                 hop_bg: "#1b4332".into(),
                 hop_fg: "#52b788".into(),
+                bg_pattern: "none".into(),
             },
         ),
         (
@@ -343,6 +351,7 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_web_fg: "#1e40af".into(),
                 hop_bg: "#dcfce7".into(),
                 hop_fg: "#166534".into(),
+                bg_pattern: "none".into(),
             },
         ),
         (
@@ -376,6 +385,7 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_web_fg: "#6699ff".into(),
                 hop_bg: "#003300".into(),
                 hop_fg: "#00ff66".into(),
+                bg_pattern: "none".into(),
             },
         ),
         (
@@ -409,6 +419,7 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_web_fg: "#6699ff".into(),
                 hop_bg: "#0a200a".into(),
                 hop_fg: "#33ff33".into(),
+                bg_pattern: "none".into(),
             },
         ),
         (
@@ -442,6 +453,7 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_web_fg: "#88c0d0".into(),
                 hop_bg: "#384838".into(),
                 hop_fg: "#a3be8c".into(),
+                bg_pattern: "none".into(),
             },
         ),
         (
@@ -475,39 +487,75 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_web_fg: "#60a5fa".into(),
                 hop_bg: "#14532d".into(),
                 hop_fg: "#4ade80".into(),
+                bg_pattern: "none".into(),
             },
         ),
         (
-            "avocado",
+            "jaguar",
             ThemeColors {
-                primary: "#d4883c".into(),
-                primary_hover: "#b8742f".into(),
-                accent: "#c5d455".into(),
-                accent_hover: "#a8b83e".into(),
-                bg: "#151a0e".into(),
-                surface: "#1e2414".into(),
-                input: "#2a321c".into(),
-                text: "#eef0e0".into(),
-                text_muted: "#a0a888".into(),
-                border: "#3a4228".into(),
-                text_dim: "#5a6240".into(),
-                text_on_primary: "#151a0e".into(),
-                btn_disabled: "#3a4228".into(),
-                status_pending: "#d4883c".into(),
-                status_active: "#c5d455".into(),
-                status_completed: "#6a7252".into(),
-                status_error: "#c0392b".into(),
-                status_expired: "#3a4228".into(),
-                type_ssh_bg: "#1e2a14".into(),
-                type_ssh_fg: "#8cb832".into(),
-                type_rdp_bg: "#2a2014".into(),
-                type_rdp_fg: "#d4a050".into(),
-                type_vnc_bg: "#221e2a".into(),
-                type_vnc_fg: "#b07ff0".into(),
-                type_web_bg: "#1a1e2a".into(),
-                type_web_fg: "#7b8ff0".into(),
-                hop_bg: "#1e2a14".into(),
-                hop_fg: "#8cb832".into(),
+                primary: "#d4a853".into(),
+                primary_hover: "#b89040".into(),
+                accent: "#50c878".into(),
+                accent_hover: "#3dab60".into(),
+                bg: "#0a100e".into(),
+                surface: "#121c18".into(),
+                input: "#1a2c26".into(),
+                text: "#dce4e0".into(),
+                text_muted: "#8a9e96".into(),
+                border: "#243830".into(),
+                text_dim: "#4a6058".into(),
+                text_on_primary: "#0a100e".into(),
+                btn_disabled: "#2a3e36".into(),
+                status_pending: "#d4a853".into(),
+                status_active: "#50c878".into(),
+                status_completed: "#5a7068".into(),
+                status_error: "#e05050".into(),
+                status_expired: "#2a3e36".into(),
+                type_ssh_bg: "#0e1e16".into(),
+                type_ssh_fg: "#50c878".into(),
+                type_rdp_bg: "#1e1a0e".into(),
+                type_rdp_fg: "#d4a853".into(),
+                type_vnc_bg: "#1a142a".into(),
+                type_vnc_fg: "#a080d0".into(),
+                type_web_bg: "#0e1a2a".into(),
+                type_web_fg: "#6098d0".into(),
+                hop_bg: "#0e1e16".into(),
+                hop_fg: "#50c878".into(),
+                bg_pattern: "radial-gradient(ellipse at 20% 80%, rgba(80, 200, 120, 0.08) 0%, transparent 50%), radial-gradient(ellipse at 80% 10%, rgba(212, 168, 83, 0.06) 0%, transparent 45%)".into(),
+            },
+        ),
+        (
+            "aurora",
+            ThemeColors {
+                primary: "#3b82f6".into(),
+                primary_hover: "#2563eb".into(),
+                accent: "#22d3ee".into(),
+                accent_hover: "#06b6d4".into(),
+                bg: "#0b1120".into(),
+                surface: "#111827".into(),
+                input: "#1e293b".into(),
+                text: "#e2e8f0".into(),
+                text_muted: "#94a3b8".into(),
+                border: "#1e3a5f".into(),
+                text_dim: "#64748b".into(),
+                text_on_primary: "#fff".into(),
+                btn_disabled: "#334155".into(),
+                status_pending: "#f59e0b".into(),
+                status_active: "#22d3ee".into(),
+                status_completed: "#64748b".into(),
+                status_error: "#ef4444".into(),
+                status_expired: "#334155".into(),
+                type_ssh_bg: "#0d2818".into(),
+                type_ssh_fg: "#34d399".into(),
+                type_rdp_bg: "#1e1b4b".into(),
+                type_rdp_fg: "#818cf8".into(),
+                type_vnc_bg: "#2a1f0e".into(),
+                type_vnc_fg: "#fbbf24".into(),
+                type_web_bg: "#0c2340".into(),
+                type_web_fg: "#60a5fa".into(),
+                hop_bg: "#0d2818".into(),
+                hop_fg: "#34d399".into(),
+                bg_pattern: "radial-gradient(ellipse at 15% 0%, rgba(59, 130, 246, 0.15) 0%, transparent 50%), radial-gradient(ellipse at 85% 100%, rgba(34, 211, 238, 0.10) 0%, transparent 50%), radial-gradient(ellipse at 50% 50%, rgba(30, 58, 138, 0.12) 0%, transparent 70%)".into(),
             },
         ),
     ]
@@ -575,6 +623,8 @@ pub struct ThemeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hop_fg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub bg_pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub logo_url: Option<String>,
 }
 
@@ -631,6 +681,7 @@ impl ThemeConfig {
         apply!(type_web_fg);
         apply!(hop_bg);
         apply!(hop_fg);
+        apply!(bg_pattern);
 
         (preset_name.to_string(), colors)
     }

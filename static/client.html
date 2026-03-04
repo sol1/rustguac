@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>rustguac - SSH Session</title>
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #888; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1a3a2a; --type-ssh-fg: #5bc0be; --type-rdp-bg: #2a1a3a; --type-rdp-fg: #a78bfa; --type-vnc-bg: #3a2a1a; --type-vnc-fg: #f0c040; --type-web-bg: #1a2a3a; --type-web-fg: #60a5fa; --hop-bg: #1e3a5f; --hop-fg: #7ec8e3; }
+        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #888; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1a3a2a; --type-ssh-fg: #5bc0be; --type-rdp-bg: #2a1a3a; --type-rdp-fg: #a78bfa; --type-vnc-bg: #3a2a1a; --type-vnc-fg: #f0c040; --type-web-bg: #1a2a3a; --type-web-fg: #60a5fa; --hop-bg: #1e3a5f; --hop-fg: #7ec8e3; --bg-pattern: none; }
         html, body {
             margin: 0;
             padding: 0;
@@ -69,6 +69,7 @@
         }
         #banner-continue:hover { background: var(--primary-hover); }
     </style>
+    <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 
     <!-- Guacamole common JS modules -->
     <script src="/guac/Namespace.js"></script>
@@ -116,8 +117,7 @@
     <div id="display"></div>
 
     <script>
-        (function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k])}catch(e){}}})();
-        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
+        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
         var _themePresets={},_adminPreset='dark';
         function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'dark';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);}
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
@@ -773,7 +773,9 @@
                 clearTimeout(resizeTimer);
                 resizeTimer = setTimeout(function() {
                     var anyPanelOpen = panelOpen || filePanelOpen;
-                    client.sendSize(anyPanelOpen ? window.innerWidth - 380 : window.innerWidth, window.innerHeight);
+                    var sw = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
+                    var sh = window.innerHeight;
+                    client.sendSize(sw, sh);
                 }, 250);
             });
 

@@ -49,6 +49,32 @@ Three new connection parameters:
 
 **Requires:** FreeRDP 3.x built with Kerberos support (`-DWITH_KRB5=ON`). Debian 13's `freerdp3-dev` includes this by default.
 
+## 003-null-guard-disp-size.patch
+
+**Problem:** Browser may send `size` instructions before the RDP connection is fully established, or FreeRDP 3.x may fire PubSub events before `guac_rdp_disp` is fully initialized. This causes NULL pointer dereferences.
+
+**Files patched:**
+
+| File | Fix |
+|------|-----|
+| `src/protocols/rdp/channels/disp.c` | Add NULL guard for `guac_disp` in `guac_rdp_disp_channel_connected()`, `guac_rdp_disp_channel_disconnected()`, and `guac_rdp_disp_set_size()` |
+| `src/protocols/rdp/input.c` | Add NULL guard for `settings` and `rdp_client->disp` in `guac_rdp_user_size_handler()` |
+
+## 004-config-h-struct-layout.patch
+
+**Problem:** Several RDP channel source files and `input.c` do not include `config.h`, so `ENABLE_COMMON_SSH` is undefined in those compilation units. This causes the `guac_rdp_client` struct to have a different layout (missing 3 SSH pointer fields = 24 bytes), making all field accesses after the `#ifdef ENABLE_COMMON_SSH` block read/write wrong memory offsets. Specifically, `rdp_client->disp` reads NULL (actually the `recording` field), so **RDP display resizing silently fails**.
+
+**Files patched:**
+
+| File | Fix |
+|------|-----|
+| `src/protocols/rdp/channels/disp.c` | Add `#include "config.h"` |
+| `src/protocols/rdp/channels/common-svc.c` | Add `#include "config.h"` |
+| `src/protocols/rdp/channels/pipe-svc.c` | Add `#include "config.h"` |
+| `src/protocols/rdp/channels/rdpei.c` | Add `#include "config.h"` |
+| `src/protocols/rdp/channels/rdpgfx.c` | Add `#include "config.h"` |
+| `src/protocols/rdp/input.c` | Add `#include "config.h"` |
+
 ## Applying patches
 
 Patches are applied automatically by all build scripts (`build-deb.sh`, `build-rpm.sh`, `install.sh`, `dev.sh`, `Dockerfile`). To apply manually:

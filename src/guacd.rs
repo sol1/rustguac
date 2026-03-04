@@ -205,7 +205,7 @@ pub async fn connect_and_handshake(
                 "width" => p.width.to_string(),
                 "height" => p.height.to_string(),
                 "dpi" => p.dpi.to_string(),
-                "color-depth" => "24".into(),
+                "color-depth" => "32".into(),
                 "ignore-cert" => if p.ignore_cert { "true" } else { "false" }.into(),
                 "disable-auth" => "false".into(),
                 "cursor" => "local".into(),

@@ -73,7 +73,7 @@ Optional `[oidc]` section enables OpenID Connect authentication. Key settings: `
 
 - **Bare metal**: `sudo ./install.sh` on Debian 13. Installs to `/opt/rustguac`, creates `rustguac` system user with home dir, sets up systemd services.
 - **Docker**: `docker build -t rustguac .` — multi-stage, debian:trixie-slim runtime.
-- **Remote test machine**: `root@solace.sol1.net` — Debian 13 VM (no GPU). Binary at `/opt/rustguac/bin/rustguac`, config at `/opt/rustguac/config.toml`.
+- **Remote test machine**: See project memory for connection details. Binary at `/opt/rustguac/bin/rustguac`, config at `/opt/rustguac/config.toml`.
 
 ## Build notes
 

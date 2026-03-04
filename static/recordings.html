@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <title>rustguac - Recordings</title>
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #666; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1b4332; --type-ssh-fg: #52b788; --type-rdp-bg: #3d1f00; --type-rdp-fg: #f0a050; --type-vnc-bg: #2d1b4e; --type-vnc-fg: #b07ff0; --type-web-bg: #1a1a4e; --type-web-fg: #7b8ff0; --hop-bg: #1b4332; --hop-fg: #52b788; }
-        body { font-family: monospace; background: var(--bg); color: var(--text); padding: 2em; font-size: 18px; }
+        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #666; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1b4332; --type-ssh-fg: #52b788; --type-rdp-bg: #3d1f00; --type-rdp-fg: #f0a050; --type-vnc-bg: #2d1b4e; --type-vnc-fg: #b07ff0; --type-web-bg: #1a1a4e; --type-web-fg: #7b8ff0; --hop-bg: #1b4332; --hop-fg: #52b788; --bg-pattern: none; }
+        body { font-family: monospace; background-color: var(--bg); background-image: var(--bg-pattern); background-attachment: fixed; min-height: 100vh; color: var(--text); padding: 2em; font-size: 18px; }
         h1 { color: var(--primary); }
         a { color: var(--accent); }
         nav { margin-bottom: 1.5em; font-size: 0.95em; }
@@ -41,7 +41,7 @@
 
         #player-section {
             display: none;
-            margin-top: 2em;
+            margin: 1em 0 1.5em 0;
             background: var(--surface);
             border-radius: 6px;
             padding: 1em;
@@ -121,6 +121,7 @@
         }
         #player-time { color: var(--text-muted); font-size: 0.85em; white-space: nowrap; }
     </style>
+    <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 
     <!-- Guacamole JS modules (same as client.html) -->
     <script src="/guac/Namespace.js"></script>
@@ -170,7 +171,6 @@
     </nav>
 
     <strong>Recordings</strong>
-    <div id="recording-list"></div>
 
     <div id="player-section">
         <div id="player-header">
@@ -188,11 +188,12 @@
         </div>
     </div>
 
+    <div id="recording-list"></div>
+
     <script>
-        (function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k])}catch(e){}}})();
-        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
+        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
         var _themePresets={},_adminPreset='dark';
-        var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',avocado:'Natural greens & warm brown'};
+        var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',aurora:'Midnight blue with ambient glow',jaguar:'Racing green & gold'};
         function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'dark';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
         var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
@@ -209,7 +210,8 @@
         } else {
             fetch('/api/me', { credentials: 'same-origin' })
             .then(function(res) {
-                if (!res.ok) { window.location.href = '/'; return; }
+                if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
+                if (!res.ok) return;
                 return res.json();
             })
             .then(function(data) {
@@ -221,7 +223,7 @@
                     document.getElementById('sessions-link').style.display = 'none';
                 }
             })
-            .catch(function() { window.location.href = '/'; });
+            .catch(function() {});
         }
 
         document.getElementById('logout-item').addEventListener('click', function() {
@@ -350,7 +352,9 @@
             closePlayer();
 
             document.getElementById('player-title').textContent = name;
-            document.getElementById('player-section').style.display = 'block';
+            var playerSection = document.getElementById('player-section');
+            playerSection.style.display = 'block';
+            playerSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
             var headers = {};
             if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;

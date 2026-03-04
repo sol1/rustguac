@@ -112,8 +112,8 @@ RUN mkdir -p /opt/rustguac/data /opt/rustguac/recordings /opt/rustguac/tls
 # Generate self-signed cert for guacd TLS (internal loopback encryption)
 RUN /opt/rustguac/bin/rustguac generate-cert --hostname localhost --out-dir /opt/rustguac/tls
 
-# Default config (guacd TLS enabled by default)
-RUN cat > /opt/rustguac/config.toml <<'EOF'
+# Default config template (copied to config.toml on first run if not mounted)
+RUN cat > /opt/rustguac/config.toml.default <<'EOF'
 listen_addr = "0.0.0.0:8089"
 guacd_addr = "127.0.0.1:4822"
 recording_path = "/opt/rustguac/recordings"
@@ -136,11 +136,18 @@ RUN cat > /opt/rustguac/entrypoint.sh <<'SCRIPT'
 #!/bin/sh
 set -e
 
+# Copy default config on first run (if no config file is mounted/present)
+CONFIG_PATH="/opt/rustguac/config.toml"
+if [ ! -f "$CONFIG_PATH" ]; then
+    echo "No config.toml found — copying default configuration."
+    cp /opt/rustguac/config.toml.default "$CONFIG_PATH"
+fi
+
 # Create admin API key on first run (if no DB exists yet)
 DB_PATH="/opt/rustguac/data/rustguac.db"
 if [ ! -f "$DB_PATH" ]; then
     echo "First run detected — creating admin API key..."
-    /opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml add-admin --name docker-admin
+    /opt/rustguac/bin/rustguac --config "$CONFIG_PATH" add-admin --name docker-admin
     echo ""
     echo "==> SAVE THE API KEY ABOVE — it is only shown once! <=="
     echo ""
@@ -166,7 +173,7 @@ trap 'kill $GUACD_PID 2>/dev/null; wait; exit 0' TERM INT
 
 # Run rustguac in foreground
 echo "Starting rustguac..."
-exec /opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml serve
+exec /opt/rustguac/bin/rustguac --config "$CONFIG_PATH" serve
 SCRIPT
 RUN chmod +x /opt/rustguac/entrypoint.sh
 

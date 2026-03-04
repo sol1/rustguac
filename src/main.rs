@@ -666,8 +666,8 @@ async fn run_server(config: Config, database: Db) {
 
     // Rate limit configs
     let api_governor_conf = GovernorConfigBuilder::default()
-        .per_second(1)
-        .burst_size(10)
+        .per_second(5)
+        .burst_size(30)
         .key_extractor(SmartIpKeyExtractor)
         .finish()
         .expect("Failed to build API rate limit config");

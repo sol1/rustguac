@@ -133,6 +133,27 @@ docker exec rustguac /opt/rustguac/bin/rustguac \
     --config /opt/rustguac/config.toml add-admin --name my-admin
 ```
 
+### Customizing the configuration
+
+To persist config changes across container restarts, bind-mount a local `config.toml` into the container:
+
+1. **Copy the default config** from the image:
+
+```bash
+docker run --rm sol1/rustguac:latest cat /opt/rustguac/config.toml.default > config.toml
+```
+
+2. **Edit** `config.toml` as needed (see [Configuration](configuration.md)):
+
+```toml
+# Example: allow SSH to private networks
+ssh_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+```
+
+3. **Mount it** in your Docker Compose file or `docker run` command (see below).
+
+If no config file is mounted, the container uses a built-in default on first start.
+
 ### Docker Compose example
 
 ```yaml
@@ -142,6 +163,7 @@ services:
     ports:
       - "8089:8089"
     volumes:
+      - ./config.toml:/opt/rustguac/config.toml
       - rustguac-data:/opt/rustguac/data
       - rustguac-recordings:/opt/rustguac/recordings
     environment:
@@ -209,3 +231,4 @@ The patches fix:
 1. **Autoconf `-Werror` vs deprecated FreeRDP headers** — FreeRDP 3.15 deprecates `codecs_free()`, breaking compile tests
 2. **Deprecated function pointer API** — replaces `->input->MouseEvent()` etc. with safe FreeRDP 3.x functions
 3. **NULL pointer dereference** — FreeRDP 3.x fires PubSub events before `guac_rdp_disp` is allocated
+4. **Struct layout mismatch** — channel source files missing `config.h` see wrong field offsets when SSH support is enabled
