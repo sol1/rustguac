@@ -1,21 +1,25 @@
 # rustguac
 
-A lightweight Rust replacement for the Apache Guacamole Java webapp. Provides browser-based SSH, RDP, and web browsing sessions through [guacd](https://github.com/apache/guacamole-server) (the Guacamole protocol daemon).
+A lightweight Rust replacement for the Apache Guacamole Java webapp. Provides browser-based SSH, RDP, VNC, and web browsing sessions through [guacd](https://github.com/apache/guacamole-server) (the Guacamole protocol daemon).
 
-rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication (API keys and OIDC SSO), session recording, and browser-based VNC sessions (Xvnc + Chromium).
+rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication (API keys and OIDC SSO), session recording, and a Vault-backed address book.
 
 ## Features
 
-- **SSH sessions** — browser-based SSH terminal via guacd, with ephemeral keypair or manual private key auth
-- **RDP sessions** — connect to Windows/RDP hosts via guacd
+- **SSH sessions** — browser-based SSH terminal via guacd, with password, private key, or ephemeral keypair auth
+- **RDP sessions** — connect to Windows/RDP hosts with auto-fit display resize, Kerberos NLA, and RemoteApp/RAIL support
+- **VNC sessions** — connect to any VNC server (KVM/IPMI consoles, remote desktops, VM displays)
 - **Web browser sessions** — headless Chromium on Xvnc, streamed to the browser via VNC
+- **Multi-hop SSH tunnels** — chain SSH jump hosts/bastions to reach isolated targets for any session type
 - **OIDC single sign-on** — authenticate users via any OpenID Connect provider (Authentik, Google, Okta, etc.)
 - **Role-based access** — admin, poweruser, operator, and viewer roles for both API key and OIDC users
 - **Vault-backed address book** — connection credentials stored in HashiCorp Vault / OpenBao, never reach the browser
-- **TLS everywhere** — HTTPS for clients, TLS between rustguac and guacd
+- **Kerberos NLA** — RDP Kerberos authentication via FreeRDP 3.x (no NTLM required)
 - **Session recording** — all sessions recorded in Guacamole format with playback UI
 - **Session sharing** — share tokens for read-only or collaborative access
-- **Encrypted file transfer** — LUKS-encrypted per-session drive storage for RDP
+- **Encrypted file transfer** — LUKS-encrypted per-session drive storage for RDP, SFTP for SSH
+- **Themeable UI** — 8 built-in themes with CSS gradient backgrounds, or configure your own
+- **TLS everywhere** — HTTPS for clients, TLS between rustguac and guacd
 - **API key auth** — SHA-256 hashed keys with IP allowlists and expiry
 - **SQLite storage** — no external database server needed
 - **Single binary** — just rustguac + guacd, no Java stack
@@ -35,6 +39,7 @@ guacd (C, from guacamole-server)
     |
     +---> SSH server (for SSH sessions)
     +---> RDP server (for RDP sessions)
+    +---> VNC server (for VNC sessions)
     +---> Xvnc display (for web browser sessions)
               |
               +---> Chromium (kiosk mode)
