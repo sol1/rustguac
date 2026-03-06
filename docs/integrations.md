@@ -229,9 +229,11 @@ Address book entries can be configured to prompt users for credentials at connec
 
 The credential prompt appears automatically when:
 1. The entry has **Prompt for credentials** enabled, OR
-2. The entry has no stored password or private key (SSH/RDP only; Web sessions don't use credentials)
+2. The entry has no stored password or private key
 
 Prompted credentials are **never stored** — they're used for the current session only and discarded.
+
+For web sessions, prompted credentials are used for autofill substitution (`$USERNAME`/`$PASSWORD` placeholders) and login script credential passing. See [Web Browser Sessions](web-sessions.md) for details.
 
 ---
 

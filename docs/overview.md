@@ -100,14 +100,9 @@ Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reac
 
 Spawns a headless Xvnc display and Chromium in kiosk mode, then connects guacd via VNC to the local display. The user sees a full browser session in their own browser. Each session gets an isolated Chromium profile directory.
 
-Web sessions support several security and usability features:
+Web sessions support native autofill, per-entry domain allowlisting, login scripts (CDP-based automation), clipboard control, and Chromium security hardening. See [Web Browser Sessions](web-sessions.md) for the full guide with examples.
 
-- **Native autofill** — pre-populates Chromium's built-in password manager with credentials from the address book entry. Users see the familiar autofill dropdown on matching login forms. Uses `$USERNAME` and `$PASSWORD` placeholders to reference the entry's credentials.
-- **Allowed domains** — restricts which domains the browser can reach per address book entry. All other domains are blocked via Chromium's `--host-rules` DNS restriction. Useful for limiting operator access to specific web applications.
-- **Login scripts** — server-side scripts that run after Chromium spawns for complex login automation via the Chrome DevTools Protocol (CDP). Scripts receive credentials via environment variables and stdin JSON.
-- **Chromium security hardening** — managed policy disables DevTools, file dialogs, downloads, extensions, and dangerous URL schemes. Chromium runs in a sandbox (SUID helper) with an isolated per-session profile that is deleted on session end.
-
-Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach web targets through bastion hosts. When a tunnel is configured, the URL is rewritten to `127.0.0.1:{tunnel_port}` so Chromium connects through the tunnel. Note that HTTPS targets will show certificate errors since the hostname changes.
+Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach web targets through bastion hosts.
 
 ## SSH tunnel / jump hosts
 

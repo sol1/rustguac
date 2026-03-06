@@ -181,7 +181,9 @@ Web browser sessions (headless Chromium on Xvnc) include several security layers
 
 ### Chromium managed policy
 
-A managed policy is installed at `/etc/chromium/policies/managed/rustguac.json` that restricts:
+A managed policy is installed at `/etc/chromium/policies/managed/rustguac.json` that restricts Chromium's capabilities. **This policy is global** — it affects all Chromium instances on the machine, not just rustguac sessions. Do not install rustguac on a machine where you want to use Chromium for normal browsing.
+
+Policies applied:
 
 | Policy | Value | Effect |
 |--------|-------|--------|
