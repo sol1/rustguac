@@ -114,6 +114,26 @@ pub struct AddressBookEntry {
     /// Maximum number of recordings to keep for this entry (0 = unlimited).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_recordings: Option<u32>,
+    /// Login script filename (relative to login_scripts_dir) to run after browser spawns.
+    /// Only applicable to web sessions. The script receives CDP port and credentials
+    /// via environment variables and stdin JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_script: Option<String>,
+    /// Autofill credentials for web sessions. JSON array of objects:
+    /// [{"url": "https://example.com", "username": "$USERNAME", "password": "$PASSWORD"}]
+    /// $USERNAME and $PASSWORD are substituted from the entry's credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autofill: Option<String>,
+    /// Allowed domains for web sessions. When set, Chromium can only reach
+    /// these domains (plus localhost). Uses --host-rules to block all others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_domains: Option<Vec<String>>,
+    /// Disable clipboard copy (server → client). Prevents copying from the remote session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_copy: Option<bool>,
+    /// Disable clipboard paste (client → server). Prevents pasting into the remote session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_paste: Option<bool>,
 }
 
 impl AddressBookEntry {
@@ -185,6 +205,21 @@ pub struct EntryInfo {
     /// Maximum recordings to keep for this entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_recordings: Option<u32>,
+    /// Login script filename (web sessions only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_script: Option<String>,
+    /// Autofill credentials JSON (web sessions only). Contains $PASSWORD placeholders, not actual values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autofill: Option<String>,
+    /// Allowed domains for web sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_domains: Option<Vec<String>>,
+    /// Disable clipboard copy (server → client).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_copy: Option<bool>,
+    /// Disable clipboard paste (client → server).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_paste: Option<bool>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -222,6 +257,11 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             remote_app_args: e.remote_app_args.clone(),
             enable_recording: e.enable_recording,
             max_recordings: e.max_recordings,
+            login_script: e.login_script.clone(),
+            autofill: e.autofill.clone(),
+            allowed_domains: e.allowed_domains.clone(),
+            disable_copy: e.disable_copy,
+            disable_paste: e.disable_paste,
         }
     }
 }

@@ -80,6 +80,17 @@ pub struct CreateSessionRequest {
     pub address_book_entry: Option<String>,
     /// Per-entry max recordings to keep.
     pub max_recordings: Option<u32>,
+    /// Login script filename to run after browser spawns (web sessions only).
+    pub login_script: Option<String>,
+    /// Autofill credentials JSON for web sessions.
+    /// Array of {"url", "username", "password"} with $USERNAME/$PASSWORD placeholders.
+    pub autofill: Option<String>,
+    /// Allowed domains for web sessions. When set, Chromium can only reach these domains.
+    pub allowed_domains: Option<Vec<String>>,
+    /// Disable clipboard copy (server → client).
+    pub disable_copy: Option<bool>,
+    /// Disable clipboard paste (client → server).
+    pub disable_paste: Option<bool>,
 }
 
 /// Session status in the lifecycle.
@@ -151,6 +162,8 @@ pub struct Session {
     pub address_book_entry: Option<String>,
     /// Per-entry max recordings to keep (from address book entry).
     pub max_recordings: Option<u32>,
+    /// Login script task handle (aborted on session cleanup).
+    pub login_script_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 fn generate_share_token() -> String {
@@ -257,6 +270,10 @@ impl SessionManager {
             config.chromium_path.clone(),
             config.display_range_start,
             config.display_range_end,
+            config.cdp_port_range_start,
+            config.cdp_port_range_end,
+            std::path::PathBuf::from(&config.login_scripts_dir),
+            config.login_script_timeout_secs,
         ));
 
         Self {
@@ -372,6 +389,8 @@ impl SessionManager {
                     enable_sftp: drive_enabled,
                     sftp_disable_download: !drive_cfg.allow_download,
                     sftp_disable_upload: !drive_cfg.allow_upload,
+                    disable_copy: req.disable_copy.unwrap_or(false),
+                    disable_paste: req.disable_paste.unwrap_or(false),
                 });
                 (params, hostname, username, None, None, ssh_banner, None)
             }
@@ -444,6 +463,8 @@ impl SessionManager {
                     remote_app: req.remote_app.clone(),
                     remote_app_dir: req.remote_app_dir.clone(),
                     remote_app_args: req.remote_app_args.clone(),
+                    disable_copy: req.disable_copy.unwrap_or(false),
+                    disable_paste: req.disable_paste.unwrap_or(false),
                 }));
                 (
                     params,
@@ -479,16 +500,18 @@ impl SessionManager {
                     width,
                     height,
                     dpi,
+                    disable_copy: req.disable_copy.unwrap_or(false),
+                    disable_paste: req.disable_paste.unwrap_or(false),
                 });
                 (params, hostname, username, None, None, None, None)
             }
             SessionType::Web => {
-                let url = req.url.ok_or_else(|| {
+                let raw_url = req.url.ok_or_else(|| {
                     SessionError::ValidationError("url is required for web sessions".into())
                 })?;
 
-                // Validate URL scheme and structure
-                let parsed = Url::parse(&url)
+                // Step 1: Validate raw URL template (scheme must be http/https)
+                let parsed = Url::parse(&raw_url)
                     .map_err(|e| SessionError::ValidationError(format!("invalid URL: {}", e)))?;
                 match parsed.scheme() {
                     "http" | "https" => {}
@@ -499,6 +522,31 @@ impl SessionManager {
                         )))
                     }
                 }
+
+                // Step 2: URL-encode and substitute credential placeholders
+                let enc_user = urlencoding::encode(req.username.as_deref().unwrap_or(""));
+                let enc_pass = urlencoding::encode(req.password.as_deref().unwrap_or(""));
+                let url = raw_url
+                    .replace("$RUSTGUAC_USERNAME", &enc_user)
+                    .replace("$RUSTGUAC_PASSWORD", &enc_pass);
+
+                // Step 3: Re-validate substituted URL
+                let parsed = Url::parse(&url).map_err(|e| {
+                    SessionError::ValidationError(format!(
+                        "URL invalid after credential substitution: {}",
+                        e
+                    ))
+                })?;
+                match parsed.scheme() {
+                    "http" | "https" => {}
+                    s => {
+                        return Err(SessionError::ValidationError(format!(
+                            "URL scheme '{}' after substitution not allowed",
+                            s
+                        )))
+                    }
+                }
+
                 let url_host = parsed
                     .host_str()
                     .ok_or_else(|| SessionError::ValidationError("URL has no host".into()))?;
@@ -512,6 +560,7 @@ impl SessionManager {
                 tracing::info!(
                     session_id = %session_id,
                     url = %url,
+                    has_login_script = req.login_script.is_some(),
                     "Creating new web session"
                 );
 
@@ -527,6 +576,8 @@ impl SessionManager {
                     width,
                     height,
                     dpi,
+                    disable_copy: req.disable_copy.unwrap_or(false),
+                    disable_paste: req.disable_paste.unwrap_or(false),
                 });
                 (
                     params,
@@ -644,9 +695,25 @@ impl SessionManager {
                 url.as_ref().unwrap().clone()
             };
 
+            let need_cdp = req.login_script.is_some();
+
+            // Parse autofill credentials JSON and substitute placeholders
+            let autofill_creds = parse_autofill_credentials(
+                req.autofill.as_deref(),
+                req.username.as_deref(),
+                req.password.as_deref(),
+            );
+
             let browser = self
                 .browser_manager
-                .spawn(&browser_url, width, height)
+                .spawn(
+                    &browser_url,
+                    width,
+                    height,
+                    need_cdp,
+                    autofill_creds.as_deref(),
+                    req.allowed_domains.as_deref(),
+                )
                 .await
                 .map_err(|e| SessionError::BrowserSpawn(e.to_string()))?;
 
@@ -712,6 +779,40 @@ impl SessionManager {
             .enable_recording
             .unwrap_or(self.config.recording_enabled());
 
+        // Spawn login script if configured (web sessions with CDP port)
+        let login_script_handle =
+            if let (Some(ref script), Some(ref bs)) = (&req.login_script, &browser_session) {
+                if let Some(cdp_port) = bs.cdp_port {
+                    match self.browser_manager.run_login_script(
+                        script,
+                        bs.display,
+                        cdp_port,
+                        url.as_deref().unwrap_or(""),
+                        req.username.as_deref(),
+                        req.password.as_deref(),
+                        &session_id.to_string(),
+                    ) {
+                        Ok(handle) => Some(handle),
+                        Err(e) => {
+                            tracing::warn!(
+                                session_id = %session_id,
+                                error = %e,
+                                "Login script failed to start (session continues)"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        "Login script configured but no CDP port allocated"
+                    );
+                    None
+                }
+            } else {
+                None
+            };
+
         let session = Session {
             id: session_id,
             session_type: req.session_type,
@@ -736,6 +837,7 @@ impl SessionManager {
             recording_enabled,
             address_book_entry: req.address_book_entry,
             max_recordings: req.max_recordings,
+            login_script_handle,
         };
 
         let info = session.info();
@@ -1023,9 +1125,59 @@ impl SessionManager {
     }
 }
 
+/// Parse autofill credentials JSON and substitute $USERNAME/$PASSWORD placeholders.
+/// Returns None if autofill is not configured or the JSON is invalid.
+fn parse_autofill_credentials(
+    autofill_json: Option<&str>,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Option<Vec<(String, String, String)>> {
+    let json_str = autofill_json?;
+    if json_str.is_empty() {
+        return None;
+    }
+
+    let entries: Vec<serde_json::Value> = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "Invalid autofill JSON, ignoring");
+            return None;
+        }
+    };
+
+    let user = username.unwrap_or("");
+    let pass = password.unwrap_or("");
+
+    let creds: Vec<(String, String, String)> = entries
+        .iter()
+        .filter_map(|entry| {
+            let url = entry.get("url")?.as_str()?;
+            let u = entry.get("username")?.as_str()?;
+            let p = entry.get("password")?.as_str()?;
+
+            let url = url.to_string();
+            let u = u.replace("$USERNAME", user);
+            let p = p.replace("$PASSWORD", pass);
+
+            Some((url, u, p))
+        })
+        .collect();
+
+    if creds.is_empty() {
+        None
+    } else {
+        Some(creds)
+    }
+}
+
 /// Kill browser processes if this is a web session, clean up drive directory,
-/// and shut down any SSH tunnel.
+/// abort any running login script, and shut down any SSH tunnel.
 async fn cleanup_browser(browser_manager: &BrowserManager, session: &mut Session) {
+    // Abort login script if still running
+    if let Some(handle) = session.login_script_handle.take() {
+        handle.abort();
+    }
+
     if let Some(ref mut bs) = session.browser_session {
         browser_manager.kill(bs).await;
     }

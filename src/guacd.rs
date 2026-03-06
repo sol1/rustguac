@@ -25,6 +25,8 @@ pub struct SshParams {
     pub enable_sftp: bool,
     pub sftp_disable_download: bool,
     pub sftp_disable_upload: bool,
+    pub disable_copy: bool,
+    pub disable_paste: bool,
 }
 
 /// VNC connection parameters to pass to guacd.
@@ -36,6 +38,8 @@ pub struct VncParams {
     pub width: u32,
     pub height: u32,
     pub dpi: u32,
+    pub disable_copy: bool,
+    pub disable_paste: bool,
 }
 
 /// RDP connection parameters to pass to guacd.
@@ -67,6 +71,8 @@ pub struct RdpParams {
     pub remote_app_dir: Option<String>,
     /// RemoteApp command-line arguments.
     pub remote_app_args: Option<String>,
+    pub disable_copy: bool,
+    pub disable_paste: bool,
 }
 
 /// Connection parameters — SSH, VNC, or RDP.
@@ -163,8 +169,8 @@ pub async fn connect_and_handshake(
                     "false"
                 }
                 .into(),
-                "disable-copy" => "false".into(),
-                "disable-paste" => "false".into(),
+                "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
+                "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
                 "read-only" => "false".into(),
                 "locale" => "en_US.UTF-8".into(),
                 "server-alive-interval" => "0".into(),
@@ -188,8 +194,8 @@ pub async fn connect_and_handshake(
                 "dest-host" => String::new(),
                 "dest-port" => String::new(),
                 "enable-audio" => "false".into(),
-                "disable-copy" => "false".into(),
-                "disable-paste" => "false".into(),
+                "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
+                "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
                 _ => {
                     tracing::debug!("Unknown guacd VNC parameter '{}', sending empty", name);
                     String::new()
@@ -224,8 +230,8 @@ pub async fn connect_and_handshake(
                 "gateway-domain" => String::new(),
                 "gateway-username" => String::new(),
                 "gateway-password" => String::new(),
-                "disable-copy" => "false".into(),
-                "disable-paste" => "false".into(),
+                "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
+                "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
                 "console" => "false".into(),
                 "server-layout" => String::new(),
                 "timezone" => String::new(),

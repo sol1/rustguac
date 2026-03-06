@@ -41,6 +41,9 @@ rustguac and Apache Guacamole share the same foundation:
 | **Rate limiting** | Not built-in | Per-IP, per-endpoint (tower_governor) |
 | **Reverse proxy integration** | Generic | HAProxy + Knocknoc examples |
 | **Session sharing** | Connection sharing | Share tokens (read-only or collaborative) |
+| **Clipboard control** | Not per-connection | Per-entry disable copy/paste |
+| **Web session autofill** | Not supported | Native Chromium autofill from Vault credentials |
+| **Web domain allowlist** | Not supported | Per-entry domain restriction via --host-rules |
 
 ## Architecture
 
@@ -96,6 +99,13 @@ Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reac
 ### Web browser
 
 Spawns a headless Xvnc display and Chromium in kiosk mode, then connects guacd via VNC to the local display. The user sees a full browser session in their own browser. Each session gets an isolated Chromium profile directory.
+
+Web sessions support several security and usability features:
+
+- **Native autofill** — pre-populates Chromium's built-in password manager with credentials from the address book entry. Users see the familiar autofill dropdown on matching login forms. Uses `$USERNAME` and `$PASSWORD` placeholders to reference the entry's credentials.
+- **Allowed domains** — restricts which domains the browser can reach per address book entry. All other domains are blocked via Chromium's `--host-rules` DNS restriction. Useful for limiting operator access to specific web applications.
+- **Login scripts** — server-side scripts that run after Chromium spawns for complex login automation via the Chrome DevTools Protocol (CDP). Scripts receive credentials via environment variables and stdin JSON.
+- **Chromium security hardening** — managed policy disables DevTools, file dialogs, downloads, extensions, and dangerous URL schemes. Chromium runs in a sandbox (SUID helper) with an isolated per-session profile that is deleted on session end.
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach web targets through bastion hosts. When a tunnel is configured, the URL is rewritten to `127.0.0.1:{tunnel_port}` so Chromium connects through the tunnel. Note that HTTPS targets will show certificate errors since the hostname changes.
 

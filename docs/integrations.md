@@ -211,6 +211,10 @@ Address book entries can be SSH, RDP, VNC, or Web connections. Each entry stores
 - **Prompt for credentials** — when enabled, users are asked for username/password at connect time, even if stored credentials exist
 - **NLA auth package** (RDP only) — force Kerberos or NTLM for NLA authentication
 - **KDC URL** (RDP only) — Kerberos Key Distribution Center proxy URL
+- **Disable copy / Disable paste** — independently disable clipboard copy (server → client) and paste (client → server) per entry (all session types)
+- **Autofill** (Web only) — pre-populate Chromium's native autofill database with credentials. Supports `$USERNAME` and `$PASSWORD` placeholders. Multiple URL entries can be configured for SSO redirect chains.
+- **Allowed domains** (Web only) — restrict which domains the browser can reach. All other domains are blocked via DNS restriction. Useful for limiting operator access to specific web applications.
+- **Login script** (Web only) — server-side script that runs after Chromium spawns for complex login automation via CDP
 
 ### Name validation
 

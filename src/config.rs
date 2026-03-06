@@ -211,6 +211,18 @@ pub struct Config {
     #[serde(default = "default_display_range_end")]
     pub display_range_end: u32,
 
+    #[serde(default = "default_cdp_port_range_start")]
+    pub cdp_port_range_start: u16,
+
+    #[serde(default = "default_cdp_port_range_end")]
+    pub cdp_port_range_end: u16,
+
+    #[serde(default = "default_login_script_timeout_secs")]
+    pub login_script_timeout_secs: u64,
+
+    #[serde(default = "default_login_scripts_dir")]
+    pub login_scripts_dir: String,
+
     #[serde(default = "default_site_title")]
     pub site_title: String,
 
@@ -735,6 +747,22 @@ fn default_display_range_end() -> u32 {
     199
 }
 
+fn default_cdp_port_range_start() -> u16 {
+    9200
+}
+
+fn default_cdp_port_range_end() -> u16 {
+    9299
+}
+
+fn default_login_script_timeout_secs() -> u64 {
+    120
+}
+
+fn default_login_scripts_dir() -> String {
+    "/opt/rustguac/scripts".into()
+}
+
 fn default_site_title() -> String {
     "rustguac".into()
 }
@@ -758,6 +786,10 @@ impl Default for Config {
             chromium_path: default_chromium_path(),
             display_range_start: default_display_range_start(),
             display_range_end: default_display_range_end(),
+            cdp_port_range_start: default_cdp_port_range_start(),
+            cdp_port_range_end: default_cdp_port_range_end(),
+            login_script_timeout_secs: default_login_script_timeout_secs(),
+            login_scripts_dir: default_login_scripts_dir(),
             site_title: default_site_title(),
             ssh_allowed_networks: default_localhost_networks(),
             rdp_allowed_networks: default_localhost_networks(),

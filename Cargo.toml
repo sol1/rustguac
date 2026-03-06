@@ -1,6 +1,6 @@
 [package]
 name = "rustguac"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 description = "Lightweight Rust replacement for Apache Guacamole client"
 
@@ -35,6 +35,11 @@ rand = "0.9"
 hex = "0.4"
 sha2 = "0.10"
 subtle = "2"
+aes = "0.8"
+cbc = "0.1"
+pbkdf2 = { version = "0.12", default-features = false }
+hmac = "0.12"
+sha1 = "0.10"
 
 # Database
 rusqlite = { version = "0.38", features = ["bundled"] }

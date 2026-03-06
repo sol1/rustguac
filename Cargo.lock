@@ -3015,18 +3015,22 @@ dependencies = [
 
 [[package]]
 name = "rustguac"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
+ "aes",
  "axum",
  "axum-server",
  "base64 0.22.1",
+ "cbc",
  "chrono",
  "clap",
  "futures-util",
  "hex",
+ "hmac",
  "ipnetwork",
  "libc",
  "openidconnect",
+ "pbkdf2",
  "pulldown-cmark",
  "rand 0.9.2",
  "rcgen",
@@ -3038,6 +3042,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
+ "sha1 0.10.6",
  "sha2 0.10.9",
  "ssh-key",
  "subtle",

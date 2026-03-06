@@ -166,6 +166,56 @@ Additionally, user API token operations are logged to a persistent `token_audit_
 - **Session ownership** — non-admin users can only terminate their own sessions
 - **Share tokens** — read-only or collaborative access via time-limited share URLs
 
+## Clipboard control
+
+Clipboard copy (server → client) and paste (client → server) can be independently disabled per address book entry. This uses guacd's native `disable-copy` and `disable-paste` parameters, which work for all session types (SSH, RDP, VNC, and web browser sessions).
+
+Use cases:
+- **Disable copy** — prevents users from copying data out of sensitive sessions (data loss prevention)
+- **Disable paste** — prevents users from pasting potentially malicious content into remote sessions
+- **Disable both** — fully isolates the clipboard between the local browser and the remote session
+
+## Web session hardening
+
+Web browser sessions (headless Chromium on Xvnc) include several security layers:
+
+### Chromium managed policy
+
+A managed policy is installed at `/etc/chromium/policies/managed/rustguac.json` that restricts:
+
+| Policy | Value | Effect |
+|--------|-------|--------|
+| `AllowFileSelectionDialogs` | `false` | Blocks file open/save dialogs (prevents filesystem browsing) |
+| `PasswordManagerEnabled` | `true` | Allows autofill to work |
+| `ImportSavedPasswords` | `false` | Blocks password import UI (which exposes a file browser) |
+| `DeveloperToolsAvailability` | `2` | Disables DevTools completely (right-click inspect, F12, menu) |
+| `DownloadRestrictions` | `3` | Blocks all downloads |
+| `PrintingEnabled` | `false` | Disables printing |
+| `EditBookmarksEnabled` | `false` | Prevents bookmark editing |
+| `BrowserSignin` | `0` | Disables browser sign-in |
+| `SyncDisabled` | `true` | Disables Chrome Sync |
+| `ExtensionInstallBlocklist` | `["*"]` | Blocks all extension installation |
+| `URLBlocklist` | `file://*`, `chrome://*`, etc. | Blocks dangerous URL schemes |
+
+### Per-entry domain allowlisting
+
+Address book entries can specify an `allowed_domains` list. When set, Chromium can only reach those domains (plus localhost). All other domains are blocked via Chromium's `--host-rules` flag, which prevents DNS resolution for non-allowed hosts.
+
+Subdomains are automatically included — adding `example.com` allows `*.example.com` as well.
+
+**Important:** The `allowed_domains` field restricts which domains the browser can reach. This is separate from the server-side `web_allowed_networks` CIDR allowlist, which controls which target hosts rustguac will connect to when creating sessions. Both can be active simultaneously:
+
+- `web_allowed_networks` — server-side CIDR filter applied at session creation time (controls what the rustguac server is allowed to connect to)
+- `allowed_domains` — client-side DNS restriction applied inside Chromium at runtime (controls what sites the user can navigate to within the browser session)
+
+### Profile isolation
+
+Each web session gets a unique Chromium profile directory (UUID-based path in `/tmp/`). The profile is created fresh before launch and deleted when the session ends. Credentials stored in the autofill database exist only for the duration of the session.
+
+### Sandbox
+
+Chromium runs with its normal sandbox enabled (via the SUID `chrome-sandbox` helper). The `--no-sandbox` flag is not used.
+
 ## File permissions
 
 | Path | Mode | Owner |

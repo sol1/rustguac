@@ -445,6 +445,37 @@
                 <label>URL
                     <input type="text" id="em-url" placeholder="https://example.com">
                 </label>
+                <div class="field-hint">Use <code>$RUSTGUAC_USERNAME</code> and <code>$RUSTGUAC_PASSWORD</code> in the URL for basic auth (e.g. <code>https://$RUSTGUAC_USERNAME:$RUSTGUAC_PASSWORD@host</code>).</div>
+                <label>Username <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="text" id="em-web-username" placeholder="For URL substitution or login script">
+                </label>
+                <label>Password <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="password" id="em-web-password">
+                </label>
+                <label>Login Script <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="text" id="em-login-script" placeholder="e.g. portal-login.sh">
+                </label>
+                <div class="field-hint">Server-side script in the scripts directory. Receives CDP port and credentials as env vars. Runs after Chromium spawns.</div>
+                <div style="margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
+                    <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-autofill-toggle">
+                        <span id="em-autofill-arrow">&#9654;</span> Autofill
+                    </label>
+                    <div id="em-autofill-fields" style="display:none">
+                        <div class="field-hint" style="margin-bottom:0.5em">Pre-populate Chromium's autofill database so saved credentials appear on matching login forms. Use <code>$USERNAME</code> and <code>$PASSWORD</code> to substitute the entry's credentials.</div>
+                        <div id="em-autofill-rows"></div>
+                        <button type="button" id="em-autofill-add" style="margin-top:0.3em;padding:0.3em 0.8em;font-size:0.85em;background:var(--input);color:var(--accent);border:1px solid var(--border);border-radius:4px;cursor:pointer">+ Add site</button>
+                    </div>
+                </div>
+                <div style="margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
+                    <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-allowed-domains-toggle">
+                        <span id="em-allowed-domains-arrow">&#9654;</span> Allowed Domains
+                    </label>
+                    <div id="em-allowed-domains-fields" style="display:none">
+                        <div class="field-hint" style="margin-bottom:0.5em">Restrict which domains the browser can reach. When set, all other domains are blocked via DNS. Leave empty to allow all sites.</div>
+                        <div id="em-allowed-domains-list"></div>
+                        <button type="button" id="em-allowed-domains-add" style="margin-top:0.3em;padding:0.3em 0.8em;font-size:0.85em;background:var(--input);color:var(--accent);border:1px solid var(--border);border-radius:4px;cursor:pointer">+ Add domain</button>
+                    </div>
+                </div>
             </div>
             <div id="em-remoteapp-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-remoteapp-toggle">
@@ -489,6 +520,16 @@
                         <div class="field-hint">0 = unlimited. Oldest recordings are deleted when the limit is exceeded.</div>
                     </div>
                 </div>
+            </div>
+            <div id="em-clipboard-section" style="margin-top:0.8em">
+                <label>
+                    <input type="checkbox" id="em-disable-copy" style="display:inline;width:auto;margin-right:0.4em"> Disable clipboard copy (server &rarr; client)
+                    <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Prevents users from copying text out of the remote session.</div>
+                </label>
+                <label style="margin-top:0.3em">
+                    <input type="checkbox" id="em-disable-paste" style="display:inline;width:auto;margin-right:0.4em"> Disable clipboard paste (client &rarr; server)
+                    <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Prevents users from pasting text into the remote session.</div>
+                </label>
             </div>
             <div id="em-tunnel-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-tunnel-toggle">
@@ -1158,6 +1199,111 @@
             document.getElementById('em-recording-sub').style.display = this.checked ? '' : 'none';
         });
 
+        // Toggle Autofill fields visibility
+        document.getElementById('em-autofill-toggle').addEventListener('click', function() {
+            var fields = document.getElementById('em-autofill-fields');
+            var arrow = document.getElementById('em-autofill-arrow');
+            if (fields.style.display === 'none') {
+                fields.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                fields.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
+        });
+
+        // ── Autofill row management ──
+        var autofillRows = []; // Array of {url, username, password}
+
+        function renderAutofillRows() {
+            var container = document.getElementById('em-autofill-rows');
+            container.innerHTML = '';
+            autofillRows.forEach(function(row, i) {
+                var div = document.createElement('div');
+                div.style.cssText = 'display:flex;gap:0.4em;align-items:center;margin-bottom:0.3em';
+                div.innerHTML = '<input type="text" placeholder="https://example.com" value="' + escapeHtml(row.url) + '" style="flex:2;padding:0.3em 0.5em;font-size:0.9em;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:4px" data-af-idx="' + i + '" data-af-field="url">'
+                    + '<input type="text" placeholder="$USERNAME" value="' + escapeHtml(row.username) + '" style="flex:1;padding:0.3em 0.5em;font-size:0.9em;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:4px" data-af-idx="' + i + '" data-af-field="username">'
+                    + '<input type="text" placeholder="$PASSWORD" value="' + escapeHtml(row.password) + '" style="flex:1;padding:0.3em 0.5em;font-size:0.9em;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:4px" data-af-idx="' + i + '" data-af-field="password">'
+                    + '<button type="button" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:1.1em;padding:0 0.3em" data-af-remove="' + i + '" title="Remove">&times;</button>';
+                container.appendChild(div);
+            });
+            // Bind input change events
+            container.querySelectorAll('[data-af-field]').forEach(function(input) {
+                input.addEventListener('input', function() {
+                    var idx = parseInt(this.getAttribute('data-af-idx'));
+                    var field = this.getAttribute('data-af-field');
+                    autofillRows[idx][field] = this.value;
+                });
+            });
+            container.querySelectorAll('[data-af-remove]').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var idx = parseInt(this.getAttribute('data-af-remove'));
+                    autofillRows.splice(idx, 1);
+                    renderAutofillRows();
+                });
+            });
+        }
+
+        document.getElementById('em-autofill-add').addEventListener('click', function() {
+            var urlVal = document.getElementById('em-url').value.trim();
+            autofillRows.push({ url: urlVal || 'https://', username: '$USERNAME', password: '$PASSWORD' });
+            renderAutofillRows();
+            // Auto-expand the section
+            document.getElementById('em-autofill-fields').style.display = '';
+            document.getElementById('em-autofill-arrow').innerHTML = '&#9660;';
+        });
+
+        // Toggle Allowed Domains fields visibility
+        document.getElementById('em-allowed-domains-toggle').addEventListener('click', function() {
+            var fields = document.getElementById('em-allowed-domains-fields');
+            var arrow = document.getElementById('em-allowed-domains-arrow');
+            if (fields.style.display === 'none') {
+                fields.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                fields.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
+        });
+
+        // ── Allowed Domains management ──
+        var allowedDomains = []; // Array of strings
+
+        function renderAllowedDomains() {
+            var container = document.getElementById('em-allowed-domains-list');
+            container.innerHTML = '';
+            allowedDomains.forEach(function(domain, i) {
+                var div = document.createElement('div');
+                div.style.cssText = 'display:flex;gap:0.4em;align-items:center;margin-bottom:0.3em';
+                div.innerHTML = '<input type="text" placeholder="example.com" value="' + escapeHtml(domain) + '" style="flex:1;padding:0.3em 0.5em;font-size:0.9em;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:4px" data-ad-idx="' + i + '">'
+                    + '<button type="button" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:1.1em;padding:0 0.3em" data-ad-remove="' + i + '" title="Remove">&times;</button>';
+                container.appendChild(div);
+            });
+            container.querySelectorAll('[data-ad-idx]').forEach(function(input) {
+                input.addEventListener('input', function() {
+                    var idx = parseInt(this.getAttribute('data-ad-idx'));
+                    allowedDomains[idx] = this.value;
+                });
+            });
+            container.querySelectorAll('[data-ad-remove]').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var idx = parseInt(this.getAttribute('data-ad-remove'));
+                    allowedDomains.splice(idx, 1);
+                    renderAllowedDomains();
+                });
+            });
+        }
+
+        document.getElementById('em-allowed-domains-add').addEventListener('click', function() {
+            var urlVal = document.getElementById('em-url').value.trim();
+            var defaultDomain = '';
+            try { defaultDomain = new URL(urlVal).hostname; } catch(e) {}
+            allowedDomains.push(defaultDomain || '');
+            renderAllowedDomains();
+            document.getElementById('em-allowed-domains-fields').style.display = '';
+            document.getElementById('em-allowed-domains-arrow').innerHTML = '&#9660;';
+        });
+
         // ── Multi-hop management ──
         var hopList = []; // Array of {hostname, port, username, password, private_key, expanded}
 
@@ -1338,6 +1484,19 @@
             document.getElementById('em-vnc-color-depth').value = '';
             document.getElementById('em-vnc-prompt-creds').checked = false;
             document.getElementById('em-url').value = '';
+            document.getElementById('em-web-username').value = '';
+            document.getElementById('em-web-password').value = '';
+            document.getElementById('em-login-script').value = '';
+            autofillRows = [];
+            renderAutofillRows();
+            document.getElementById('em-autofill-fields').style.display = 'none';
+            document.getElementById('em-autofill-arrow').innerHTML = '&#9654;';
+            allowedDomains = [];
+            renderAllowedDomains();
+            document.getElementById('em-allowed-domains-fields').style.display = 'none';
+            document.getElementById('em-allowed-domains-arrow').innerHTML = '&#9654;';
+            document.getElementById('em-disable-copy').checked = false;
+            document.getElementById('em-disable-paste').checked = false;
             document.getElementById('em-enable-drive').checked = false;
             document.getElementById('em-remote-app').value = '';
             document.getElementById('em-remote-app-dir').value = '';
@@ -1421,6 +1580,29 @@
                     document.getElementById('em-vnc-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'web') {
                     document.getElementById('em-url').value = entryData.url || '';
+                    document.getElementById('em-web-username').value = entryData.username || '';
+                    document.getElementById('em-login-script').value = entryData.login_script || '';
+                    // Populate autofill rows
+                    if (entryData.autofill) {
+                        try {
+                            var afData = typeof entryData.autofill === 'string' ? JSON.parse(entryData.autofill) : entryData.autofill;
+                            if (Array.isArray(afData) && afData.length > 0) {
+                                autofillRows = afData.map(function(r) {
+                                    return { url: r.url || '', username: r.username || '$USERNAME', password: r.password || '$PASSWORD' };
+                                });
+                                renderAutofillRows();
+                                document.getElementById('em-autofill-fields').style.display = '';
+                                document.getElementById('em-autofill-arrow').innerHTML = '&#9660;';
+                            }
+                        } catch(e) { /* ignore bad JSON */ }
+                    }
+                    // Populate allowed domains
+                    if (entryData.allowed_domains && Array.isArray(entryData.allowed_domains) && entryData.allowed_domains.length > 0) {
+                        allowedDomains = entryData.allowed_domains.slice();
+                        renderAllowedDomains();
+                        document.getElementById('em-allowed-domains-fields').style.display = '';
+                        document.getElementById('em-allowed-domains-arrow').innerHTML = '&#9660;';
+                    }
                 }
                 if (type === 'ssh' || type === 'rdp') {
                     document.getElementById('em-enable-drive').checked = !!entryData.enable_drive;
@@ -1449,6 +1631,9 @@
                     document.getElementById('em-recording-fields').style.display = '';
                     document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
                 }
+                // Populate clipboard settings
+                document.getElementById('em-disable-copy').checked = !!entryData.disable_copy;
+                document.getElementById('em-disable-paste').checked = !!entryData.disable_paste;
                 // Populate hop list from jump_hosts array
                 if (entryData.jump_hosts && entryData.jump_hosts.length > 0) {
                     hopList = entryData.jump_hosts.map(function(h) {
@@ -1527,6 +1712,22 @@
             } else if (type === 'web') {
                 var url = document.getElementById('em-url').value.trim();
                 if (url) entry.url = url;
+                var wu = document.getElementById('em-web-username').value.trim();
+                if (wu) entry.username = wu;
+                var wpw = document.getElementById('em-web-password').value;
+                if (wpw) entry.password = wpw;
+                var ls = document.getElementById('em-login-script').value.trim();
+                if (ls) entry.login_script = ls;
+                // Serialize autofill rows
+                var afValid = autofillRows.filter(function(r) { return r.url && r.url.trim(); });
+                if (afValid.length > 0) {
+                    entry.autofill = JSON.stringify(afValid);
+                }
+                // Serialize allowed domains
+                var adValid = allowedDomains.filter(function(d) { return d && d.trim(); });
+                if (adValid.length > 0) {
+                    entry.allowed_domains = adValid;
+                }
             }
 
             // Drive setting for SSH and RDP
@@ -1550,6 +1751,10 @@
                 var maxRec = parseInt(document.getElementById('em-max-recordings').value) || 0;
                 if (maxRec > 0) entry.max_recordings = maxRec;
             }
+
+            // Clipboard settings (all types)
+            if (document.getElementById('em-disable-copy').checked) entry.disable_copy = true;
+            if (document.getElementById('em-disable-paste').checked) entry.disable_paste = true;
 
             // Tunnel / jump host settings — multi-hop (all types)
             if (type === 'ssh' || type === 'rdp' || type === 'vnc' || type === 'web') {

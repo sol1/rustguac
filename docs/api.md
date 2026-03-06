@@ -134,6 +134,22 @@ The response includes the public key in the `banner_text` field. The SSH connect
 }
 ```
 
+**Web session with autofill and domain restriction:**
+
+```json
+{
+  "session_type": "web",
+  "url": "https://www.saucedemo.com",
+  "username": "standard_user",
+  "password": "secret_sauce",
+  "autofill": "[{\"url\":\"https://www.saucedemo.com\",\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}]",
+  "allowed_domains": ["saucedemo.com"],
+  "disable_copy": true
+}
+```
+
+The `autofill` field is a JSON string containing an array of objects with `url`, `username`, and `password`. The placeholders `$USERNAME` and `$PASSWORD` are substituted with the session's credentials. Multiple entries support SSO redirect chains where credentials are needed on different domains.
+
 **Session with multi-hop SSH tunnel (any type):**
 
 ```json
@@ -203,6 +219,11 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `kerberos_cache` | string | RDP | Path to Kerberos credential cache (advanced) |
 | `color_depth` | integer | RDP | Color depth in bits (8, 16, 24, 32) |
 | `enable_drive` | boolean | RDP, SSH | Enable file transfer / drive redirection |
+| `disable_copy` | boolean | All | Disable clipboard copy (server → client) |
+| `disable_paste` | boolean | All | Disable clipboard paste (client → server) |
+| `autofill` | string | Web | JSON array of autofill credentials (see below) |
+| `allowed_domains` | array | Web | Domain allowlist — browser can only reach these domains |
+| `login_script` | string | Web | Login script filename (relative to `login_scripts_dir`) |
 | `jump_hosts` | array | All | Multi-hop SSH tunnel chain (see below) |
 | `width` | integer | All | Display width in pixels |
 | `height` | integer | All | Display height in pixels |
@@ -419,6 +440,11 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `kdc_url` | string | RDP | Kerberos KDC URL |
 | `color_depth` | integer | RDP | Color depth |
 | `enable_drive` | boolean | RDP, SSH | Enable file transfer |
+| `disable_copy` | boolean | All | Disable clipboard copy (server → client) |
+| `disable_paste` | boolean | All | Disable clipboard paste (client → server) |
+| `autofill` | string | Web | JSON array of autofill credentials |
+| `allowed_domains` | array | Web | Domain allowlist for the browser session |
+| `login_script` | string | Web | Login script filename |
 | `display_name` | string | All | Friendly display name (shown as banner) |
 | `prompt_credentials` | boolean | All | Prompt user for credentials at connect time |
 | `jump_hosts` | array | All | Multi-hop SSH tunnel chain (same format as session creation) |

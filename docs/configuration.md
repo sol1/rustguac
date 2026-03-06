@@ -35,6 +35,10 @@ See `config.example.toml` for a fully commented reference.
 | `chromium_path` | `chromium` | Path to Chromium binary |
 | `display_range_start` | `100` | First X display number |
 | `display_range_end` | `199` | Last X display number |
+| `cdp_port_range_start` | `9200` | First Chrome DevTools Protocol port (for login scripts) |
+| `cdp_port_range_end` | `9299` | Last CDP port |
+| `login_scripts_dir` | `/opt/rustguac/scripts` | Directory containing login scripts |
+| `login_script_timeout_secs` | `120` | Maximum runtime for login scripts before they are killed |
 
 ## Connection allowlists
 

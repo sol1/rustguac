@@ -109,6 +109,11 @@ RUN echo "/opt/rustguac/lib" > /etc/ld.so.conf.d/rustguac.conf && ldconfig
 # Create data directories
 RUN mkdir -p /opt/rustguac/data /opt/rustguac/recordings /opt/rustguac/tls
 
+# Chromium policy: block file selection dialogs in web sessions (security hardening)
+RUN mkdir -p /etc/chromium/policies/managed && \
+    echo '{"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 2, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}' \
+    > /etc/chromium/policies/managed/rustguac.json
+
 # Generate self-signed cert for guacd TLS (internal loopback encryption)
 RUN /opt/rustguac/bin/rustguac generate-cert --hostname localhost --out-dir /opt/rustguac/tls
 

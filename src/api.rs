@@ -1164,6 +1164,11 @@ pub async fn ab_connect_entry(
         enable_recording: ab_entry.enable_recording,
         address_book_entry: Some(ab_entry_key),
         max_recordings: ab_entry.max_recordings,
+        login_script: ab_entry.login_script,
+        autofill: ab_entry.autofill,
+        allowed_domains: ab_entry.allowed_domains,
+        disable_copy: ab_entry.disable_copy,
+        disable_paste: ab_entry.disable_paste,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -2257,6 +2262,11 @@ pub async fn quick_connect(
             enable_recording: ab_entry.enable_recording,
             address_book_entry: Some(ab_entry_key),
             max_recordings: ab_entry.max_recordings,
+            login_script: ab_entry.login_script,
+            autofill: ab_entry.autofill,
+            allowed_domains: ab_entry.allowed_domains,
+            disable_copy: ab_entry.disable_copy,
+            disable_paste: ab_entry.disable_paste,
         };
 
         tracing::info!(
@@ -2338,6 +2348,11 @@ pub async fn quick_connect(
         enable_recording: None,
         address_book_entry: None,
         max_recordings: None,
+        login_script: None,
+        autofill: None,
+        allowed_domains: None,
+        disable_copy: None,
+        disable_paste: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

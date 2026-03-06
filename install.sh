@@ -261,6 +261,12 @@ TOMLEOF
 
     chown -R rustguac:rustguac "$PREFIX/data" "$PREFIX/recordings"
 
+    # Chromium policy: block devtools, file dialogs, password import (web session hardening)
+    mkdir -p /etc/chromium/policies/managed
+    cat > /etc/chromium/policies/managed/rustguac.json <<'POLICY'
+{"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 2, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}
+POLICY
+
     info "rustguac installed to $PREFIX"
 }
 

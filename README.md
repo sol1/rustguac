@@ -9,11 +9,12 @@ rustguac sits between web browsers and guacd, proxying the Guacamole protocol ov
 - **SSH sessions** — browser-based SSH terminal via guacd, with password, private key, or ephemeral keypair auth
 - **RDP sessions** — connect to Windows/RDP hosts with auto-fit display resize, Kerberos NLA, and RemoteApp/RAIL support
 - **VNC sessions** — connect to any VNC server (KVM/IPMI consoles, remote desktops, VM displays)
-- **Web browser sessions** — headless Chromium on Xvnc, streamed to the browser via VNC
+- **Web browser sessions** — headless Chromium on Xvnc, streamed to the browser via VNC, with native autofill and per-entry domain allowlisting
 - **Multi-hop SSH tunnels** — chain SSH jump hosts/bastions to reach isolated targets for any session type
 - **OIDC single sign-on** — authenticate users via any OpenID Connect provider (Authentik, Google, Okta, etc.)
 - **Role-based access** — admin, poweruser, operator, and viewer roles for both API key and OIDC users
 - **Vault-backed address book** — connection credentials stored in HashiCorp Vault / OpenBao, never reach the browser
+- **Per-entry clipboard control** — disable copy and/or paste per address book entry for data loss prevention
 - **Kerberos NLA** — RDP Kerberos authentication via FreeRDP 3.x (no NTLM required)
 - **Session recording** — all sessions recorded in Guacamole format with playback UI
 - **Session sharing** — share tokens for read-only or collaborative access
