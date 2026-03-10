@@ -61,21 +61,40 @@ CIDR ranges controlling which hosts sessions can connect to. All default to loca
 
 ## `[tls]` section
 
-Configures TLS for the web server and/or the guacd connection. These are independent concerns:
+Configures TLS for the web server and/or the guacd connection. There is no `enabled` toggle — the presence of the relevant fields controls behaviour:
 
-- **Server HTTPS**: Set `cert_path` + `key_path` to serve HTTPS. If omitted, rustguac serves plain HTTP (useful behind a TLS-terminating reverse proxy like Traefik/HAProxy).
-- **guacd TLS**: Set `guacd_cert_path` to connect to guacd over TLS. Works independently — you can use guacd TLS without serving HTTPS.
+- **Server HTTPS**: Provide both `cert_path` and `key_path` to serve HTTPS. Omit them to serve plain HTTP (useful behind a TLS-terminating reverse proxy like Traefik/HAProxy).
+- **guacd TLS**: Provide `guacd_cert_path` to connect to guacd over TLS. This is independent of server HTTPS.
 
-| Key | Required | Description |
-|-----|----------|-------------|
-| `cert_path` | No | HTTPS certificate path (PEM). Both `cert_path` and `key_path` are required for HTTPS. |
-| `key_path` | No | HTTPS private key path (PEM). Both `cert_path` and `key_path` are required for HTTPS. |
-| `guacd_cert_path` | No | Trust certificate for guacd TLS connection (independent of server HTTPS) |
+All fields are optional. The `[tls]` section can contain any combination.
 
-**Example: HTTP server + guacd TLS** (behind a reverse proxy):
+| Key | Description |
+|-----|-------------|
+| `cert_path` | HTTPS certificate path (PEM). Both `cert_path` and `key_path` must be set for HTTPS. |
+| `key_path` | HTTPS private key path (PEM). Both `cert_path` and `key_path` must be set for HTTPS. |
+| `guacd_cert_path` | Trust certificate for guacd TLS connection (independent of server HTTPS) |
+
+**Examples:**
+
+HTTPS + guacd TLS (self-hosted):
 ```toml
 [tls]
-guacd_cert_path = "/opt/rustguac/certs/guacd.pem"
+cert_path = "/opt/rustguac/tls/cert.pem"
+key_path = "/opt/rustguac/tls/key.pem"
+guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+```
+
+HTTP server + guacd TLS (behind a reverse proxy):
+```toml
+[tls]
+guacd_cert_path = "/opt/rustguac/tls/guacd-cert.pem"
+```
+
+HTTPS only (guacd on localhost, no TLS needed):
+```toml
+[tls]
+cert_path = "/opt/rustguac/tls/cert.pem"
+key_path = "/opt/rustguac/tls/key.pem"
 ```
 
 ## `[oidc]` section
