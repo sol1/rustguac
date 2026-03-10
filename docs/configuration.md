@@ -61,13 +61,22 @@ CIDR ranges controlling which hosts sessions can connect to. All default to loca
 
 ## `[tls]` section
 
-Enables HTTPS and optionally TLS to guacd. Omit the entire section for plain HTTP.
+Configures TLS for the web server and/or the guacd connection. These are independent concerns:
+
+- **Server HTTPS**: Set `cert_path` + `key_path` to serve HTTPS. If omitted, rustguac serves plain HTTP (useful behind a TLS-terminating reverse proxy like Traefik/HAProxy).
+- **guacd TLS**: Set `guacd_cert_path` to connect to guacd over TLS. Works independently — you can use guacd TLS without serving HTTPS.
 
 | Key | Required | Description |
 |-----|----------|-------------|
-| `cert_path` | Yes | HTTPS certificate path (PEM) |
-| `key_path` | Yes | HTTPS private key path (PEM) |
-| `guacd_cert_path` | No | Trust certificate for guacd TLS connection |
+| `cert_path` | No | HTTPS certificate path (PEM). Both `cert_path` and `key_path` are required for HTTPS. |
+| `key_path` | No | HTTPS private key path (PEM). Both `cert_path` and `key_path` are required for HTTPS. |
+| `guacd_cert_path` | No | Trust certificate for guacd TLS connection (independent of server HTTPS) |
+
+**Example: HTTP server + guacd TLS** (behind a reverse proxy):
+```toml
+[tls]
+guacd_cert_path = "/opt/rustguac/certs/guacd.pem"
+```
 
 ## `[oidc]` section
 

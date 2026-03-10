@@ -6,13 +6,15 @@ rustguac is designed with a security-first approach. This document covers all se
 
 ### Client-facing HTTPS
 
-When a `[tls]` section is present in the config, rustguac serves HTTPS using rustls (a modern, memory-safe TLS implementation). The install script generates a self-signed certificate by default.
+When `cert_path` and `key_path` are set in the `[tls]` section, rustguac serves HTTPS using rustls (a modern, memory-safe TLS implementation). The install script generates a self-signed certificate by default.
 
 ```toml
 [tls]
 cert_path = "/opt/rustguac/tls/cert.pem"
 key_path = "/opt/rustguac/tls/key.pem"
 ```
+
+If you're behind a TLS-terminating reverse proxy (e.g. Traefik, HAProxy, nginx), you can omit `cert_path`/`key_path` and rustguac will serve plain HTTP.
 
 Generate a certificate:
 
@@ -22,13 +24,20 @@ rustguac generate-cert --hostname your-hostname.example.com --out-dir /opt/rustg
 
 ### guacd TLS
 
-The connection between rustguac and guacd can also be encrypted with TLS. When `guacd_cert_path` is set, rustguac connects to guacd over TLS, trusting the specified certificate. The same self-signed cert can serve both purposes.
+The connection between rustguac and guacd can also be encrypted with TLS. When `guacd_cert_path` is set, rustguac connects to guacd over TLS, trusting the specified certificate. This is independent of server HTTPS — you can use guacd TLS without serving HTTPS yourself.
 
+**Full HTTPS + guacd TLS:**
 ```toml
 [tls]
 cert_path = "/opt/rustguac/tls/cert.pem"
 key_path = "/opt/rustguac/tls/key.pem"
 guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+```
+
+**HTTP server + guacd TLS** (behind a reverse proxy):
+```toml
+[tls]
+guacd_cert_path = "/opt/rustguac/tls/guacd-cert.pem"
 ```
 
 guacd must be started with matching TLS flags:

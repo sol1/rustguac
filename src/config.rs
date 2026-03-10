@@ -3,9 +3,12 @@ use std::path::PathBuf;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct TlsConfig {
-    pub cert_path: PathBuf,
-    pub key_path: PathBuf,
+    /// Path to server TLS certificate (PEM). Required for HTTPS serving.
+    pub cert_path: Option<PathBuf>,
+    /// Path to server TLS private key (PEM). Required for HTTPS serving.
+    pub key_path: Option<PathBuf>,
     /// Path to guacd's TLS certificate (PEM). When set, rustguac connects to guacd over TLS.
+    /// This is independent of server HTTPS — you can use guacd TLS without serving HTTPS.
     pub guacd_cert_path: Option<PathBuf>,
 }
 

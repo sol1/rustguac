@@ -1,6 +1,6 @@
 [package]
 name = "rustguac"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
 description = "Lightweight Rust replacement for Apache Guacamole client"
 
@@ -73,6 +73,7 @@ base64 = "0.22"
 
 # HTTP client (Vault API)
 reqwest = { version = "0.12", features = ["json", "rustls-tls-webpki-roots"], default-features = false }
+webpki-roots = "1"
 
 # SSH tunneling (jump host / bastion)
 russh = "0.57"

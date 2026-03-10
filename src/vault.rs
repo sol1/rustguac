@@ -753,21 +753,52 @@ impl VaultClient {
 
 /// Build a reqwest HTTP client from a VaultConfig (extracted for testability).
 fn build_vault_http_client(config: &VaultConfig) -> Result<reqwest::Client, VaultError> {
-    let mut builder =
-        reqwest::Client::builder().danger_accept_invalid_certs(config.tls_skip_verify);
+    let needs_custom_tls =
+        config.client_cert.is_some() || config.ca_cert.is_some() || config.tls_skip_verify;
+
+    if !needs_custom_tls {
+        // Simple path: no custom TLS config needed
+        return reqwest::Client::builder()
+            .build()
+            .map_err(|e| VaultError::Auth(format!("failed to create HTTP client: {}", e)));
+    }
+
+    // Ensure ring crypto provider is available (needed when building rustls ClientConfig
+    // directly rather than through reqwest's builder).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // Build a rustls ClientConfig directly — this bypasses reqwest::Identity::from_pem()
+    // which can fail with the rustls backend for valid PKCS#8 keys from OpenBao/Vault PKI.
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
     // Custom CA certificate for private/self-signed CAs
     if let Some(ref ca_path) = config.ca_cert {
-        let pem = std::fs::read(ca_path)
+        let ca_pem = std::fs::read(ca_path)
             .map_err(|e| VaultError::Auth(format!("failed to read CA cert {}: {}", ca_path, e)))?;
-        let cert = reqwest::Certificate::from_pem(&pem)
+        let ca_certs: Vec<_> = rustls_pemfile::certs(&mut ca_pem.as_slice())
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| VaultError::Auth(format!("failed to parse CA cert {}: {}", ca_path, e)))?;
-        builder = builder.add_root_certificate(cert);
-        tracing::info!("Vault TLS: using custom CA certificate from {}", ca_path);
+        if ca_certs.is_empty() {
+            return Err(VaultError::Auth(format!(
+                "no certificates found in CA file {}",
+                ca_path
+            )));
+        }
+        for cert in &ca_certs {
+            root_store.add(cert.clone()).map_err(|e| {
+                VaultError::Auth(format!("failed to add CA cert to root store: {}", e))
+            })?;
+        }
+        tracing::info!(
+            "Vault TLS: added {} CA certificate(s) from {}",
+            ca_certs.len(),
+            ca_path
+        );
     }
 
-    // Client certificate for mTLS
-    if let Some(ref cert_path) = config.client_cert {
+    let tls_config = if let Some(ref cert_path) = config.client_cert {
+        // mTLS: parse client cert chain + private key, build rustls config directly
         let key_path = config.client_key.as_deref().ok_or_else(|| {
             VaultError::Auth(
                 "client_cert is set but client_key is missing in [vault] config".into(),
@@ -779,20 +810,123 @@ fn build_vault_http_client(config: &VaultConfig) -> Result<reqwest::Client, Vaul
         let key_pem = std::fs::read(key_path).map_err(|e| {
             VaultError::Auth(format!("failed to read client key {}: {}", key_path, e))
         })?;
-        let mut identity_pem = cert_pem;
-        identity_pem.extend_from_slice(&key_pem);
-        let identity = reqwest::Identity::from_pem(&identity_pem)
-            .map_err(|e| VaultError::Auth(format!("failed to parse client identity: {}", e)))?;
-        builder = builder.identity(identity);
+
+        let certs: Vec<_> = rustls_pemfile::certs(&mut cert_pem.as_slice())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                VaultError::Auth(format!(
+                    "failed to parse certificates from {}: {}",
+                    cert_path, e
+                ))
+            })?;
+        if certs.is_empty() {
+            return Err(VaultError::Auth(format!(
+                "no certificates found in {}",
+                cert_path
+            )));
+        }
         tracing::info!(
-            "Vault TLS: using client certificate from {} (mTLS)",
+            "Vault TLS: parsed {} certificate(s) from {}",
+            certs.len(),
             cert_path
         );
-    }
 
-    builder
+        let private_key = rustls_pemfile::private_key(&mut key_pem.as_slice())
+            .map_err(|e| {
+                VaultError::Auth(format!(
+                    "failed to parse private key from {}: {} \
+                     (expected PEM: BEGIN PRIVATE KEY, BEGIN RSA PRIVATE KEY, or BEGIN EC PRIVATE KEY)",
+                    key_path, e
+                ))
+            })?
+            .ok_or_else(|| {
+                VaultError::Auth(format!(
+                    "no private key found in {} \
+                     (expected PEM: BEGIN PRIVATE KEY, BEGIN RSA PRIVATE KEY, or BEGIN EC PRIVATE KEY)",
+                    key_path
+                ))
+            })?;
+        tracing::info!(
+            "Vault TLS: parsed private key from {} ({} bytes DER)",
+            key_path,
+            private_key.secret_der().len()
+        );
+
+        let builder = if config.tls_skip_verify {
+            rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerifier))
+        } else {
+            rustls::ClientConfig::builder().with_root_certificates(root_store)
+        };
+
+        builder
+            .with_client_auth_cert(certs, private_key)
+            .map_err(|e| {
+                VaultError::Auth(format!(
+                    "failed to build mTLS config with {} + {}: {}",
+                    cert_path, key_path, e
+                ))
+            })?
+    } else {
+        // CA cert only (no mTLS) or tls_skip_verify
+        if config.tls_skip_verify {
+            rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerifier))
+                .with_no_client_auth()
+        } else {
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth()
+        }
+    };
+
+    reqwest::Client::builder()
+        .use_preconfigured_tls(tls_config)
         .build()
         .map_err(|e| VaultError::Auth(format!("failed to create HTTP client: {}", e)))
+}
+
+/// Certificate verifier that accepts all server certificates (for tls_skip_verify).
+#[derive(Debug)]
+struct NoVerifier;
+
+impl rustls::client::danger::ServerCertVerifier for NoVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
 }
 
 /// Validate that a folder or entry name is safe (alphanumeric, hyphens, underscores, dots — no path traversal).
@@ -1019,5 +1153,197 @@ mod tests {
     fn test_validate_name_rejects_empty_and_long() {
         assert!(validate_name("").is_err());
         assert!(validate_name(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn test_build_client_mtls_pkcs8_key() {
+        // This test reproduces issue #51: PKCS#8 keys from OpenBao should work.
+        let dir = std::env::temp_dir().join("rustguac-test-vault-mtls");
+        let _ = std::fs::create_dir_all(&dir);
+        let cert_path = dir.join("client.pem");
+        let key_path = dir.join("client-key.pem");
+
+        // Generate CA
+        let ca_key = dir.join("ca-key.pem");
+        let ca_cert_path = dir.join("ca.pem");
+        let status = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:prime256v1",
+                "-keyout",
+                ca_key.to_str().unwrap(),
+                "-out",
+                ca_cert_path.to_str().unwrap(),
+                "-days",
+                "1",
+                "-nodes",
+                "-subj",
+                "/CN=Test CA",
+            ])
+            .output()
+            .expect("openssl needed");
+        assert!(status.status.success(), "CA gen failed");
+
+        // Generate client cert signed by CA (PKCS#8 key — OpenBao default)
+        let csr_path = dir.join("client.csr");
+        let status = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-new",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:prime256v1",
+                "-keyout",
+                key_path.to_str().unwrap(),
+                "-out",
+                csr_path.to_str().unwrap(),
+                "-nodes",
+                "-subj",
+                "/CN=client",
+            ])
+            .output()
+            .expect("openssl needed");
+        assert!(status.status.success(), "CSR gen failed");
+
+        let status = std::process::Command::new("openssl")
+            .args([
+                "x509",
+                "-req",
+                "-in",
+                csr_path.to_str().unwrap(),
+                "-CA",
+                ca_cert_path.to_str().unwrap(),
+                "-CAkey",
+                ca_key.to_str().unwrap(),
+                "-CAcreateserial",
+                "-out",
+                cert_path.to_str().unwrap(),
+                "-days",
+                "1",
+            ])
+            .output()
+            .expect("openssl needed");
+        assert!(status.status.success(), "client cert gen failed");
+
+        // Verify the key is PKCS#8 (BEGIN PRIVATE KEY, not BEGIN EC PRIVATE KEY)
+        let key_pem = std::fs::read_to_string(&key_path).unwrap();
+        assert!(
+            key_pem.contains("BEGIN PRIVATE KEY"),
+            "expected PKCS#8 key, got: {}",
+            key_pem.lines().next().unwrap_or("")
+        );
+
+        let mut config = base_config();
+        config.ca_cert = Some(ca_cert_path.to_str().unwrap().into());
+        config.client_cert = Some(cert_path.to_str().unwrap().into());
+        config.client_key = Some(key_path.to_str().unwrap().into());
+        let result = build_vault_http_client(&config);
+        assert!(
+            result.is_ok(),
+            "mTLS with PKCS#8 key failed: {:?}",
+            result.err()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_build_client_mtls_fullchain_cert() {
+        // Test with fullchain cert (leaf + CA) — as OpenBao typically delivers.
+        let dir = std::env::temp_dir().join("rustguac-test-vault-mtls-chain");
+        let _ = std::fs::create_dir_all(&dir);
+        let key_path = dir.join("client-key.pem");
+        let fullchain_path = dir.join("client-fullchain.pem");
+
+        // Generate CA
+        let ca_key = dir.join("ca-key.pem");
+        let ca_cert_path = dir.join("ca.pem");
+        let status = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:prime256v1",
+                "-keyout",
+                ca_key.to_str().unwrap(),
+                "-out",
+                ca_cert_path.to_str().unwrap(),
+                "-days",
+                "1",
+                "-nodes",
+                "-subj",
+                "/CN=Test CA",
+            ])
+            .output()
+            .expect("openssl needed");
+        assert!(status.status.success());
+
+        // Generate client cert
+        let csr_path = dir.join("client.csr");
+        let leaf_path = dir.join("client-leaf.pem");
+        let status = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-new",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:prime256v1",
+                "-keyout",
+                key_path.to_str().unwrap(),
+                "-out",
+                csr_path.to_str().unwrap(),
+                "-nodes",
+                "-subj",
+                "/CN=client",
+            ])
+            .output()
+            .expect("openssl needed");
+        assert!(status.status.success());
+
+        let status = std::process::Command::new("openssl")
+            .args([
+                "x509",
+                "-req",
+                "-in",
+                csr_path.to_str().unwrap(),
+                "-CA",
+                ca_cert_path.to_str().unwrap(),
+                "-CAkey",
+                ca_key.to_str().unwrap(),
+                "-CAcreateserial",
+                "-out",
+                leaf_path.to_str().unwrap(),
+                "-days",
+                "1",
+            ])
+            .output()
+            .expect("openssl needed");
+        assert!(status.status.success());
+
+        // Build fullchain: leaf + CA (as OpenBao delivers)
+        let leaf = std::fs::read_to_string(&leaf_path).unwrap();
+        let ca = std::fs::read_to_string(&ca_cert_path).unwrap();
+        std::fs::write(&fullchain_path, format!("{}{}", leaf, ca)).unwrap();
+
+        let mut config = base_config();
+        config.ca_cert = Some(ca_cert_path.to_str().unwrap().into());
+        config.client_cert = Some(fullchain_path.to_str().unwrap().into());
+        config.client_key = Some(key_path.to_str().unwrap().into());
+        let result = build_vault_http_client(&config);
+        assert!(
+            result.is_ok(),
+            "mTLS with fullchain cert failed: {:?}",
+            result.err()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

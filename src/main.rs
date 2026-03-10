@@ -821,7 +821,18 @@ async fn run_server(config: Config, database: Db) {
     }
 
     // Add shared layers
-    let tls_enabled = TlsEnabled(tls_config.is_some());
+    // Server HTTPS requires both cert_path and key_path in [tls]
+    let server_tls = tls_config.as_ref().and_then(|tls| {
+        match (&tls.cert_path, &tls.key_path) {
+            (Some(cert), Some(key)) => Some((cert.clone(), key.clone())),
+            (Some(_), None) | (None, Some(_)) => {
+                tracing::warn!("[tls] has only one of cert_path/key_path — both are required for HTTPS serving; starting HTTP");
+                None
+            }
+            (None, None) => None,
+        }
+    });
+    let tls_enabled = TlsEnabled(server_tls.is_some());
     app = app
         .layer(DefaultBodyLimit::max(64 * 1024)) // 64 KB max request body
         .layer(middleware::from_fn(security_headers))
@@ -832,7 +843,7 @@ async fn run_server(config: Config, database: Db) {
         .layer(Extension(trusted_proxies))
         .fallback_service(ServeDir::new(&static_path));
 
-    let scheme = if tls_config.is_some() {
+    let scheme = if server_tls.is_some() {
         "https"
     } else {
         "http"
@@ -840,10 +851,10 @@ async fn run_server(config: Config, database: Db) {
     tracing::info!("rustguac starting on {}://{}", scheme, listen_addr);
     tracing::info!("Static files served from {:?}", static_path);
 
-    if let Some(ref tls) = tls_config {
+    if let Some((cert_path, key_path)) = server_tls {
         use axum_server::tls_rustls::RustlsConfig;
 
-        let rustls_config = RustlsConfig::from_pem_file(&tls.cert_path, &tls.key_path)
+        let rustls_config = RustlsConfig::from_pem_file(&cert_path, &key_path)
             .await
             .expect("Failed to load TLS certificates");
 
@@ -880,7 +891,8 @@ async fn run_server(config: Config, database: Db) {
     }
 }
 
-/// Build a TLS connector for the guacd connection, if `tls.guacd_cert_path` is configured.
+/// Build a TLS connector for the guacd connection, if `[tls] guacd_cert_path` is configured.
+/// This is independent of server HTTPS — you can use guacd TLS without cert_path/key_path.
 fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {
     let cert_path = config.tls.as_ref()?.guacd_cert_path.as_ref()?;
 

@@ -3015,7 +3015,7 @@ dependencies = [
 
 [[package]]
 name = "rustguac"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "aes",
  "axum",
@@ -3059,6 +3059,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "webpki-roots",
 ]
 
 [[package]]
