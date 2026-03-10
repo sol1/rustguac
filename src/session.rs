@@ -1203,6 +1203,115 @@ pub enum SessionError {
     BrowserSpawn(String),
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_allowed_network_ipv4_match() {
+        assert!(check_allowed_network("127.0.0.1", 22, &["127.0.0.0/8".into()]).is_ok());
+        assert!(check_allowed_network("10.1.2.3", 80, &["10.0.0.0/8".into()]).is_ok());
+    }
+
+    #[test]
+    fn test_check_allowed_network_ipv4_denied() {
+        let err = check_allowed_network("8.8.8.8", 22, &["127.0.0.0/8".into()]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_check_allowed_network_empty_allowlist() {
+        let err = check_allowed_network("127.0.0.1", 22, &[]);
+        assert!(err.is_err());
+        let msg = format!("{}", err.unwrap_err());
+        assert!(msg.contains("no valid CIDR"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_check_allowed_network_multiple_cidrs() {
+        let cidrs = vec!["10.0.0.0/8".into(), "192.168.0.0/16".into()];
+        assert!(check_allowed_network("10.1.1.1", 22, &cidrs).is_ok());
+        assert!(check_allowed_network("192.168.1.1", 22, &cidrs).is_ok());
+        assert!(check_allowed_network("172.16.0.1", 22, &cidrs).is_err());
+    }
+
+    #[test]
+    fn test_check_allowed_network_localhost_resolves() {
+        // "localhost" should resolve to 127.0.0.1 or ::1
+        let cidrs = vec!["127.0.0.0/8".into(), "::1/128".into()];
+        assert!(check_allowed_network("localhost", 80, &cidrs).is_ok());
+    }
+
+    #[test]
+    fn test_parse_autofill_none() {
+        assert!(parse_autofill_credentials(None, None, None).is_none());
+    }
+
+    #[test]
+    fn test_parse_autofill_empty_string() {
+        assert!(parse_autofill_credentials(Some(""), None, None).is_none());
+    }
+
+    #[test]
+    fn test_parse_autofill_invalid_json() {
+        assert!(parse_autofill_credentials(Some("not json"), None, None).is_none());
+    }
+
+    #[test]
+    fn test_parse_autofill_empty_array() {
+        assert!(parse_autofill_credentials(Some("[]"), None, None).is_none());
+    }
+
+    #[test]
+    fn test_parse_autofill_basic() {
+        let json = r#"[{"url":"https://example.com","username":"alice","password":"secret"}]"#;
+        let creds = parse_autofill_credentials(Some(json), None, None).unwrap();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].0, "https://example.com");
+        assert_eq!(creds[0].1, "alice");
+        assert_eq!(creds[0].2, "secret");
+    }
+
+    #[test]
+    fn test_parse_autofill_placeholder_substitution() {
+        let json = r#"[{"url":"https://ex.com","username":"$USERNAME","password":"$PASSWORD"}]"#;
+        let creds = parse_autofill_credentials(Some(json), Some("bob"), Some("pass123")).unwrap();
+        assert_eq!(creds[0].1, "bob");
+        assert_eq!(creds[0].2, "pass123");
+    }
+
+    #[test]
+    fn test_parse_autofill_placeholder_no_credentials() {
+        // Placeholders with no username/password should substitute empty strings
+        let json = r#"[{"url":"https://ex.com","username":"$USERNAME","password":"$PASSWORD"}]"#;
+        let creds = parse_autofill_credentials(Some(json), None, None).unwrap();
+        assert_eq!(creds[0].1, "");
+        assert_eq!(creds[0].2, "");
+    }
+
+    #[test]
+    fn test_parse_autofill_multiple_entries() {
+        let json = r#"[
+            {"url":"https://app.com","username":"$USERNAME","password":"$PASSWORD"},
+            {"url":"https://idp.com","username":"$USERNAME","password":"$PASSWORD"}
+        ]"#;
+        let creds = parse_autofill_credentials(Some(json), Some("alice"), Some("secret")).unwrap();
+        assert_eq!(creds.len(), 2);
+        assert_eq!(creds[0].0, "https://app.com");
+        assert_eq!(creds[1].0, "https://idp.com");
+    }
+
+    #[test]
+    fn test_parse_autofill_missing_fields_skipped() {
+        // Entries missing required fields are silently skipped
+        let json =
+            r#"[{"url":"https://ex.com"},{"url":"https://ok.com","username":"a","password":"b"}]"#;
+        let creds = parse_autofill_credentials(Some(json), None, None).unwrap();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].0, "https://ok.com");
+    }
+}
+
 impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

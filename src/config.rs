@@ -51,6 +51,13 @@ pub struct VaultConfig {
     /// Only use this for development with self-signed certificates.
     #[serde(default)]
     pub tls_skip_verify: bool,
+    /// Path to a custom CA certificate (PEM) for verifying the Vault server.
+    /// Use this when Vault/OpenBao uses a private or self-signed CA.
+    pub ca_cert: Option<String>,
+    /// Path to a client certificate (PEM) for mTLS authentication to Vault.
+    pub client_cert: Option<String>,
+    /// Path to the client private key (PEM) for mTLS authentication to Vault.
+    pub client_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -881,5 +888,89 @@ impl Config {
                 ..RecordingConfig::default()
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_builtin_presets_exist() {
+        let presets = builtin_presets();
+        assert!(presets.len() >= 6, "expected at least 6 presets");
+        let names: Vec<&str> = presets.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"dark"));
+        assert!(names.contains(&"light"));
+        assert!(names.contains(&"high-contrast"));
+        assert!(names.contains(&"terminal"));
+        assert!(names.contains(&"nord"));
+        assert!(names.contains(&"corporate"));
+    }
+
+    #[test]
+    fn test_builtin_presets_no_empty_colors() {
+        for (name, colors) in builtin_presets() {
+            assert!(!colors.primary.is_empty(), "{} has empty primary", name);
+            assert!(!colors.bg.is_empty(), "{} has empty bg", name);
+            assert!(!colors.text.is_empty(), "{} has empty text", name);
+        }
+    }
+
+    #[test]
+    fn test_theme_resolve_default_preset() {
+        let cfg: ThemeConfig = toml::from_str("").unwrap();
+        let (name, colors) = cfg.resolve();
+        assert_eq!(name, "dark");
+        assert!(!colors.primary.is_empty());
+    }
+
+    #[test]
+    fn test_theme_resolve_named_preset() {
+        let cfg: ThemeConfig = toml::from_str(r#"preset = "light""#).unwrap();
+        let (name, _) = cfg.resolve();
+        assert_eq!(name, "light");
+    }
+
+    #[test]
+    fn test_theme_resolve_override() {
+        let cfg: ThemeConfig =
+            toml::from_str("preset = \"dark\"\nprimary_color = \"#ff0000\"").unwrap();
+        let (_, colors) = cfg.resolve();
+        assert_eq!(colors.primary, "#ff0000");
+    }
+
+    #[test]
+    fn test_theme_resolve_unknown_preset_falls_back() {
+        let cfg: ThemeConfig = toml::from_str(r#"preset = "nonexistent""#).unwrap();
+        let (name, colors) = cfg.resolve();
+        assert_eq!(name, "nonexistent");
+        // Falls back to first preset (dark)
+        let dark = &builtin_presets()[0].1;
+        assert_eq!(colors.primary, dark.primary);
+    }
+
+    #[test]
+    fn test_config_defaults() {
+        assert_eq!(default_listen_addr(), "127.0.0.1:8089");
+        assert_eq!(default_guacd_addr(), "127.0.0.1:4822");
+        assert_eq!(default_display_range_start(), 100);
+        assert_eq!(default_display_range_end(), 199);
+        assert_eq!(default_cdp_port_range_start(), 9200);
+        assert_eq!(default_cdp_port_range_end(), 9299);
+    }
+
+    #[test]
+    fn test_vault_config_deserialize_minimal() {
+        let toml_str = r#"
+            addr = "https://vault:8200"
+            role_id = "test"
+        "#;
+        let config: VaultConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.addr, "https://vault:8200");
+        assert_eq!(config.mount, "secret");
+        assert_eq!(config.base_path, "rustguac");
+        assert!(!config.tls_skip_verify);
+        assert!(config.ca_cert.is_none());
     }
 }

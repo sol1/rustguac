@@ -2500,3 +2500,63 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_html_escape_special_chars() {
+        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+        assert_eq!(html_escape("a&b"), "a&amp;b");
+        assert_eq!(html_escape(r#"x"y"#), "x&quot;y");
+        assert_eq!(html_escape("it's"), "it&#x27;s");
+    }
+
+    #[test]
+    fn test_html_escape_passthrough() {
+        assert_eq!(html_escape("hello world"), "hello world");
+        assert_eq!(html_escape(""), "");
+    }
+
+    #[test]
+    fn test_html_escape_multiple() {
+        assert_eq!(
+            html_escape(r#"<a href="x">&</a>"#),
+            "&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;"
+        );
+    }
+
+    #[test]
+    fn test_safe_recording_name_valid() {
+        assert!(is_safe_recording_name(
+            "session-abc123.guac",
+            Path::new("/tmp")
+        ));
+        assert!(is_safe_recording_name(
+            "2024-01-01_recording.guac",
+            Path::new("/recordings")
+        ));
+    }
+
+    #[test]
+    fn test_safe_recording_name_no_guac_extension() {
+        assert!(!is_safe_recording_name("session.mp4", Path::new("/tmp")));
+        assert!(!is_safe_recording_name("session", Path::new("/tmp")));
+    }
+
+    #[test]
+    fn test_safe_recording_name_path_traversal() {
+        assert!(!is_safe_recording_name(
+            "../etc/passwd.guac",
+            Path::new("/tmp")
+        ));
+        assert!(!is_safe_recording_name("foo/bar.guac", Path::new("/tmp")));
+        assert!(!is_safe_recording_name("foo\\bar.guac", Path::new("/tmp")));
+        assert!(!is_safe_recording_name(
+            "..%2F..%2Fetc.guac",
+            Path::new("/tmp")
+        ));
+    }
+}

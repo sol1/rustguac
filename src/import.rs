@@ -128,14 +128,20 @@ pub async fn cmd_import_guacamole(
     );
 
     if dry_run {
-        println!("\n[DRY RUN] Would import to folder \"{}\" (scope: {}):\n", folder, scope);
+        println!(
+            "\n[DRY RUN] Would import to folder \"{}\" (scope: {}):\n",
+            folder, scope
+        );
         for (name, entry) in &entries {
             println!(
                 "  {} ({}) → {}:{}",
                 name,
                 entry.session_type,
                 entry.hostname.as_deref().unwrap_or("?"),
-                entry.port.map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
+                entry
+                    .port
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "?".into()),
             );
             if let Some(ref dn) = entry.display_name {
                 if dn != name {
@@ -177,7 +183,10 @@ pub async fn cmd_import_guacamole(
         allowed_groups: vec![],
         description: "Imported from Guacamole".to_string(),
     };
-    if let Err(e) = client.put_folder_config(scope, folder, &folder_config).await {
+    if let Err(e) = client
+        .put_folder_config(scope, folder, &folder_config)
+        .await
+    {
         eprintln!("Error creating folder \"{}\": {}", folder, e);
         std::process::exit(1);
     }
@@ -268,7 +277,10 @@ fn parse_parameters(sql: &str) -> HashMap<i64, Vec<(String, String)>> {
                 };
                 let param_name = unescape_sql(&vals[1]);
                 let param_value = unescape_sql(&vals[2]);
-                results.entry(id).or_default().push((param_name, param_value));
+                results
+                    .entry(id)
+                    .or_default()
+                    .push((param_name, param_value));
             }
         }
     }
@@ -569,7 +581,8 @@ mod tests {
 
     #[test]
     fn test_extract_tuples() {
-        let line = "INSERT INTO `guacamole_connection` VALUES (1,'web',NULL,'ssh'),(2,'db',1,'rdp');";
+        let line =
+            "INSERT INTO `guacamole_connection` VALUES (1,'web',NULL,'ssh'),(2,'db',1,'rdp');";
         let tuples = extract_tuples(line);
         assert_eq!(tuples.len(), 2);
         assert_eq!(tuples[0], "1,'web',NULL,'ssh'");
@@ -675,9 +688,21 @@ mod tests {
     #[test]
     fn test_group_path_nesting() {
         let groups = vec![
-            Group { id: 1, parent_id: None, name: "Production".into() },
-            Group { id: 2, parent_id: Some(1), name: "DMZ".into() },
-            Group { id: 3, parent_id: Some(2), name: "Web".into() },
+            Group {
+                id: 1,
+                parent_id: None,
+                name: "Production".into(),
+            },
+            Group {
+                id: 2,
+                parent_id: Some(1),
+                name: "DMZ".into(),
+            },
+            Group {
+                id: 3,
+                parent_id: Some(2),
+                name: "Web".into(),
+            },
         ];
         let paths = build_group_paths(&groups);
         assert_eq!(paths[&1], "Production");

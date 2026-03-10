@@ -919,3 +919,83 @@ pub fn resolve_role_from_groups(db: &Db, groups: &[String]) -> rusqlite::Result<
 
     Ok(best_role)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hash_key_sha256() {
+        let hash = hash_key("test-api-key");
+        assert_eq!(hash.len(), 64); // SHA-256 = 64 hex chars
+                                    // Deterministic
+        assert_eq!(hash, hash_key("test-api-key"));
+    }
+
+    #[test]
+    fn test_hash_key_different_inputs() {
+        assert_ne!(hash_key("key-a"), hash_key("key-b"));
+    }
+
+    #[test]
+    fn test_generate_key_format() {
+        let key = generate_key();
+        assert_eq!(key.len(), 64); // 32 bytes = 64 hex chars
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_generate_key_unique() {
+        let a = generate_key();
+        let b = generate_key();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_user_groups_vec() {
+        let user = User {
+            id: 1,
+            oidc_subject: None,
+            created_at: "2025-01-01".into(),
+            last_login_at: None,
+            email: "test@test.com".into(),
+            name: "test".into(),
+            role: "viewer".into(),
+            disabled: false,
+            oidc_groups: "admins,developers,ops".into(),
+        };
+        assert_eq!(user.groups_vec(), vec!["admins", "developers", "ops"]);
+    }
+
+    #[test]
+    fn test_user_groups_vec_empty() {
+        let user = User {
+            id: 1,
+            oidc_subject: None,
+            created_at: "2025-01-01".into(),
+            last_login_at: None,
+            email: "test@test.com".into(),
+            name: "test".into(),
+            role: "viewer".into(),
+            disabled: false,
+            oidc_groups: String::new(),
+        };
+        assert!(user.groups_vec().is_empty());
+    }
+
+    #[test]
+    fn test_user_groups_vec_single() {
+        let user = User {
+            id: 1,
+            oidc_subject: None,
+            created_at: "2025-01-01".into(),
+            last_login_at: None,
+            email: "test@test.com".into(),
+            name: "test".into(),
+            role: "viewer".into(),
+            disabled: false,
+            oidc_groups: "solo-group".into(),
+        };
+        assert_eq!(user.groups_vec(), vec!["solo-group"]);
+    }
+}

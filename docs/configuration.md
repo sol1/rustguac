@@ -95,6 +95,10 @@ Enables the Vault-backed address book. Requires `VAULT_SECRET_ID` environment va
 | `base_path` | `rustguac` | Base path under the mount |
 | `namespace` | — | Vault Enterprise / OpenBao namespace |
 | `instance_name` | — | Instance name for instance-scoped entries |
+| `tls_skip_verify` | `false` | Skip TLS certificate verification (dev only) |
+| `ca_cert` | — | Path to custom CA certificate (PEM) for verifying the Vault server |
+| `client_cert` | — | Path to client certificate (PEM) for mTLS |
+| `client_key` | — | Path to client private key (PEM) for mTLS (required if `client_cert` is set) |
 
 ## `[drive]` section
 

@@ -394,3 +394,104 @@ pub async fn optional_auth(
     // No credentials — pass through without identity
     next.run(request).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_role_level_hierarchy() {
+        assert_eq!(role_level("admin"), 4);
+        assert_eq!(role_level("poweruser"), 3);
+        assert_eq!(role_level("operator"), 2);
+        assert_eq!(role_level("viewer"), 1);
+        assert_eq!(role_level("unknown"), 0);
+        assert_eq!(role_level(""), 0);
+    }
+
+    #[test]
+    fn test_role_level_ordering() {
+        assert!(role_level("admin") > role_level("poweruser"));
+        assert!(role_level("poweruser") > role_level("operator"));
+        assert!(role_level("operator") > role_level("viewer"));
+        assert!(role_level("viewer") > role_level("garbage"));
+    }
+
+    #[test]
+    fn test_compute_effective_role_no_cap() {
+        assert_eq!(compute_effective_role("admin", &None), "admin");
+        assert_eq!(compute_effective_role("viewer", &None), "viewer");
+    }
+
+    #[test]
+    fn test_compute_effective_role_capped() {
+        let cap = Some("operator".into());
+        assert_eq!(compute_effective_role("admin", &cap), "operator");
+        assert_eq!(compute_effective_role("poweruser", &cap), "operator");
+    }
+
+    #[test]
+    fn test_compute_effective_role_cap_higher_than_user() {
+        let cap = Some("admin".into());
+        assert_eq!(compute_effective_role("viewer", &cap), "viewer");
+        assert_eq!(compute_effective_role("operator", &cap), "operator");
+    }
+
+    #[test]
+    fn test_compute_effective_role_same_level() {
+        let cap = Some("operator".into());
+        assert_eq!(compute_effective_role("operator", &cap), "operator");
+    }
+
+    #[test]
+    fn test_client_ip_no_proxies() {
+        let headers = HeaderMap::new();
+        let ip = client_ip(&headers, "10.0.0.1".parse().unwrap(), &[]);
+        assert_eq!(ip.to_string(), "10.0.0.1");
+    }
+
+    #[test]
+    fn test_client_ip_xff_trusted_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.50, 10.0.0.1".parse().unwrap());
+        let proxies = vec!["10.0.0.0/8".into()];
+        let ip = client_ip(&headers, "10.0.0.1".parse().unwrap(), &proxies);
+        assert_eq!(ip.to_string(), "203.0.113.50");
+    }
+
+    #[test]
+    fn test_client_ip_xff_untrusted_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.50".parse().unwrap());
+        let proxies = vec!["10.0.0.0/8".into()];
+        // Socket is NOT in trusted range
+        let ip = client_ip(&headers, "192.168.1.1".parse().unwrap(), &proxies);
+        assert_eq!(ip.to_string(), "192.168.1.1");
+    }
+
+    #[test]
+    fn test_client_ip_xff_invalid_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
+        let proxies = vec!["10.0.0.0/8".into()];
+        let ip = client_ip(&headers, "10.0.0.1".parse().unwrap(), &proxies);
+        // Falls back to socket addr when XFF can't be parsed
+        assert_eq!(ip.to_string(), "10.0.0.1");
+    }
+
+    #[test]
+    fn test_has_role() {
+        let admin = AuthIdentity::ApiKey("admin".into());
+        assert!(admin.has_role("viewer"));
+        assert!(admin.has_role("admin"));
+
+        let viewer = AuthIdentity::User {
+            email: "test@test.com".into(),
+            role: "viewer".into(),
+            groups: vec![],
+        };
+        assert!(viewer.has_role("viewer"));
+        assert!(!viewer.has_role("operator"));
+        assert!(!viewer.has_role("admin"));
+    }
+}

@@ -5,6 +5,7 @@ mod config;
 mod db;
 mod drive;
 mod guacd;
+mod import;
 mod oidc;
 mod protocol;
 mod recording;

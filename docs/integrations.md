@@ -174,6 +174,35 @@ echo 'VAULT_SECRET_ID=<secret_id>' > /opt/rustguac/env
 chmod 600 /opt/rustguac/env
 ```
 
+### mTLS (client certificate authentication)
+
+If your Vault or OpenBao server requires mutual TLS (client certificates), add the certificate paths to the `[vault]` section:
+
+```toml
+[vault]
+addr = "https://openbao.example.com:8200"
+role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+ca_cert = "/opt/rustguac/certs/vault-ca.pem"
+client_cert = "/opt/rustguac/certs/vault-client.pem"
+client_key = "/opt/rustguac/certs/vault-client-key.pem"
+```
+
+| Field | Description |
+|-------|-------------|
+| `ca_cert` | Custom CA certificate (PEM) for verifying the Vault server. Use this when Vault uses a private or self-signed CA. |
+| `client_cert` | Client certificate (PEM) presented to Vault for mTLS. |
+| `client_key` | Client private key (PEM). Required when `client_cert` is set. |
+
+Ensure the certificate files are readable by the `rustguac` system user and have restrictive permissions:
+
+```bash
+mkdir -p /opt/rustguac/certs
+cp ca.pem client.pem client-key.pem /opt/rustguac/certs/
+chown rustguac:rustguac /opt/rustguac/certs/*
+chmod 600 /opt/rustguac/certs/client-key.pem
+chmod 644 /opt/rustguac/certs/ca.pem /opt/rustguac/certs/client.pem
+```
+
 ### KV v2 path structure
 
 | Path | Description |

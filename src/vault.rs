@@ -297,10 +297,7 @@ impl VaultClient {
                 "Vault TLS certificate verification is DISABLED (tls_skip_verify = true)"
             );
         }
-        let http = reqwest::Client::builder()
-            .danger_accept_invalid_certs(config.tls_skip_verify)
-            .build()
-            .map_err(|e| VaultError::Auth(format!("failed to create HTTP client: {}", e)))?;
+        let http = build_vault_http_client(config)?;
 
         let client = Self {
             http,
@@ -754,6 +751,50 @@ impl VaultClient {
     }
 }
 
+/// Build a reqwest HTTP client from a VaultConfig (extracted for testability).
+fn build_vault_http_client(config: &VaultConfig) -> Result<reqwest::Client, VaultError> {
+    let mut builder =
+        reqwest::Client::builder().danger_accept_invalid_certs(config.tls_skip_verify);
+
+    // Custom CA certificate for private/self-signed CAs
+    if let Some(ref ca_path) = config.ca_cert {
+        let pem = std::fs::read(ca_path)
+            .map_err(|e| VaultError::Auth(format!("failed to read CA cert {}: {}", ca_path, e)))?;
+        let cert = reqwest::Certificate::from_pem(&pem)
+            .map_err(|e| VaultError::Auth(format!("failed to parse CA cert {}: {}", ca_path, e)))?;
+        builder = builder.add_root_certificate(cert);
+        tracing::info!("Vault TLS: using custom CA certificate from {}", ca_path);
+    }
+
+    // Client certificate for mTLS
+    if let Some(ref cert_path) = config.client_cert {
+        let key_path = config.client_key.as_deref().ok_or_else(|| {
+            VaultError::Auth(
+                "client_cert is set but client_key is missing in [vault] config".into(),
+            )
+        })?;
+        let cert_pem = std::fs::read(cert_path).map_err(|e| {
+            VaultError::Auth(format!("failed to read client cert {}: {}", cert_path, e))
+        })?;
+        let key_pem = std::fs::read(key_path).map_err(|e| {
+            VaultError::Auth(format!("failed to read client key {}: {}", key_path, e))
+        })?;
+        let mut identity_pem = cert_pem;
+        identity_pem.extend_from_slice(&key_pem);
+        let identity = reqwest::Identity::from_pem(&identity_pem)
+            .map_err(|e| VaultError::Auth(format!("failed to parse client identity: {}", e)))?;
+        builder = builder.identity(identity);
+        tracing::info!(
+            "Vault TLS: using client certificate from {} (mTLS)",
+            cert_path
+        );
+    }
+
+    builder
+        .build()
+        .map_err(|e| VaultError::Auth(format!("failed to create HTTP client: {}", e)))
+}
+
 /// Validate that a folder or entry name is safe (alphanumeric, hyphens, underscores, dots — no path traversal).
 fn validate_name(name: &str) -> Result<(), VaultError> {
     if name.is_empty() || name.len() > 64 {
@@ -776,4 +817,207 @@ fn validate_name(name: &str) -> Result<(), VaultError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_config() -> VaultConfig {
+        VaultConfig {
+            addr: "https://vault.example.com:8200".into(),
+            mount: "secret".into(),
+            base_path: "rustguac".into(),
+            role_id: "test-role-id".into(),
+            namespace: None,
+            instance_name: None,
+            tls_skip_verify: false,
+            ca_cert: None,
+            client_cert: None,
+            client_key: None,
+        }
+    }
+
+    #[test]
+    fn test_build_client_defaults() {
+        let config = base_config();
+        let client = build_vault_http_client(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_build_client_tls_skip_verify() {
+        let mut config = base_config();
+        config.tls_skip_verify = true;
+        let client = build_vault_http_client(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_build_client_ca_cert_missing_file() {
+        let mut config = base_config();
+        config.ca_cert = Some("/nonexistent/ca.pem".into());
+        let err = build_vault_http_client(&config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("failed to read CA cert"), "got: {}", msg);
+        assert!(msg.contains("/nonexistent/ca.pem"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_build_client_ca_cert_invalid_pem() {
+        // reqwest::Certificate::from_pem rejects PEM with valid headers but
+        // garbage DER content.
+        let dir = std::env::temp_dir().join("rustguac-test-vault-tls");
+        let _ = std::fs::create_dir_all(&dir);
+        let ca_path = dir.join("bad-ca.pem");
+        let bad_pem =
+            "-----BEGIN CERTIFICATE-----\nDEFINITELYnotvalid!!!\n-----END CERTIFICATE-----\n";
+        std::fs::write(&ca_path, bad_pem.as_bytes()).unwrap();
+
+        let mut config = base_config();
+        config.ca_cert = Some(ca_path.to_str().unwrap().into());
+        let result = build_vault_http_client(&config);
+        assert!(result.is_err(), "expected error for invalid PEM");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_build_client_client_cert_without_key() {
+        let dir = std::env::temp_dir().join("rustguac-test-vault-tls-nokey");
+        let _ = std::fs::create_dir_all(&dir);
+        let cert_path = dir.join("client.pem");
+        std::fs::write(&cert_path, b"placeholder").unwrap();
+
+        let mut config = base_config();
+        config.client_cert = Some(cert_path.to_str().unwrap().into());
+        // client_key intentionally None
+        let err = build_vault_http_client(&config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("client_key is missing"), "got: {}", msg);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_build_client_client_cert_missing_file() {
+        let mut config = base_config();
+        config.client_cert = Some("/nonexistent/client.pem".into());
+        config.client_key = Some("/nonexistent/client-key.pem".into());
+        let err = build_vault_http_client(&config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("failed to read client cert"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_build_client_client_key_missing_file() {
+        let dir = std::env::temp_dir().join("rustguac-test-vault-tls-keyfile");
+        let _ = std::fs::create_dir_all(&dir);
+        let cert_path = dir.join("client.pem");
+        std::fs::write(&cert_path, b"placeholder cert").unwrap();
+
+        let mut config = base_config();
+        config.client_cert = Some(cert_path.to_str().unwrap().into());
+        config.client_key = Some("/nonexistent/client-key.pem".into());
+        let err = build_vault_http_client(&config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("failed to read client key"), "got: {}", msg);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_build_client_valid_ca_cert() {
+        let dir = std::env::temp_dir().join("rustguac-test-vault-tls-valid");
+        let _ = std::fs::create_dir_all(&dir);
+        let ca_path = dir.join("ca.pem");
+
+        // Generate a real self-signed cert via openssl
+        let output = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:prime256v1",
+                "-keyout",
+                "/dev/null",
+                "-out",
+                ca_path.to_str().unwrap(),
+                "-days",
+                "1",
+                "-nodes",
+                "-subj",
+                "/CN=Test CA",
+            ])
+            .output()
+            .expect("openssl must be available for this test");
+        assert!(output.status.success(), "openssl failed: {:?}", output);
+
+        let mut config = base_config();
+        config.ca_cert = Some(ca_path.to_str().unwrap().into());
+        let result = build_vault_http_client(&config);
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result.err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_config_deserialize_tls_fields() {
+        let toml_str = r#"
+            addr = "https://vault.example.com:8200"
+            role_id = "test-role"
+            ca_cert = "/opt/rustguac/certs/ca.pem"
+            client_cert = "/opt/rustguac/certs/client.pem"
+            client_key = "/opt/rustguac/certs/client-key.pem"
+            tls_skip_verify = true
+        "#;
+        let config: VaultConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.ca_cert.as_deref(),
+            Some("/opt/rustguac/certs/ca.pem")
+        );
+        assert_eq!(
+            config.client_cert.as_deref(),
+            Some("/opt/rustguac/certs/client.pem")
+        );
+        assert_eq!(
+            config.client_key.as_deref(),
+            Some("/opt/rustguac/certs/client-key.pem")
+        );
+        assert!(config.tls_skip_verify);
+    }
+
+    #[test]
+    fn test_config_deserialize_no_tls_fields() {
+        let toml_str = r#"
+            addr = "https://vault.example.com:8200"
+            role_id = "test-role"
+        "#;
+        let config: VaultConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.ca_cert.is_none());
+        assert!(config.client_cert.is_none());
+        assert!(config.client_key.is_none());
+        assert!(!config.tls_skip_verify);
+    }
+
+    #[test]
+    fn test_validate_name_ok() {
+        assert!(validate_name("my-entry.v2").is_ok());
+        assert!(validate_name("a").is_ok());
+    }
+
+    #[test]
+    fn test_validate_name_rejects_traversal() {
+        assert!(validate_name("../etc").is_err());
+        assert!(validate_name("foo/bar").is_err());
+        assert!(validate_name(".config").is_err());
+    }
+
+    #[test]
+    fn test_validate_name_rejects_empty_and_long() {
+        assert!(validate_name("").is_err());
+        assert!(validate_name(&"a".repeat(65)).is_err());
+    }
 }

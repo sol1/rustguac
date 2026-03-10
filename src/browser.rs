@@ -747,3 +747,113 @@ impl std::fmt::Display for BrowserError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encrypt_chromium_password_v10_prefix() {
+        let blob = encrypt_chromium_password("secret").unwrap();
+        assert_eq!(&blob[..3], b"v10");
+    }
+
+    #[test]
+    fn test_encrypt_chromium_password_deterministic() {
+        let a = encrypt_chromium_password("test123").unwrap();
+        let b = encrypt_chromium_password("test123").unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_encrypt_chromium_password_different_inputs() {
+        let a = encrypt_chromium_password("password1").unwrap();
+        let b = encrypt_chromium_password("password2").unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_encrypt_chromium_password_block_aligned() {
+        // AES-128-CBC with PKCS7: output is always multiple of 16 bytes
+        let blob = encrypt_chromium_password("short").unwrap();
+        let ciphertext_len = blob.len() - 3; // minus "v10" prefix
+        assert_eq!(ciphertext_len % 16, 0);
+    }
+
+    #[test]
+    fn test_encrypt_chromium_password_empty() {
+        let blob = encrypt_chromium_password("").unwrap();
+        assert_eq!(&blob[..3], b"v10");
+        // Empty plaintext + PKCS7 padding = one full block
+        assert_eq!(blob.len(), 3 + 16);
+    }
+
+    #[test]
+    fn test_populate_login_data_creates_db() {
+        let dir = std::env::temp_dir().join("rustguac-test-login-data");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let creds = vec![(
+            "https://example.com".into(),
+            "alice".into(),
+            "secret".into(),
+        )];
+        populate_login_data(&dir, &creds).unwrap();
+
+        let db_path = dir.join("Default/Login Data");
+        assert!(db_path.exists(), "Login Data SQLite should be created");
+
+        // Verify the database is valid SQLite and has data
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM logins", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let origin: String = conn
+            .query_row("SELECT origin_url FROM logins", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(origin, "https://example.com/");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_populate_login_data_multiple_creds() {
+        let dir = std::env::temp_dir().join("rustguac-test-login-data-multi");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let creds = vec![
+            ("https://app.com".into(), "user1".into(), "pass1".into()),
+            ("https://idp.com".into(), "user2".into(), "pass2".into()),
+        ];
+        populate_login_data(&dir, &creds).unwrap();
+
+        let db_path = dir.join("Default/Login Data");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM logins", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_range_allocator() {
+        let alloc = RangeAllocator::new(100, 102);
+        let a = alloc.allocate().unwrap();
+        let b = alloc.allocate().unwrap();
+        let c = alloc.allocate().unwrap();
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        // Pool exhausted
+        assert!(alloc.allocate().is_none());
+        // Release one and re-allocate
+        alloc.release(b);
+        let d = alloc.allocate().unwrap();
+        assert_eq!(d, b);
+    }
+}
