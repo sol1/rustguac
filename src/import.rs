@@ -4,6 +4,8 @@
 //! `guacamole_connection_parameter`, and `guacamole_connection_group` tables,
 //! then writes entries via the existing VaultClient API.
 
+#![allow(dead_code)] // Module is used via CLI subcommand, not direct calls from main
+
 use std::collections::HashMap;
 
 use crate::config::Config;
@@ -398,11 +400,7 @@ fn parse_tuple(tuple: &str) -> Vec<String> {
             continue;
         }
         if ch == '\'' {
-            if in_quote {
-                in_quote = false;
-            } else {
-                in_quote = true;
-            }
+            in_quote = !in_quote;
             continue; // strip quotes
         }
         if ch == ',' && !in_quote {
@@ -529,8 +527,8 @@ fn sanitize_name(name: &str) -> String {
 /// Deduplicate entry names by appending -2, -3, etc.
 fn deduplicate_names(entries: &mut [(String, AddressBookEntry)]) {
     let mut seen: HashMap<String, usize> = HashMap::new();
-    for i in 0..entries.len() {
-        let name = entries[i].0.clone();
+    for entry in entries.iter_mut() {
+        let name = entry.0.clone();
         let count = seen.entry(name.clone()).or_insert(0);
         *count += 1;
         if *count > 1 {
@@ -542,7 +540,7 @@ fn deduplicate_names(entries: &mut [(String, AddressBookEntry)]) {
             } else {
                 &name
             };
-            entries[i].0 = format!("{}{}", base, suffix);
+            entry.0 = format!("{}{}", base, suffix);
         }
     }
 }
