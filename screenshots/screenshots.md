@@ -30,7 +30,7 @@ Address book entry editor for an RDP connection. Supports all RDP-specific field
 
 ![Web Session](web_connection.png)
 
-Address book entry editor for a web browser session. Spawns a headless Chromium on an Xvnc display and streams it via VNC through guacd. The URL is the only required field.
+Address book entry editor for a web browser session. Spawns a headless Chromium on an Xvnc display and streams it via VNC through guacd. Features include an optional banner message, a collapsible Automation section (username, password, login script dropdown, autofill), domain allowlisting, recording settings, clipboard controls, and SSH tunnel jump hosts.
 
 ## Session Recording Playback
 
