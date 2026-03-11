@@ -145,6 +145,61 @@ Enables file transfer for RDP (drive redirection) and SSH (SFTP).
 | `luks_name` | `rustguac-drives` | Device-mapper name |
 | `luks_key_path` | — | Vault KV path for LUKS encryption key |
 
+## `[theme]` section
+
+Customises the UI appearance — colours, logo, and background. All fields are optional. Start from a built-in preset and override individual colours, or set everything from scratch.
+
+**Built-in presets:** `dark` (default), `light`, `high-contrast`, `terminal`, `nord`, `corporate`
+
+| Key | Description |
+|-----|-------------|
+| `preset` | Base preset name (default: `dark`) |
+| `logo_url` | URL or path to a custom logo image (replaces the default rustguac logo) |
+| `primary_color` | Primary action colour (buttons, links) |
+| `primary_hover` | Primary hover state |
+| `accent_color` | Accent/secondary colour |
+| `accent_hover` | Accent hover state |
+| `bg_color` | Page background |
+| `surface_color` | Card/panel backgrounds |
+| `input_color` | Form input backgrounds |
+| `text_color` | Primary text |
+| `text_muted` | Secondary/muted text |
+| `text_dim` | Tertiary/dim text |
+| `text_on_primary` | Text on primary-coloured backgrounds |
+| `border_color` | Borders and dividers |
+| `btn_disabled` | Disabled button colour |
+| `bg_pattern` | CSS background pattern for the page body |
+| `status_pending` | Pending session badge |
+| `status_active` | Active session badge |
+| `status_completed` | Completed session badge |
+| `status_error` | Error session badge |
+| `status_expired` | Expired session badge |
+| `type_ssh_bg` / `type_ssh_fg` | SSH session type badge |
+| `type_rdp_bg` / `type_rdp_fg` | RDP session type badge |
+| `type_vnc_bg` / `type_vnc_fg` | VNC session type badge |
+| `type_web_bg` / `type_web_fg` | Web session type badge |
+| `hop_bg` / `hop_fg` | Jump host badge |
+
+All colour values are CSS colour strings (e.g. `"#003366"`, `"rgb(0,51,102)"`).
+
+Users can also switch between presets from the gear menu in the UI. The admin preset is the default; users can override it locally via their browser.
+
+**Example: corporate branding with custom logo and colours:**
+```toml
+site_title = "Acme Remote Console"
+
+[theme]
+preset = "light"
+logo_url = "/acme-logo.png"
+primary_color = "#003366"
+accent_color = "#FF6600"
+```
+
+Place the logo file in the `static_path` directory (e.g. `/opt/rustguac/static/acme-logo.png`). In Docker, mount it as a volume:
+```
+-v /path/to/acme-logo.png:/opt/rustguac/static/acme-logo.png:ro
+```
+
 ## Environment variables
 
 | Variable | Description |
