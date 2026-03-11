@@ -996,6 +996,86 @@ pub async fn ab_list_folders(
     Json(json!(visible)).into_response()
 }
 
+/// GET /api/addressbook — Batch endpoint returning all visible folders with entries.
+/// Replaces the N+1 pattern of listing folders then entries per folder.
+pub async fn ab_list_all(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(vault): Extension<VaultState>,
+) -> impl IntoResponse {
+    let vault = match require_vault(&vault).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let id = match identity {
+        Some(Extension(ref id)) if id.has_role("operator") => id,
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "operator role required"})),
+            )
+                .into_response()
+        }
+    };
+
+    let folders = match vault.list_folders().await {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    };
+
+    let mut result = Vec::new();
+    for folder in folders {
+        // Group access check (admins see all)
+        if !id.has_role("admin") {
+            if let Ok(config) = vault.get_folder_config(&folder.scope, &folder.name).await {
+                let user_groups = id.groups();
+                if !config
+                    .allowed_groups
+                    .iter()
+                    .any(|g| user_groups.iter().any(|ug| ug == g))
+                {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+        }
+
+        // Fetch folder config for the response
+        let config = vault
+            .get_folder_config(&folder.scope, &folder.name)
+            .await
+            .ok();
+
+        // Fetch entries (stripped of credentials)
+        let entry_names = vault
+            .list_entries(&folder.scope, &folder.name)
+            .await
+            .unwrap_or_default();
+        let mut entries = Vec::new();
+        for name in &entry_names {
+            if let Ok(entry) = vault.get_entry(&folder.scope, &folder.name, name).await {
+                entries.push(crate::vault::EntryInfo::from((name.as_str(), &entry)));
+            }
+        }
+
+        result.push(json!({
+            "name": folder.name,
+            "scope": folder.scope,
+            "description": folder.description,
+            "allowed_groups": config.as_ref().map(|c| &c.allowed_groups),
+            "entries": entries,
+        }));
+    }
+
+    Json(json!({"folders": result})).into_response()
+}
+
 /// GET /api/addressbook/folders/:scope/:folder/entries — List entries in a folder.
 pub async fn ab_list_entries(
     identity: Option<Extension<AuthIdentity>>,

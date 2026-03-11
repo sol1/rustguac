@@ -621,6 +621,7 @@
         var selectedFolder = null; // { name, scope, description }
         var folders = [];
         var folderEntryCounts = {}; // "scope/name" -> count
+        var folderEntries = {};    // "scope/name" -> entries array (from batch load)
         var currentEntries = []; // entries for the currently selected folder
 
         function showError(msg) {
@@ -680,7 +681,7 @@
         }
 
         function loadFolders() {
-            fetch('/api/addressbook/folders', { headers: apiHeaders(), credentials: 'same-origin' })
+            fetch('/api/addressbook', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (res.status === 503) {
                     document.getElementById('vault-unavailable').style.display = '';
@@ -699,7 +700,18 @@
             })
             .then(function(data) {
                 if (!data) return;
-                folders = data;
+                var allFolders = data.folders || [];
+                // Populate folder list and entry cache from batch response
+                folders = allFolders.map(function(f) {
+                    return { name: f.name, scope: f.scope, description: f.description || '' };
+                });
+                folderEntries = {};
+                folderEntryCounts = {};
+                allFolders.forEach(function(f) {
+                    var key = f.scope + '/' + f.name;
+                    folderEntries[key] = f.entries || [];
+                    folderEntryCounts[key] = (f.entries || []).length;
+                });
                 if (folders.length === 0 && isAdmin) {
                     document.getElementById('empty-state').style.display = '';
                     document.getElementById('main-content').style.display = 'none';
@@ -771,12 +783,24 @@
             });
         }
 
-        function loadEntries(scope, folder) {
+        function loadEntries(scope, folder, forceRefresh) {
             var header = document.getElementById('entries-header');
             header.style.display = '';
             document.getElementById('entries-title').textContent = folder;
             var f = folders.find(function(x) { return x.name === folder && x.scope === scope; });
             document.getElementById('entries-desc').textContent = f && f.description ? f.description : '';
+
+            var cacheKey = scope + '/' + folder;
+            var cached = folderEntries[cacheKey];
+
+            // Use cache if available and not forcing refresh (e.g. after mutation)
+            if (cached && !forceRefresh) {
+                currentEntries = cached;
+                folderEntryCounts[cacheKey] = cached.length;
+                renderFolders();
+                renderEntries(cached, scope, folder);
+                return;
+            }
 
             var content = document.getElementById('entries-content');
             content.innerHTML = '<p class="empty">Loading...</p>';
@@ -791,8 +815,8 @@
             })
             .then(function(entries) {
                 currentEntries = entries;
-                var countKey = scope + '/' + folder;
-                folderEntryCounts[countKey] = entries.length;
+                folderEntries[cacheKey] = entries;
+                folderEntryCounts[cacheKey] = entries.length;
                 renderFolders(); // Update count badge
                 renderEntries(entries, scope, folder);
             })
@@ -994,7 +1018,7 @@
                     credentials: 'same-origin'
                 }).then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { showError(t); });
-                    loadEntries(scope, folder);
+                    loadEntries(scope, folder, true);
                 });
                 return;
             }
@@ -1824,7 +1848,7 @@
                 .then(function() {
                     document.getElementById('entry-modal').classList.remove('active');
                     entryTypeSelect.disabled = false;
-                    loadEntries(selectedFolder.scope, selectedFolder.name);
+                    loadEntries(selectedFolder.scope, selectedFolder.name, true);
                 })
                 .catch(function(err) { errEl.textContent = err.message; })
                 .finally(function() { saveBtn.disabled = false; saveBtn.textContent = 'Save'; });
@@ -1842,7 +1866,7 @@
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
                     document.getElementById('entry-modal').classList.remove('active');
                     entryTypeSelect.disabled = false;
-                    loadEntries(scope, folder);
+                    loadEntries(scope, folder, true);
                 })
                 .catch(function(err) { errEl.textContent = err.message; })
                 .finally(function() { saveBtn.disabled = false; saveBtn.textContent = 'Save'; });

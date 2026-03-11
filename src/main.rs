@@ -667,22 +667,22 @@ async fn run_server(config: Config, database: Db) {
 
     // Rate limit configs
     let api_governor_conf = GovernorConfigBuilder::default()
-        .per_second(5)
-        .burst_size(30)
+        .per_second(20)
+        .burst_size(100)
         .key_extractor(SmartIpKeyExtractor)
         .finish()
         .expect("Failed to build API rate limit config");
 
     let session_create_governor_conf = GovernorConfigBuilder::default()
-        .per_second(1)
-        .burst_size(5)
+        .per_second(2)
+        .burst_size(10)
         .key_extractor(SmartIpKeyExtractor)
         .finish()
         .expect("Failed to build session creation rate limit config");
 
     let ws_governor_conf = GovernorConfigBuilder::default()
-        .per_second(1)
-        .burst_size(20)
+        .per_second(5)
+        .burst_size(50)
         .key_extractor(SmartIpKeyExtractor)
         .finish()
         .expect("Failed to build WebSocket rate limit config");
@@ -734,6 +734,7 @@ async fn run_server(config: Config, database: Db) {
         )
         .route("/api/admin/token-audit", get(api::admin_token_audit))
         // Address book routes
+        .route("/api/addressbook", get(api::ab_list_all))
         .route("/api/addressbook/folders", get(api::ab_list_folders))
         .route("/api/addressbook/folders", post(api::ab_create_folder))
         .route(
