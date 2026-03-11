@@ -284,6 +284,11 @@ impl SessionManager {
         }
     }
 
+    /// Read-only access to the config.
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     /// Create a new session: connect to guacd, perform handshake, return session info.
     pub async fn create_session(
         &self,

@@ -195,6 +195,27 @@ pub async fn delete_session(
     }
 }
 
+/// GET /api/login-scripts — List available login scripts. Requires operator+.
+pub async fn list_login_scripts(State(manager): State<AppState>) -> impl IntoResponse {
+    let scripts_dir = std::path::Path::new(&manager.config().login_scripts_dir);
+    let mut scripts: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(scripts_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    // Only list executable-looking scripts, skip hidden files
+                    if !name.starts_with('.') {
+                        scripts.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    scripts.sort();
+    Json(json!({ "scripts": scripts }))
+}
+
 /// GET /api/health — Health check.
 pub async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))

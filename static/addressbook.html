@@ -453,9 +453,11 @@
                     <input type="password" id="em-web-password">
                 </label>
                 <label>Login Script <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
-                    <input type="text" id="em-login-script" placeholder="e.g. portal-login.sh">
+                    <select id="em-login-script">
+                        <option value="">None</option>
+                    </select>
                 </label>
-                <div class="field-hint">Server-side script in the scripts directory. Receives CDP port and credentials as env vars. Runs after Chromium spawns.</div>
+                <div class="field-hint">Server-side script from the scripts directory. Receives CDP port and credentials as env vars. Runs after Chromium spawns.</div>
                 <div style="margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                     <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-autofill-toggle">
                         <span id="em-autofill-arrow">&#9654;</span> Autofill
@@ -623,6 +625,35 @@
         var folderEntryCounts = {}; // "scope/name" -> count
         var folderEntries = {};    // "scope/name" -> entries array (from batch load)
         var currentEntries = []; // entries for the currently selected folder
+        var loginScriptsCache = null; // cached list from /api/login-scripts
+
+        function populateLoginScriptDropdown(selectedValue) {
+            var sel = document.getElementById('em-login-script');
+            sel.innerHTML = '<option value="">None</option>';
+            if (loginScriptsCache) {
+                loginScriptsCache.forEach(function(s) {
+                    var opt = document.createElement('option');
+                    opt.value = s;
+                    opt.textContent = s;
+                    sel.appendChild(opt);
+                });
+            }
+            sel.value = selectedValue || '';
+        }
+
+        function loadLoginScripts(cb) {
+            if (loginScriptsCache !== null) { if (cb) cb(); return; }
+            fetch('/api/login-scripts', { headers: authHeaders() })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    loginScriptsCache = data.scripts || [];
+                    if (cb) cb();
+                })
+                .catch(function() {
+                    loginScriptsCache = [];
+                    if (cb) cb();
+                });
+        }
 
         function showError(msg) {
             document.getElementById('global-error').textContent = msg;
@@ -1190,7 +1221,10 @@
             if (val === 'ssh') document.getElementById('em-ssh-fields').style.display = '';
             else if (val === 'rdp') document.getElementById('em-rdp-fields').style.display = '';
             else if (val === 'vnc') document.getElementById('em-vnc-fields').style.display = '';
-            else if (val === 'web') document.getElementById('em-web-fields').style.display = '';
+            else if (val === 'web') {
+                document.getElementById('em-web-fields').style.display = '';
+                loadLoginScripts(function() { populateLoginScriptDropdown(''); });
+            }
             // Show drive option for SSH and RDP only
             document.getElementById('em-drive-section').style.display = (val === 'ssh' || val === 'rdp') ? '' : 'none';
             // Show RemoteApp for RDP only
@@ -1627,7 +1661,7 @@
                 } else if (type === 'web') {
                     document.getElementById('em-url').value = entryData.url || '';
                     document.getElementById('em-web-username').value = entryData.username || '';
-                    document.getElementById('em-login-script').value = entryData.login_script || '';
+                    loadLoginScripts(function() { populateLoginScriptDropdown(entryData.login_script || ''); });
                     // Populate autofill rows
                     if (entryData.autofill) {
                         try {
