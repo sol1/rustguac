@@ -844,7 +844,7 @@
 
             var html = '<table class="entries-table"><thead><tr>' +
                 '<th>Name</th><th>Type</th><th>Host</th><th>User</th><th></th>';
-            if (isAdmin) html += '<th></th><th></th>';
+            if (isAdmin) html += '<th></th><th></th><th></th>';
             html += '</tr></thead><tbody>';
 
             entries.forEach(function(e) {
@@ -872,6 +872,7 @@
                 html += '<td><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">' + connectLabel + '</button></td>';
                 if (isAdmin) {
                     html += '<td><button class="btn-small" data-edit-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '" data-type="' + escapeAttr(e.session_type) + '">edit</button></td>';
+                    html += '<td><button class="btn-small" data-clone-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">clone</button></td>';
                     html += '<td><button class="btn-small" data-delete-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">delete</button></td>';
                 }
                 html += '</tr>';
@@ -1020,6 +1021,27 @@
                     if (!res.ok) return res.text().then(function(t) { showError(t); });
                     loadEntries(scope, folder, true);
                 });
+                return;
+            }
+
+            // Clone entry
+            if (btn.getAttribute('data-clone-entry')) {
+                var name = btn.getAttribute('data-clone-entry');
+                var scope = btn.getAttribute('data-scope');
+                var folder = btn.getAttribute('data-folder');
+                var entry = currentEntries.find(function(e) { return e.name === name; });
+                if (!entry) return;
+                // Open as new entry, pre-populated with cloned data
+                openEditEntry(name, scope, folder, entry.session_type);
+                // Switch to create mode: enable name field, clear edit mode, set copy name
+                entryEditMode = null;
+                document.getElementById('entry-modal-title').textContent = 'Clone: ' + name;
+                var nameField = document.getElementById('em-name');
+                nameField.disabled = false;
+                nameField.value = name + '-copy';
+                entryTypeSelect.disabled = false;
+                // Hide move-to-folder (not relevant for new entries)
+                document.getElementById('em-move-section').style.display = 'none';
                 return;
             }
 
