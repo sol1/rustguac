@@ -114,6 +114,9 @@ RUN mkdir -p /etc/chromium/policies/managed && \
     echo '{"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 2, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}' \
     > /etc/chromium/policies/managed/rustguac.json
 
+# Create non-root user with a real home directory (Chromium crashpad needs it)
+RUN groupadd -r rustguac && useradd -r -g rustguac -m -d /home/rustguac -s /bin/sh rustguac
+
 # Generate self-signed cert for guacd TLS (internal loopback encryption)
 RUN /opt/rustguac/bin/rustguac generate-cert --hostname localhost --out-dir /opt/rustguac/tls
 
@@ -135,6 +138,10 @@ cert_path = "/opt/rustguac/tls/cert.pem"
 key_path = "/opt/rustguac/tls/key.pem"
 guacd_cert_path = "/opt/rustguac/tls/cert.pem"
 EOF
+
+# Set ownership so the non-root user can write to data dirs and read certs
+RUN chown -R rustguac:rustguac /opt/rustguac/data /opt/rustguac/recordings \
+    /opt/rustguac/tls /opt/rustguac/config.toml.default
 
 # Entrypoint script: starts guacd in background, then rustguac in foreground
 RUN cat > /opt/rustguac/entrypoint.sh <<'SCRIPT'
@@ -188,5 +195,7 @@ VOLUME ["/opt/rustguac/data", "/opt/rustguac/recordings"]
 
 ENV RUST_LOG=info
 ENV GUACD_LOG_LEVEL=info
+ENV HOME=/home/rustguac
 
+USER rustguac
 ENTRYPOINT ["/opt/rustguac/entrypoint.sh"]
