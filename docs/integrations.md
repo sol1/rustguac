@@ -128,14 +128,22 @@ vault secrets enable -path=secret kv-v2
 
 ```bash
 vault policy write rustguac - <<'EOF'
+# Address book entries: create, read, update, soft-delete
 path "secret/data/rustguac/*" {
   capabilities = ["create", "read", "update", "delete"]
 }
+
+# Folder/entry listing and permanent deletion
+# - "list" + "read": browse the address book
+# - "delete": permanently remove entries and folders
+#   (KV v2 permanent deletes go through the metadata/ path, not data/)
 path "secret/metadata/rustguac/*" {
   capabilities = ["list", "read", "delete"]
 }
 EOF
 ```
+
+> **Note:** Both policy paths are required. A common mistake is omitting `delete` from the metadata path — this causes "vault access denied" errors when deleting entries or folders. See the [Vault KV v2 API docs](https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2) for details on the `data/` vs `metadata/` path split.
 
 **3. Enable AppRole auth** and create a role:
 
