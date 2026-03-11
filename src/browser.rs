@@ -313,6 +313,16 @@ impl BrowserManager {
             chromium_args.push("--enable-automation");
         }
 
+        // Add --no-sandbox when running as root (e.g. Docker containers).
+        // Chromium refuses to start as root without this flag. The container
+        // itself provides the security boundary in this case.
+        let no_sandbox;
+        if unsafe { libc::geteuid() } == 0 {
+            no_sandbox = "--no-sandbox".to_string();
+            chromium_args.push(&no_sandbox);
+            tracing::debug!("Running as root, adding --no-sandbox to Chromium");
+        }
+
         chromium_args.push(url);
 
         let chromium_result = Command::new(&self.chromium_path)
@@ -323,7 +333,7 @@ impl BrowserManager {
             .stderr(std::process::Stdio::piped())
             .spawn();
 
-        let chromium_child = match chromium_result {
+        let mut chromium_child = match chromium_result {
             Ok(child) => {
                 tracing::info!(
                     display = %display_num,
@@ -345,6 +355,52 @@ impl BrowserManager {
                 return Err(BrowserError::ChromiumSpawn(msg));
             }
         };
+
+        // Post-spawn liveness check: give Chromium a moment to crash on startup
+        // (e.g. sandbox failures, missing libs). If it exits immediately, capture
+        // stderr so we can log something useful instead of a silent black screen.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        match chromium_child.try_wait() {
+            Ok(Some(status)) => {
+                // Chromium exited already — capture stderr for diagnostics
+                let mut stderr_msg = String::new();
+                if let Some(mut stderr) = chromium_child.stderr.take() {
+                    use tokio::io::AsyncReadExt;
+                    let mut buf = Vec::new();
+                    let _ = stderr.read_to_end(&mut buf).await;
+                    stderr_msg = String::from_utf8_lossy(&buf).to_string();
+                    // Trim to a reasonable length for logging
+                    if stderr_msg.len() > 2000 {
+                        stderr_msg.truncate(2000);
+                        stderr_msg.push_str("...(truncated)");
+                    }
+                }
+                let _ = xvnc_child.kill().await;
+                self.display_allocator.release(display_num);
+                if let Some(p) = cdp_port {
+                    self.cdp_allocator.release(p as u32);
+                }
+                let _ = std::fs::remove_dir_all(&profile_dir);
+                let msg = format!(
+                    "Chromium exited immediately ({}). stderr: {}",
+                    status,
+                    if stderr_msg.is_empty() {
+                        "(empty)".to_string()
+                    } else {
+                        stderr_msg
+                    }
+                );
+                tracing::error!(display = %display_num, "{}", msg);
+                return Err(BrowserError::ChromiumSpawn(msg));
+            }
+            Ok(None) => {
+                // Still running — good
+                tracing::debug!(display = %display_num, "Chromium still alive after 500ms");
+            }
+            Err(e) => {
+                tracing::warn!(display = %display_num, "Could not check Chromium status: {}", e);
+            }
+        }
 
         Ok(BrowserSession {
             display: display_num,
