@@ -261,10 +261,12 @@ TOMLEOF
 
     chown -R rustguac:rustguac "$PREFIX/data" "$PREFIX/recordings"
 
-    # Chromium policy: block devtools, file dialogs, password import (web session hardening)
+    # Chromium policy: web session hardening (block file dialogs, printing, extensions, etc.)
+    # DeveloperToolsAvailability=0: DevTools/CDP allowed (needed for login scripts).
+    # Users can't reach chrome://devtools anyway — chrome://* is in URLBlocklist.
     mkdir -p /etc/chromium/policies/managed
     cat > /etc/chromium/policies/managed/rustguac.json <<'POLICY'
-{"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 2, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}
+{"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 0, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}
 POLICY
 
     info "rustguac installed to $PREFIX"

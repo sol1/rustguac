@@ -109,9 +109,11 @@ RUN echo "/opt/rustguac/lib" > /etc/ld.so.conf.d/rustguac.conf && ldconfig
 # Create data directories
 RUN mkdir -p /opt/rustguac/data /opt/rustguac/recordings /opt/rustguac/tls
 
-# Chromium policy: block file selection dialogs in web sessions (security hardening)
+# Chromium policy: web session hardening.
+# DeveloperToolsAvailability=0: CDP needed for login scripts. Users can't reach DevTools
+# through the UI anyway — chrome://* is in URLBlocklist.
 RUN mkdir -p /etc/chromium/policies/managed && \
-    echo '{"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 2, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}' \
+    echo '{"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 0, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}' \
     > /etc/chromium/policies/managed/rustguac.json
 
 # Create non-root user with a real home directory (Chromium crashpad needs it)

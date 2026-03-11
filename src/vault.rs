@@ -134,6 +134,9 @@ pub struct AddressBookEntry {
     /// Disable clipboard paste (client → server). Prevents pasting into the remote session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_paste: Option<bool>,
+    /// Optional banner text shown before the session starts. User must click Continue to proceed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner: Option<String>,
 }
 
 impl AddressBookEntry {
@@ -220,6 +223,9 @@ pub struct EntryInfo {
     /// Disable clipboard paste (client → server).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_paste: Option<bool>,
+    /// Banner text shown before session starts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banner: Option<String>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -262,6 +268,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             allowed_domains: e.allowed_domains.clone(),
             disable_copy: e.disable_copy,
             disable_paste: e.disable_paste,
+            banner: e.banner.clone(),
         }
     }
 }

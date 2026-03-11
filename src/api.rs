@@ -204,8 +204,11 @@ pub async fn list_login_scripts(State(manager): State<AppState>) -> impl IntoRes
             let path = entry.path();
             if path.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    // Only list executable-looking scripts, skip hidden files
-                    if !name.starts_with('.') {
+                    // Only list script files, skip hidden/config files
+                    if !name.starts_with('.')
+                        && (name.ends_with(".js") || name.ends_with(".sh") || name.ends_with(".py"))
+                        && !name.starts_with("package")
+                    {
                         scripts.push(name.to_string());
                     }
                 }
@@ -1257,7 +1260,7 @@ pub async fn ab_connect_entry(
         width: req.width,
         height: req.height,
         dpi: req.dpi,
-        banner: req.banner.or(ab_entry.display_name),
+        banner: req.banner.or(ab_entry.banner),
         enable_drive: ab_entry.enable_drive,
         remote_app: ab_entry.remote_app,
         remote_app_dir: ab_entry.remote_app_dir,
@@ -2355,7 +2358,7 @@ pub async fn quick_connect(
             width: query.width,
             height: query.height,
             dpi: query.dpi,
-            banner: ab_entry.display_name,
+            banner: ab_entry.banner,
             enable_drive: ab_entry.enable_drive,
             remote_app: ab_entry.remote_app,
             remote_app_dir: ab_entry.remote_app_dir,

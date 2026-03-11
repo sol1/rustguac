@@ -106,6 +106,7 @@ pub async fn cmd_import_guacamole(
             allowed_domains: None,
             disable_copy: None,
             disable_paste: None,
+            banner: None,
         };
 
         // Build entry name: group prefix + sanitized connection name
@@ -638,6 +639,7 @@ mod tests {
             allowed_domains: None,
             disable_copy: None,
             disable_paste: None,
+            banner: None,
         };
         let mut entries = vec![
             ("web".into(), entry()),

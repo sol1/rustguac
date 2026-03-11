@@ -199,7 +199,7 @@ Policies applied:
 | `AllowFileSelectionDialogs` | `false` | Blocks file open/save dialogs (prevents filesystem browsing) |
 | `PasswordManagerEnabled` | `true` | Allows autofill to work |
 | `ImportSavedPasswords` | `false` | Blocks password import UI (which exposes a file browser) |
-| `DeveloperToolsAvailability` | `2` | Disables DevTools completely (right-click inspect, F12, menu) |
+| `DeveloperToolsAvailability` | `0` | DevTools/CDP allowed (needed for login scripts). Users can't access DevTools UI — `chrome://*` is in URLBlocklist. |
 | `DownloadRestrictions` | `3` | Blocks all downloads |
 | `PrintingEnabled` | `false` | Disables printing |
 | `EditBookmarksEnabled` | `false` | Prevents bookmark editing |

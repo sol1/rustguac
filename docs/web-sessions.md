@@ -464,7 +464,7 @@ Every web session runs Chromium with a comprehensive managed policy and an isola
 
 Key restrictions:
 
-- DevTools, downloads, printing, and file dialogs are disabled
+- DevTools UI is blocked by URL filter (`chrome://*` is in URLBlocklist), downloads, printing, and file dialogs are disabled
 - Extensions cannot be installed
 - Dangerous URL schemes (`file://`, `chrome://`, `javascript:`) are blocked
 - Browser sign-in and sync are disabled

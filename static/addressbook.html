@@ -446,26 +446,37 @@
                     <input type="text" id="em-url" placeholder="https://example.com">
                 </label>
                 <div class="field-hint">Use <code>$RUSTGUAC_USERNAME</code> and <code>$RUSTGUAC_PASSWORD</code> in the URL for basic auth (e.g. <code>https://$RUSTGUAC_USERNAME:$RUSTGUAC_PASSWORD@host</code>).</div>
-                <label>Username <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
-                    <input type="text" id="em-web-username" placeholder="For URL substitution or login script">
+                <label>Banner <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="text" id="em-banner" placeholder="Shown before session starts (user must click Continue)">
                 </label>
-                <label>Password <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
-                    <input type="password" id="em-web-password">
-                </label>
-                <label>Login Script <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
-                    <select id="em-login-script">
-                        <option value="">None</option>
-                    </select>
-                </label>
-                <div class="field-hint">Server-side script from the scripts directory. Receives CDP port and credentials as env vars. Runs after Chromium spawns.</div>
                 <div style="margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
-                    <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-autofill-toggle">
-                        <span id="em-autofill-arrow">&#9654;</span> Autofill
+                    <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-automation-toggle">
+                        <span id="em-automation-arrow">&#9654;</span> Automation
                     </label>
-                    <div id="em-autofill-fields" style="display:none">
-                        <div class="field-hint" style="margin-bottom:0.5em">Pre-populate Chromium's autofill database so saved credentials appear on matching login forms. Use <code>$USERNAME</code> and <code>$PASSWORD</code> to substitute the entry's credentials.</div>
-                        <div id="em-autofill-rows"></div>
-                        <button type="button" id="em-autofill-add" style="margin-top:0.3em;padding:0.3em 0.8em;font-size:0.85em;background:var(--input);color:var(--accent);border:1px solid var(--border);border-radius:4px;cursor:pointer">+ Add site</button>
+                    <div id="em-automation-fields" style="display:none">
+                        <div class="field-hint" style="margin-bottom:0.5em">Credentials and scripts for automated login. Username and password are also used for URL substitution (<code>$RUSTGUAC_USERNAME</code> / <code>$RUSTGUAC_PASSWORD</code>).</div>
+                        <label>Username <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                            <input type="text" id="em-web-username" placeholder="For URL substitution or login script">
+                        </label>
+                        <label>Password <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                            <input type="password" id="em-web-password">
+                        </label>
+                        <label>Login Script <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                            <select id="em-login-script">
+                                <option value="">None</option>
+                            </select>
+                        </label>
+                        <div class="field-hint">Server-side script from the scripts directory. Receives CDP port and credentials as env vars. Runs after Chromium spawns.</div>
+                        <div style="margin-top:0.8em;padding-top:0.8em;border-top:1px solid var(--border)">
+                            <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-autofill-toggle">
+                                <span id="em-autofill-arrow">&#9654;</span> Autofill
+                            </label>
+                            <div id="em-autofill-fields" style="display:none">
+                                <div class="field-hint" style="margin-bottom:0.5em">Pre-populate Chromium's autofill database so saved credentials appear on matching login forms. Use <code>$USERNAME</code> and <code>$PASSWORD</code> to substitute the entry's credentials.</div>
+                                <div id="em-autofill-rows"></div>
+                                <button type="button" id="em-autofill-add" style="margin-top:0.3em;padding:0.3em 0.8em;font-size:0.85em;background:var(--input);color:var(--accent);border:1px solid var(--border);border-radius:4px;cursor:pointer">+ Add site</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div style="margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
@@ -1280,6 +1291,18 @@
         });
 
         // Toggle Autofill fields visibility
+        document.getElementById('em-automation-toggle').addEventListener('click', function() {
+            var fields = document.getElementById('em-automation-fields');
+            var arrow = document.getElementById('em-automation-arrow');
+            if (fields.style.display === 'none') {
+                fields.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                fields.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
+        });
+
         document.getElementById('em-autofill-toggle').addEventListener('click', function() {
             var fields = document.getElementById('em-autofill-fields');
             var arrow = document.getElementById('em-autofill-arrow');
@@ -1564,9 +1587,12 @@
             document.getElementById('em-vnc-color-depth').value = '';
             document.getElementById('em-vnc-prompt-creds').checked = false;
             document.getElementById('em-url').value = '';
+            document.getElementById('em-banner').value = '';
             document.getElementById('em-web-username').value = '';
             document.getElementById('em-web-password').value = '';
             document.getElementById('em-login-script').value = '';
+            document.getElementById('em-automation-fields').style.display = 'none';
+            document.getElementById('em-automation-arrow').innerHTML = '&#9654;';
             autofillRows = [];
             renderAutofillRows();
             document.getElementById('em-autofill-fields').style.display = 'none';
@@ -1660,8 +1686,14 @@
                     document.getElementById('em-vnc-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'web') {
                     document.getElementById('em-url').value = entryData.url || '';
+                    document.getElementById('em-banner').value = entryData.banner || '';
                     document.getElementById('em-web-username').value = entryData.username || '';
                     loadLoginScripts(function() { populateLoginScriptDropdown(entryData.login_script || ''); });
+                    // Auto-expand automation if any automation fields are set
+                    if (entryData.username || entryData.login_script || entryData.autofill) {
+                        document.getElementById('em-automation-fields').style.display = '';
+                        document.getElementById('em-automation-arrow').innerHTML = '&#9660;';
+                    }
                     // Populate autofill rows
                     if (entryData.autofill) {
                         try {
@@ -1792,6 +1824,8 @@
             } else if (type === 'web') {
                 var url = document.getElementById('em-url').value.trim();
                 if (url) entry.url = url;
+                var bn = document.getElementById('em-banner').value.trim();
+                if (bn) entry.banner = bn;
                 var wu = document.getElementById('em-web-username').value.trim();
                 if (wu) entry.username = wu;
                 var wpw = document.getElementById('em-web-password').value;
