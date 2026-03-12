@@ -4,8 +4,6 @@
 //! `guacamole_connection_parameter`, and `guacamole_connection_group` tables,
 //! then writes entries via the existing VaultClient API.
 
-#![allow(dead_code)] // Module is used via CLI subcommand, not direct calls from main
-
 use std::collections::HashMap;
 
 use crate::config::Config;
@@ -25,9 +23,9 @@ pub async fn cmd_import_guacamole(
         std::process::exit(1);
     }
 
-    // Read SQL file
-    let sql = match std::fs::read_to_string(file) {
-        Ok(s) => s,
+    // Read SQL file (lossy: replace non-UTF-8 bytes from binary blobs)
+    let sql = match std::fs::read(file) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(e) => {
             eprintln!("Error reading {}: {}", file, e);
             std::process::exit(1);

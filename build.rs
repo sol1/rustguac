@@ -13,6 +13,7 @@ const DOC_FILES: &[&str] = &[
     "roles-and-access-control.md",
     "integrations.md",
     "netbox.md",
+    "migration.md",
     "api.md",
 ];
 

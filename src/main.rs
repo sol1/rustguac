@@ -125,6 +125,22 @@ enum Command {
         #[arg(long)]
         email: String,
     },
+
+    /// Import connections from an Apache Guacamole MySQL dump into the Vault address book
+    ImportGuacamole {
+        /// Path to the mysqldump SQL file
+        #[arg(long)]
+        file: String,
+        /// Target folder in the address book
+        #[arg(long, default_value = "imported")]
+        folder: String,
+        /// Scope: "shared" or "instance"
+        #[arg(long, default_value = "shared")]
+        scope: String,
+        /// Preview without writing to Vault
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -168,6 +184,14 @@ async fn main() {
         Some(Command::SetRole { email, role }) => cmd_set_role(&database, &email, &role),
         Some(Command::DisableUser { email }) => cmd_disable_user(&database, &email),
         Some(Command::DeleteUser { email }) => cmd_delete_user(&database, &email),
+        Some(Command::ImportGuacamole {
+            file,
+            folder,
+            scope,
+            dry_run,
+        }) => {
+            import::cmd_import_guacamole(&config, &file, &folder, &scope, dry_run).await;
+        }
     }
 }
 
