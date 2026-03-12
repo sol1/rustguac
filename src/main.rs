@@ -605,6 +605,34 @@ async fn run_server(config: Config, database: Db) {
     };
     let trusted_proxies = auth::TrustedProxies(config.trusted_proxies.clone());
 
+    // Pre-process HTML pages with branding (site title, logo) for flash-free rendering
+    let branded_pages = {
+        let logo = config.theme.as_ref().and_then(|t| t.logo_url.as_deref());
+        let title = &config.site_title;
+        let mut pages = std::collections::HashMap::new();
+        // Embedded client.html
+        pages.insert(
+            "client.html".to_string(),
+            rewrite_branding(include_str!("../static/client.html"), title, logo),
+        );
+        // Disk-served HTML pages
+        for name in &[
+            "index.html",
+            "addressbook.html",
+            "sessions.html",
+            "recordings.html",
+            "admin.html",
+            "tokens.html",
+            "docs.html",
+        ] {
+            let path = std::path::Path::new(&static_path).join(name);
+            if let Ok(html) = std::fs::read_to_string(&path) {
+                pages.insert(name.to_string(), rewrite_branding(&html, title, logo));
+            }
+        }
+        Arc::new(pages)
+    };
+
     // Periodically clean up expired auth sessions from the database
     let cleanup_db = database.clone();
     tokio::spawn(async move {
@@ -824,13 +852,25 @@ async fn run_server(config: Config, database: Db) {
         .route("/client/{session_id}", get(serve_client_page))
         .with_state(manager);
 
+    // Branded HTML page routes (served from memory with site_title/logo baked in)
+    let html_routes = Router::new()
+        .route("/", get(serve_branded_page))
+        .route("/index.html", get(serve_branded_page))
+        .route("/addressbook.html", get(serve_branded_page))
+        .route("/sessions.html", get(serve_branded_page))
+        .route("/recordings.html", get(serve_branded_page))
+        .route("/admin.html", get(serve_branded_page))
+        .route("/tokens.html", get(serve_branded_page))
+        .route("/docs.html", get(serve_branded_page));
+
     // Build full router (all Router<()> at this point)
     let mut app: Router<()> = Router::new()
         .route("/api/auth/status", get(api::auth_status))
         .merge(api_routes)
         .merge(ws_route)
         .merge(connect_route)
-        .merge(unauth_routes);
+        .merge(unauth_routes)
+        .merge(html_routes);
 
     // Add OIDC routes if configured
     if let Some(ref oidc_st) = oidc_state {
@@ -868,6 +908,7 @@ async fn run_server(config: Config, database: Db) {
         .layer(Extension(site_title))
         .layer(Extension(theme_data))
         .layer(Extension(trusted_proxies))
+        .layer(Extension(branded_pages))
         .fallback_service(ServeDir::new(&static_path));
 
     let scheme = if server_tls.is_some() {
@@ -948,8 +989,88 @@ fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {
     Some(tokio_rustls::TlsConnector::from(Arc::new(tls_config)))
 }
 
+/// Serve a branded HTML page from the pre-processed in-memory map.
+async fn serve_branded_page(
+    Extension(pages): Extension<Arc<std::collections::HashMap<String, String>>>,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    let path = request.uri().path().trim_start_matches('/');
+    let key = if path.is_empty() { "index.html" } else { path };
+    if let Some(html) = pages.get(key) {
+        Html(html.clone()).into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
 /// Serve the client HTML page for SSH sessions.
 /// The session_id is extracted by the JS on the page, not by this handler.
-async fn serve_client_page() -> Html<&'static str> {
-    Html(include_str!("../static/client.html"))
+async fn serve_client_page(
+    Extension(pages): Extension<Arc<std::collections::HashMap<String, String>>>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if let Some(html) = pages.get("client.html") {
+        Html(html.clone()).into_response()
+    } else {
+        Html(include_str!("../static/client.html")).into_response()
+    }
+}
+
+/// Rewrite branding in HTML: replace default "rustguac" site title and logo.
+fn rewrite_branding(html: &str, site_title: &str, logo_url: Option<&str>) -> String {
+    let mut out = html.to_string();
+    if site_title != "rustguac" {
+        // <title>rustguac</title> and <title>rustguac - Sessions</title> etc.
+        out = out.replace(
+            "<title>rustguac</title>",
+            &format!("<title>{}</title>", site_title),
+        );
+        out = out.replace("<title>rustguac - ", &format!("<title>{} - ", site_title));
+        // <h1>rustguac</h1> (with or without inline style)
+        out = out.replace(">rustguac</h1>", &format!(">{}</h1>", site_title));
+    }
+    if let Some(url) = logo_url {
+        out = out.replace("src=\"/logo.svg\"", &format!("src=\"{}\"", url));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rewrite_branding_title() {
+        let html = "<title>rustguac - Sessions</title>";
+        assert_eq!(
+            rewrite_branding(html, "MyGateway", None),
+            "<title>MyGateway - Sessions</title>"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_branding_h1() {
+        let html = r#"<h1 style="display:inline">rustguac</h1>"#;
+        assert_eq!(
+            rewrite_branding(html, "MyGateway", None),
+            r#"<h1 style="display:inline">MyGateway</h1>"#
+        );
+    }
+
+    #[test]
+    fn test_rewrite_branding_logo() {
+        let html = r#"<img id="site-logo" src="/logo.svg" style="max-height:40px">"#;
+        assert_eq!(
+            rewrite_branding(html, "rustguac", Some("https://example.com/logo.png")),
+            r#"<img id="site-logo" src="https://example.com/logo.png" style="max-height:40px">"#
+        );
+    }
+
+    #[test]
+    fn test_rewrite_branding_noop() {
+        let html = "<title>rustguac</title><h1>rustguac</h1>";
+        assert_eq!(rewrite_branding(html, "rustguac", None), html);
+    }
 }
