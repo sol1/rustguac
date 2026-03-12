@@ -106,8 +106,9 @@ COPY static/ /opt/rustguac/static/
 # Library path for guacd
 RUN echo "/opt/rustguac/lib" > /etc/ld.so.conf.d/rustguac.conf && ldconfig
 
-# Create data directories
-RUN mkdir -p /opt/rustguac/data /opt/rustguac/recordings /opt/rustguac/tls
+# Create writable runtime directories
+RUN mkdir -p /opt/rustguac/data /opt/rustguac/recordings /opt/rustguac/tls \
+    /opt/rustguac/certs /opt/rustguac/drives /opt/rustguac/scripts
 
 # Chromium policy: web session hardening.
 # DeveloperToolsAvailability=0: CDP needed for login scripts. Users can't reach DevTools
@@ -141,9 +142,13 @@ key_path = "/opt/rustguac/tls/key.pem"
 guacd_cert_path = "/opt/rustguac/tls/cert.pem"
 EOF
 
-# Set ownership so the non-root user can write to data dirs and read certs
-RUN chown -R rustguac:rustguac /opt/rustguac/data /opt/rustguac/recordings \
-    /opt/rustguac/tls /opt/rustguac/config.toml.default
+# Set ownership so the non-root user can write to runtime dirs.
+# The top-level dir is chowned (not recursive) so loaders can create config.toml;
+# subdirs are chowned recursively for data, certs, etc.
+RUN chown rustguac:rustguac /opt/rustguac && \
+    chown -R rustguac:rustguac /opt/rustguac/data /opt/rustguac/recordings \
+    /opt/rustguac/tls /opt/rustguac/certs /opt/rustguac/drives \
+    /opt/rustguac/scripts /opt/rustguac/config.toml.default
 
 # Entrypoint script: starts guacd in background, then rustguac in foreground
 RUN cat > /opt/rustguac/entrypoint.sh <<'SCRIPT'
@@ -193,7 +198,7 @@ RUN chmod +x /opt/rustguac/entrypoint.sh
 
 WORKDIR /opt/rustguac
 EXPOSE 8089
-VOLUME ["/opt/rustguac/data", "/opt/rustguac/recordings"]
+VOLUME ["/opt/rustguac/data", "/opt/rustguac/recordings", "/opt/rustguac/drives"]
 
 ENV RUST_LOG=info
 ENV GUACD_LOG_LEVEL=info
