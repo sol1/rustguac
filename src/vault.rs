@@ -9,6 +9,7 @@
 //! (allowed_groups, description) that controls OIDC group-based access.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -57,7 +58,7 @@ pub struct FolderConfig {
 }
 
 /// A connection entry stored in Vault.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AddressBookEntry {
     #[serde(rename = "type")]
     pub session_type: String, // "ssh", "rdp", "vnc", "web"
@@ -226,6 +227,9 @@ pub struct EntryInfo {
     /// Banner text shown before session starts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub banner: Option<String>,
+    /// Credential variable names referenced by this entry (e.g. ["corp_user", "corp_password"]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub credential_variables: Vec<String>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -269,6 +273,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             disable_copy: e.disable_copy,
             disable_paste: e.disable_paste,
             banner: e.banner.clone(),
+            credential_variables: entry_credential_variables(e),
         }
     }
 }
@@ -756,6 +761,89 @@ impl VaultClient {
             s => Err(VaultError::Parse(format!("list failed ({})", s))),
         }
     }
+
+    // ── User credential variables ──
+
+    /// Read a user's stored credential variables from Vault.
+    /// Path: `<base_path>/users/<sanitized_email>`
+    pub async fn get_user_credentials(
+        &self,
+        email: &str,
+    ) -> Result<HashMap<String, String>, VaultError> {
+        let key = sanitize_email_key(email);
+        let path = format!("/v1/{}/data/{}/users/{}", self.mount, self.base_path, key);
+        let resp = self.request(reqwest::Method::GET, &path, None).await?;
+
+        match resp.status().as_u16() {
+            200 => {
+                let json: serde_json::Value = resp.json().await?;
+                let data = &json["data"]["data"];
+                let map = data
+                    .as_object()
+                    .map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Ok(map)
+            }
+            404 => Ok(HashMap::new()), // No credentials stored yet
+            403 => Err(VaultError::Forbidden),
+            s => Err(VaultError::Parse(format!(
+                "get user credentials failed ({})",
+                s
+            ))),
+        }
+    }
+
+    /// Write a user's credential variables to Vault (full replace).
+    /// Path: `<base_path>/users/<sanitized_email>`
+    pub async fn put_user_credentials(
+        &self,
+        email: &str,
+        creds: &HashMap<String, String>,
+    ) -> Result<(), VaultError> {
+        let key = sanitize_email_key(email);
+        let path = format!("/v1/{}/data/{}/users/{}", self.mount, self.base_path, key);
+        let body = serde_json::json!({ "data": creds });
+        let resp = self
+            .request(reqwest::Method::POST, &path, Some(&body))
+            .await?;
+
+        match resp.status().as_u16() {
+            200 | 204 => Ok(()),
+            403 => Err(VaultError::Forbidden),
+            s => {
+                let text = resp.text().await.unwrap_or_default();
+                Err(VaultError::Parse(format!(
+                    "put user credentials failed ({}): {}",
+                    s, text
+                )))
+            }
+        }
+    }
+
+    /// Delete a user's credential variables from Vault.
+    #[allow(dead_code)] // Will be used by admin endpoint
+    pub async fn delete_user_credentials(&self, email: &str) -> Result<(), VaultError> {
+        let key = sanitize_email_key(email);
+        let path = format!(
+            "/v1/{}/metadata/{}/users/{}",
+            self.mount, self.base_path, key
+        );
+        let resp = self.request(reqwest::Method::DELETE, &path, None).await?;
+
+        match resp.status().as_u16() {
+            200 | 204 => Ok(()),
+            404 => Ok(()), // Already gone
+            403 => Err(VaultError::Forbidden),
+            s => Err(VaultError::Parse(format!(
+                "delete user credentials failed ({})",
+                s
+            ))),
+        }
+    }
 }
 
 /// Build a reqwest HTTP client from a VaultConfig (extracted for testability).
@@ -958,6 +1046,88 @@ fn validate_name(name: &str) -> Result<(), VaultError> {
         ));
     }
     Ok(())
+}
+
+/// Sanitize an email address for use as a Vault path component.
+/// Replaces `@` with `_at_` and strips any characters not in `[a-zA-Z0-9._-]`.
+fn sanitize_email_key(email: &str) -> String {
+    email
+        .replace('@', "_at_")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .collect()
+}
+
+/// Check if a string is a credential variable reference (starts with `$`).
+pub fn is_credential_variable(s: &str) -> bool {
+    s.starts_with('$')
+        && s.len() > 1
+        && s[1..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Extract the variable name from a `$variable` reference.
+fn variable_name(s: &str) -> Option<&str> {
+    if is_credential_variable(s) {
+        Some(&s[1..])
+    } else {
+        None
+    }
+}
+
+/// Collect all credential variable names referenced by an address book entry.
+pub fn entry_credential_variables(entry: &AddressBookEntry) -> Vec<String> {
+    [
+        &entry.username,
+        &entry.password,
+        &entry.domain,
+        &entry.private_key,
+    ]
+    .iter()
+    .filter_map(|field| field.as_deref())
+    .filter_map(variable_name)
+    .map(|s| s.to_string())
+    .collect()
+}
+
+/// Resolve credential variable references in an address book entry.
+/// Returns the entry with `$var` fields substituted from the user's credential map.
+/// Fields that are not variable references are left unchanged.
+/// Returns `Err(vec_of_missing_var_names)` if any referenced variables are missing.
+pub fn resolve_credential_variables(
+    entry: &AddressBookEntry,
+    user_creds: &HashMap<String, String>,
+) -> Result<AddressBookEntry, Vec<String>> {
+    let mut resolved = entry.clone();
+    let mut missing = Vec::new();
+
+    fn resolve_field(
+        field: &mut Option<String>,
+        creds: &HashMap<String, String>,
+        missing: &mut Vec<String>,
+    ) {
+        if let Some(ref val) = field {
+            if let Some(name) = variable_name(val) {
+                if let Some(resolved_val) = creds.get(name) {
+                    *field = Some(resolved_val.clone());
+                } else {
+                    missing.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    resolve_field(&mut resolved.username, user_creds, &mut missing);
+    resolve_field(&mut resolved.password, user_creds, &mut missing);
+    resolve_field(&mut resolved.domain, user_creds, &mut missing);
+    resolve_field(&mut resolved.private_key, user_creds, &mut missing);
+
+    if missing.is_empty() {
+        Ok(resolved)
+    } else {
+        Err(missing)
+    }
 }
 
 #[cfg(test)]
@@ -1352,5 +1522,79 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_sanitize_email_key() {
+        assert_eq!(
+            sanitize_email_key("alice@example.com"),
+            "alice_at_example.com"
+        );
+        assert_eq!(sanitize_email_key("bob+tag@foo.co"), "bobtag_at_foo.co");
+        assert_eq!(sanitize_email_key("../../evil"), "....evil");
+    }
+
+    #[test]
+    fn test_is_credential_variable() {
+        assert!(is_credential_variable("$corp_user"));
+        assert!(is_credential_variable("$lab_password"));
+        assert!(is_credential_variable("$x"));
+        assert!(!is_credential_variable("$"));
+        assert!(!is_credential_variable("plain_text"));
+        assert!(!is_credential_variable(""));
+        assert!(!is_credential_variable("$has spaces"));
+        assert!(!is_credential_variable("$has-dashes"));
+    }
+
+    #[test]
+    fn test_entry_credential_variables() {
+        let mut entry = AddressBookEntry::default();
+        entry.username = Some("$corp_user".into());
+        entry.password = Some("$corp_password".into());
+        entry.domain = Some("CORP".into()); // literal, not a variable
+        let vars = entry_credential_variables(&entry);
+        assert_eq!(vars, vec!["corp_user", "corp_password"]);
+    }
+
+    #[test]
+    fn test_resolve_credential_variables_success() {
+        let mut entry = AddressBookEntry::default();
+        entry.username = Some("$corp_user".into());
+        entry.password = Some("$corp_password".into());
+        entry.domain = Some("CORP".into());
+        entry.hostname = Some("rdp.example.com".into());
+
+        let mut creds = HashMap::new();
+        creds.insert("corp_user".into(), "alice".into());
+        creds.insert("corp_password".into(), "s3cret".into());
+
+        let resolved = resolve_credential_variables(&entry, &creds).unwrap();
+        assert_eq!(resolved.username.as_deref(), Some("alice"));
+        assert_eq!(resolved.password.as_deref(), Some("s3cret"));
+        assert_eq!(resolved.domain.as_deref(), Some("CORP")); // unchanged
+        assert_eq!(resolved.hostname.as_deref(), Some("rdp.example.com")); // unchanged
+    }
+
+    #[test]
+    fn test_resolve_credential_variables_missing() {
+        let mut entry = AddressBookEntry::default();
+        entry.username = Some("$corp_user".into());
+        entry.password = Some("$corp_password".into());
+
+        let creds = HashMap::new(); // empty
+        let err = resolve_credential_variables(&entry, &creds).unwrap_err();
+        assert_eq!(err, vec!["corp_user", "corp_password"]);
+    }
+
+    #[test]
+    fn test_resolve_credential_variables_no_variables() {
+        let mut entry = AddressBookEntry::default();
+        entry.username = Some("alice".into());
+        entry.password = Some("literal_pass".into());
+
+        let creds = HashMap::new();
+        let resolved = resolve_credential_variables(&entry, &creds).unwrap();
+        assert_eq!(resolved.username.as_deref(), Some("alice"));
+        assert_eq!(resolved.password.as_deref(), Some("literal_pass"));
     }
 }

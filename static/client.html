@@ -202,6 +202,18 @@
 
             var tunnel = new Guacamole.WebSocketTunnel(wsUrl);
             var client = new Guacamole.Client(tunnel);
+
+            // Wrap tunnel.oninstruction to log unique opcodes from guacd (diagnostic)
+            var seenOpcodes = {};
+            var origOnInstruction = tunnel.oninstruction;
+            tunnel.oninstruction = function(opcode, args) {
+                if (!seenOpcodes[opcode]) {
+                    seenOpcodes[opcode] = true;
+                    if (typeof console !== 'undefined') console.log('[rustguac] instruction: ' + opcode + (args.length ? ' (' + args.length + ' args)' : ''));
+                }
+                if (origOnInstruction) origOnInstruction(opcode, args);
+            };
+
             var displayEl = document.getElementById('display');
             displayEl.appendChild(client.getDisplay().getElement());
 
@@ -343,11 +355,14 @@
                 scaleDisplay();
             }
 
-            // ── Auto-sync clipboard on window focus (Chrome only, silent fail) ──
+            // ── Auto-sync clipboard on window focus ──
             window.addEventListener('focus', function() {
-                if (!panelOpen && navigator.clipboard && navigator.clipboard.readText && !/Firefox/i.test(navigator.userAgent)) {
+                if (!panelOpen && navigator.clipboard && navigator.clipboard.readText) {
                     navigator.clipboard.readText().then(function(text) {
-                        if (text && text !== remoteClipboard) sendClipboardToRemote(text);
+                        if (text && text !== remoteClipboard) {
+                            sendClipboardToRemote(text);
+                            remoteClipboard = text;
+                        }
                     }).catch(function() {});
                 }
             });
@@ -735,6 +750,38 @@
                     if (now - lastToggleTime < 500) return; // debounce
                     lastToggleTime = now;
                     toggleClipboardPanel();
+                }
+            }, true);
+
+            // ── Ctrl+V clipboard sync ──
+            // Intercept Ctrl+V (capture on document, fires before Guacamole's
+            // handler on displayEl). Reads browser clipboard, syncs to remote,
+            // then sends key events. Firefox shows a one-time permission popup.
+            var _pasteIntercepted = false;
+            document.addEventListener('keydown', function(e) {
+                if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V') && !e.altKey && !e.repeat && !panelOpen) {
+                    if (navigator.clipboard && navigator.clipboard.readText) {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        _pasteIntercepted = true;
+                        navigator.clipboard.readText().then(function(text) {
+                            if (text && text !== remoteClipboard) {
+                                sendClipboardToRemote(text);
+                                remoteClipboard = text;
+                            }
+                        }).catch(function() {}).finally(function() {
+                            // Send Ctrl+V key events to remote after clipboard sync
+                            client.sendKeyEvent(1, 0x76); // v down
+                            client.sendKeyEvent(0, 0x76); // v up
+                        });
+                    }
+                }
+            }, true);
+            document.addEventListener('keyup', function(e) {
+                if (_pasteIntercepted && (e.key === 'v' || e.key === 'V')) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    _pasteIntercepted = false;
                 }
             }, true);
 

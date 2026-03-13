@@ -252,6 +252,12 @@ pub struct Config {
     #[serde(default = "default_localhost_networks")]
     pub web_allowed_networks: Vec<String>,
 
+    /// Enable API rate limiting. Default: false.
+    /// When behind a reverse proxy (HAProxy, nginx) or access gateway (KnockNoc),
+    /// rate limiting is typically handled upstream and not needed here.
+    #[serde(default)]
+    pub rate_limit: bool,
+
     /// Trusted proxy CIDRs. When the connecting IP matches one of these,
     /// the first address in X-Forwarded-For is used as the real client IP.
     #[serde(default)]
@@ -805,6 +811,7 @@ impl Default for Config {
             rdp_allowed_networks: default_localhost_networks(),
             vnc_allowed_networks: default_localhost_networks(),
             web_allowed_networks: default_localhost_networks(),
+            rate_limit: false,
             trusted_proxies: Vec::new(),
             tls: None,
             oidc: None,

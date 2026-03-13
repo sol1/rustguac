@@ -229,10 +229,12 @@ pub async fn auth_status(
     Extension(oidc_enabled): Extension<OidcEnabled>,
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
+    Extension(drive_configured): Extension<DriveConfigured>,
 ) -> impl IntoResponse {
     let mut resp = json!({
         "oidc_enabled": oidc_enabled.0,
         "site_title": site_title.0,
+        "drive_configured": drive_configured.0,
     });
     resp["theme"] = json!({
         "admin_preset": theme.admin_preset,
@@ -270,6 +272,10 @@ pub struct OidcEnabled(pub bool);
 /// Distinct from VaultState which tracks whether it's currently connected.
 #[derive(Clone)]
 pub struct VaultConfigured(pub bool);
+
+/// Marker for whether [drive] is configured.
+#[derive(Clone)]
+pub struct DriveConfigured(pub bool);
 
 /// GET /api/recordings — List all recording files. All authenticated roles.
 pub async fn list_recordings(State(manager): State<AppState>) -> impl IntoResponse {
@@ -1217,6 +1223,41 @@ pub async fn ab_connect_entry(
         }
     };
 
+    // Resolve credential variable references ($domain_user, $domain_password, etc.)
+    let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
+        let user_email = match &id {
+            AuthIdentity::User { email, .. } => Some(email.clone()),
+            _ => None,
+        };
+        if let Some(email) = user_email {
+            match vault.get_user_credentials(&email).await {
+                Ok(user_creds) => {
+                    match crate::vault::resolve_credential_variables(&ab_entry, &user_creds) {
+                        Ok(resolved) => resolved,
+                        Err(missing) => {
+                            return (
+                                StatusCode::PRECONDITION_FAILED,
+                                Json(json!({
+                                    "error": "missing credential variables",
+                                    "missing_variables": missing,
+                                })),
+                            )
+                                .into_response()
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read user credentials from Vault: {}", e);
+                    ab_entry // Fall through with unresolved variables
+                }
+            }
+        } else {
+            ab_entry // API key users — no variable resolution
+        }
+    } else {
+        ab_entry
+    };
+
     // Map address book entry type to SessionType
     let session_type = match ab_entry.session_type.as_str() {
         "ssh" => SessionType::Ssh,
@@ -1901,6 +1942,241 @@ pub async fn revoke_my_token(
     }
 }
 
+// ── User credential variables ──
+
+/// GET /api/me/credentials — List own credential variables (names and masked values).
+pub async fn get_my_credentials(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(vault): Extension<VaultState>,
+) -> impl IntoResponse {
+    let email = match identity {
+        Some(Extension(AuthIdentity::User { ref email, .. })) => email.clone(),
+        _ => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "OIDC authentication required"})),
+            )
+                .into_response()
+        }
+    };
+
+    let vault = match require_vault(&vault).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    match vault.get_user_credentials(&email).await {
+        Ok(creds) => {
+            // Return variable names with masked values (indicate set vs unset)
+            let masked: serde_json::Map<String, serde_json::Value> = creds
+                .iter()
+                .map(|(k, v)| {
+                    let display = if v.is_empty() {
+                        "".to_string()
+                    } else if k.ends_with("_password") || k.ends_with("_key") {
+                        "••••••••".to_string()
+                    } else {
+                        v.clone()
+                    };
+                    (
+                        k.clone(),
+                        json!({ "set": !v.is_empty(), "display": display }),
+                    )
+                })
+                .collect();
+            Json(json!({ "credentials": masked })).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": format!("Failed to read credentials: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// PUT /api/me/credentials — Save credential variables. Operator+ required.
+pub async fn put_my_credentials(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(vault): Extension<VaultState>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let email = match identity {
+        Some(Extension(AuthIdentity::User {
+            ref email,
+            ref role,
+            ..
+        })) if role_level(role) >= role_level("operator") => email.clone(),
+        Some(Extension(AuthIdentity::User { .. })) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "operator role required"})),
+            )
+                .into_response()
+        }
+        _ => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "OIDC authentication required"})),
+            )
+                .into_response()
+        }
+    };
+
+    let vault = match require_vault(&vault).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // Expect { "credentials": { "corp_user": "alice", "corp_password": "secret", ... } }
+    let creds_val = match body.get("credentials") {
+        Some(v) => v,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "missing 'credentials' field"})),
+            )
+                .into_response()
+        }
+    };
+
+    let creds_obj = match creds_val.as_object() {
+        Some(obj) => obj,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "'credentials' must be an object"})),
+            )
+                .into_response()
+        }
+    };
+
+    // Validate variable names: [a-z0-9_-]+
+    let mut creds = std::collections::HashMap::new();
+    for (k, v) in creds_obj {
+        if !k
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid variable name '{}': use lowercase alphanumeric, underscores and hyphens", k)})),
+            )
+                .into_response();
+        }
+        let val = v.as_str().unwrap_or("").to_string();
+        creds.insert(k.clone(), val);
+    }
+
+    // Merge with existing credentials (so partial updates work)
+    match vault.get_user_credentials(&email).await {
+        Ok(mut existing) => {
+            for (k, v) in &creds {
+                if v.is_empty() {
+                    existing.remove(k); // Empty value = delete
+                } else {
+                    existing.insert(k.clone(), v.clone());
+                }
+            }
+            creds = existing;
+        }
+        Err(VaultError::NotFound) => {} // No existing, use new
+        Err(e) => {
+            tracing::warn!("Failed to read existing credentials: {}", e);
+        }
+    }
+
+    match vault.put_user_credentials(&email, &creds).await {
+        Ok(()) => {
+            tracing::info!(user = %email, count = creds.len(), "User credentials updated");
+            Json(json!({"ok": true, "count": creds.len()})).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": format!("Failed to save credentials: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/credential-variables — List all unique credential variables across address book entries.
+/// Returns grouped by domain prefix, with entry counts.
+pub async fn list_credential_variables(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(vault): Extension<VaultState>,
+) -> impl IntoResponse {
+    let id = match identity {
+        Some(Extension(ref id)) if id.has_role("operator") => id.clone(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "operator role required"})),
+            )
+                .into_response()
+        }
+    };
+
+    let vault = match require_vault(&vault).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // Scan all accessible folders and entries for variable references
+    let folders = match vault.list_folders().await {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("Failed to list folders: {}", e)})),
+            )
+                .into_response()
+        }
+    };
+
+    let mut all_vars: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+
+    for folder in &folders {
+        // Check folder access for this user
+        if check_folder_access(&vault, &folder.scope, &folder.name, &id)
+            .await
+            .is_err()
+        {
+            continue;
+        }
+
+        let entries = match vault.list_entries(&folder.scope, &folder.name).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry_name in &entries {
+            if let Ok(entry) = vault
+                .get_entry(&folder.scope, &folder.name, entry_name)
+                .await
+            {
+                for var in crate::vault::entry_credential_variables(&entry) {
+                    *all_vars.entry(var).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    // Group by domain prefix (everything before the last _user/_password/_domain/_key suffix)
+    let mut domains: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for (var, count) in &all_vars {
+        let domain = var
+            .rsplit_once('_')
+            .map(|(prefix, _suffix)| prefix.to_string())
+            .unwrap_or_else(|| var.clone());
+        domains
+            .entry(domain)
+            .or_default()
+            .push(json!({"name": var, "entry_count": count}));
+    }
+
+    Json(json!({ "variables": all_vars, "domains": domains })).into_response()
+}
+
 /// POST /api/admin/user-tokens — Admin creates a token for any user.
 pub async fn admin_create_user_token(
     identity: Option<Extension<AuthIdentity>>,
@@ -2299,6 +2575,40 @@ pub async fn quick_connect(
                     &format!("Failed to read address book entry: {}", e),
                 );
             }
+        };
+
+        // Resolve credential variable references
+        let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
+            let user_email = match &id {
+                AuthIdentity::User { email, .. } => Some(email.clone()),
+                _ => None,
+            };
+            if let Some(email) = user_email {
+                match vault.get_user_credentials(&email).await {
+                    Ok(user_creds) => {
+                        match crate::vault::resolve_credential_variables(&ab_entry, &user_creds) {
+                            Ok(resolved) => resolved,
+                            Err(missing) => {
+                                return quick_connect_error(
+                                    StatusCode::PRECONDITION_FAILED,
+                                    &format!(
+                                        "Missing credential variables: {}. Set them in My Credentials.",
+                                        missing.join(", ")
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to read user credentials from Vault: {}", e);
+                        ab_entry
+                    }
+                }
+            } else {
+                ab_entry
+            }
+        } else {
+            ab_entry
         };
 
         // Check if we need to prompt for credentials before connecting

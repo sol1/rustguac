@@ -56,7 +56,9 @@ RUN /build/guacamole-server/configure \
         --disable-guaclog \
         --disable-static \
     && make -j"$(nproc)" \
-    && make install
+    && make install \
+    && mkdir -p /opt/rustguac/lib/freerdp3 \
+    && find /usr/lib -path "*/freerdp3/libguac*" -exec cp {} /opt/rustguac/lib/freerdp3/ \;
 
 # ---------------------------------------------------------------------------
 # Stage 2: Build rustguac
@@ -87,7 +89,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfreerdp3-3 libfreerdp-client3-3 libwinpr3-3 \
     # Xvnc + Chromium for web browser sessions
     tigervnc-standalone-server \
-    chromium \
+    chromium chromium-sandbox \
     x11-utils \
     # Minimal runtime utilities
     ca-certificates \
@@ -105,6 +107,16 @@ COPY static/ /opt/rustguac/static/
 
 # Library path for guacd
 RUN echo "/opt/rustguac/lib" > /etc/ld.so.conf.d/rustguac.conf && ldconfig
+
+# Symlink FreeRDP plugins (RDPDR/drive, audio) into the system FreeRDP plugin dir.
+# guacamole-server builds these plugins but installs them relative to the system
+# FreeRDP path — we copy them under our prefix in the builder, then symlink here.
+RUN FREERDP_DIR=$(find /usr/lib -name "freerdp3" -type d 2>/dev/null | head -1) && \
+    if [ -n "$FREERDP_DIR" ] && [ -d /opt/rustguac/lib/freerdp3 ]; then \
+        for f in /opt/rustguac/lib/freerdp3/*.so*; do \
+            ln -sf "$f" "$FREERDP_DIR/$(basename "$f")"; \
+        done; \
+    fi
 
 # Create writable runtime directories
 RUN mkdir -p /opt/rustguac/data /opt/rustguac/recordings /opt/rustguac/tls \
@@ -174,7 +186,8 @@ fi
 
 # Start guacd in background
 echo "Starting guacd..."
-LD_LIBRARY_PATH=/opt/rustguac/lib /opt/rustguac/sbin/guacd \
+LD_LIBRARY_PATH=/opt/rustguac/lib FREERDP_ADDIN_PATH=/opt/rustguac/lib/freerdp3 \
+    /opt/rustguac/sbin/guacd \
     -b 127.0.0.1 -l 4822 -L "${GUACD_LOG_LEVEL:-info}" -f \
     -C /opt/rustguac/tls/cert.pem -K /opt/rustguac/tls/key.pem &
 GUACD_PID=$!

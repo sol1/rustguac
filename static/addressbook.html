@@ -8,7 +8,7 @@
         body { font-family: monospace; background-color: var(--bg); background-image: var(--bg-pattern); background-attachment: fixed; min-height: 100vh; color: var(--text); padding: 2em; font-size: 18px; }
         h1 { color: var(--primary); }
         a { color: var(--accent); }
-        nav { margin-bottom: 1.5em; font-size: 0.95em; }
+        nav { margin-top: 0.8em; margin-bottom: 1.5em; padding-bottom: 0.8em; border-bottom: 1px solid var(--border); font-size: 0.95em; }
         nav a { margin-right: 1.5em; text-decoration: none; }
         nav a:hover { text-decoration: underline; }
         nav .active { color: var(--primary); font-weight: bold; }
@@ -155,6 +155,10 @@
         .modal-actions .btn-cancel:hover { background: #444; }
 
         .field-hint { font-size: 0.8em; color: var(--text-dim); margin-top: 0.2em; }
+        .pw-wrap { position: relative; }
+        .pw-wrap input { padding-right: 2.2em; }
+        .pw-toggle { position: absolute; right: 0.4em; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.85em; padding: 0.2em; line-height: 1; width: auto; }
+        .pw-toggle:hover { color: var(--text); }
 
         /* Hop cards */
         .hop-card {
@@ -254,7 +258,7 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
-        <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881;</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item um-logout" id="logout-item">Logout</div></div></span>
+        <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881;</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item" id="my-creds-item">&#128273; My Credentials</div><div class="um-divider"></div><div class="um-item um-logout" id="logout-item">Logout</div></div></span>
     </nav>
 
     <div id="global-error"></div>
@@ -362,7 +366,7 @@
                     <input type="text" id="em-username">
                 </label>
                 <label>Password
-                    <input type="password" id="em-password">
+                    <div class="pw-wrap"><input type="password" id="em-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
                 </label>
                 <label>Private key (PEM)
                     <textarea id="em-private-key" rows="3" style="resize:vertical;font-size:0.85em" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
@@ -383,7 +387,7 @@
                     <input type="text" id="em-rdp-username">
                 </label>
                 <label>Password
-                    <input type="password" id="em-rdp-password">
+                    <div class="pw-wrap"><input type="password" id="em-rdp-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
                 </label>
                 <label>Domain
                     <input type="text" id="em-rdp-domain">
@@ -425,7 +429,7 @@
                     <input type="number" id="em-vnc-port" value="5900">
                 </label>
                 <label>Password
-                    <input type="password" id="em-vnc-password">
+                    <div class="pw-wrap"><input type="password" id="em-vnc-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
                 </label>
                 <label>Color depth
                     <select id="em-vnc-color-depth">
@@ -459,7 +463,7 @@
                             <input type="text" id="em-web-username" placeholder="For URL substitution or login script">
                         </label>
                         <label>Password <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
-                            <input type="password" id="em-web-password">
+                            <div class="pw-wrap"><input type="password" id="em-web-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
                         </label>
                         <label>Login Script <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
                             <select id="em-login-script">
@@ -512,6 +516,7 @@
                 <label>
                     <input type="checkbox" id="em-enable-drive" style="display:inline;width:auto;margin-right:0.4em"> Enable file transfer
                     <div style="color:#888;font-size:0.75em;margin-top:0.2em;">RDP: mounts a shared drive. SSH: enables SFTP file browser.</div>
+                    <div id="em-drive-warning" style="display:none;color:var(--primary);font-size:0.8em;margin-top:0.3em">Server has no [drive] section in config — file transfer will not work. See <a href="/docs.html" style="color:var(--accent)">Docs</a> for setup instructions.</div>
                 </label>
             </div>
             <div id="em-recording-section" style="display:none;margin-top:0.8em;padding-top:0.8em;border-top:1px solid var(--border)">
@@ -571,6 +576,21 @@
     </div>
 
     <!-- Credential prompt modal -->
+    <div class="modal-overlay" id="my-creds-modal">
+        <div class="modal" style="max-width:500px">
+            <h3>My Credentials</h3>
+            <p style="color:var(--text-muted);font-size:0.85em;margin-top:0">Store your credentials securely in Vault. Address book entries that use credential variables will auto-fill from these values.</p>
+            <div id="my-creds-loading" style="color:var(--text-muted)">Loading...</div>
+            <div id="my-creds-empty" style="display:none;color:var(--text-muted);font-style:italic;margin:1em 0">No credential variables configured in address book entries yet.</div>
+            <div id="my-creds-list"></div>
+            <div id="my-creds-error" style="color:var(--primary);margin-top:0.5em"></div>
+            <div class="modal-actions">
+                <button class="btn-connect" id="my-creds-save">Save</button>
+                <button class="btn-cancel" id="my-creds-close">Close</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="cred-modal">
         <div class="modal">
             <h3 id="cred-modal-title">Enter Credentials</h3>
@@ -597,13 +617,16 @@
     </div>
 
     <script>
+        function togglePw(btn){var inp=btn.previousElementSibling;if(inp.type==='password'){inp.type='text';btn.textContent='\u25CB'}else{inp.type='password';btn.textContent='\u25CF'}}
         function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
         var _themePresets={},_adminPreset='dark';
         var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',aurora:'Midnight blue with ambient glow',jaguar:'Racing green & gold'};
-        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'dark';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
+        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'dark';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){if(l.src!==t.logo_url&&!l.src.endsWith(t.logo_url))l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
         var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
+        var _driveConfigured = false;
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             if(d.site_title){document.title=d.site_title+' - Address Book';document.querySelector('h1').textContent=d.site_title;}
+            _driveConfigured = !!d.drive_configured;
             initTheme(d.theme);
         });
         var apiKey = sessionStorage.getItem('rustguac_api_key');
@@ -956,14 +979,28 @@
                 body: JSON.stringify(body)
             })
             .then(function(res) {
-                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                if (!res.ok) {
+                    if (res.status === 412) {
+                        return res.json().then(function(j) {
+                            var err = new Error('missing_credentials');
+                            err.missing = j.missing_variables || [];
+                            throw err;
+                        });
+                    }
+                    return res.text().then(function(t) { throw new Error(t); });
+                }
                 return res.json();
             })
             .then(function(data) {
                 window.open(data.client_url, '_blank');
             })
             .catch(function(err) {
-                showError(err.message);
+                if (err.message === 'missing_credentials') {
+                    showError('Missing credentials: ' + (err.missing || []).join(', ') + '. Set them in My Credentials (⚙ menu).');
+                    openMyCredentials();
+                } else {
+                    showError(err.message);
+                }
             })
             .finally(function() {
                 btn.disabled = false;
@@ -1291,6 +1328,10 @@
         });
 
         // Toggle Autofill fields visibility
+        document.getElementById('em-enable-drive').addEventListener('change', function() {
+            var warn = document.getElementById('em-drive-warning');
+            warn.style.display = (this.checked && !_driveConfigured) ? '' : 'none';
+        });
         document.getElementById('em-automation-toggle').addEventListener('click', function() {
             var fields = document.getElementById('em-automation-fields');
             var arrow = document.getElementById('em-automation-arrow');
@@ -1604,6 +1645,7 @@
             document.getElementById('em-disable-copy').checked = false;
             document.getElementById('em-disable-paste').checked = false;
             document.getElementById('em-enable-drive').checked = false;
+            document.getElementById('em-drive-warning').style.display = 'none';
             document.getElementById('em-remote-app').value = '';
             document.getElementById('em-remote-app-dir').value = '';
             document.getElementById('em-remote-app-args').value = '';
@@ -1718,6 +1760,7 @@
                 }
                 if (type === 'ssh' || type === 'rdp') {
                     document.getElementById('em-enable-drive').checked = !!entryData.enable_drive;
+                    document.getElementById('em-drive-warning').style.display = (entryData.enable_drive && !_driveConfigured) ? '' : 'none';
                 }
                 // Populate RemoteApp fields (RDP)
                 if (type === 'rdp' && (entryData.remote_app || entryData.remote_app_dir || entryData.remote_app_args)) {
@@ -1982,6 +2025,155 @@
                 });
             }
         });
+
+        // ── My Credentials ──
+        document.getElementById('my-creds-item').addEventListener('click', function() {
+            document.getElementById('user-menu').style.display = 'none';
+            openMyCredentials();
+        });
+        document.getElementById('my-creds-close').addEventListener('click', function() {
+            document.getElementById('my-creds-modal').classList.remove('active');
+        });
+        document.getElementById('my-creds-save').addEventListener('click', saveMyCredentials);
+
+        function openMyCredentials() {
+            var modal = document.getElementById('my-creds-modal');
+            var list = document.getElementById('my-creds-list');
+            var loading = document.getElementById('my-creds-loading');
+            var empty = document.getElementById('my-creds-empty');
+            var errEl = document.getElementById('my-creds-error');
+            list.innerHTML = '';
+            loading.style.display = '';
+            empty.style.display = 'none';
+            errEl.textContent = '';
+            modal.classList.add('active');
+
+            // Fetch required variables and user's current values in parallel
+            Promise.all([
+                fetch('/api/credential-variables', { headers: apiHeaders(), credentials: 'same-origin' }).then(function(r) { return r.json(); }),
+                fetch('/api/me/credentials', { headers: apiHeaders(), credentials: 'same-origin' }).then(function(r) { return r.json(); })
+            ]).then(function(results) {
+                loading.style.display = 'none';
+                var varsData = results[0];
+                var credsData = results[1];
+                var allVars = varsData.variables || {};
+                var domains = varsData.domains || {};
+                var saved = credsData.credentials || {};
+                var varNames = Object.keys(allVars).sort();
+
+                if (varNames.length === 0) {
+                    empty.style.display = '';
+                    return;
+                }
+
+                // Group by domain prefix
+                var domainKeys = Object.keys(domains).sort();
+                domainKeys.forEach(function(domain) {
+                    var heading = document.createElement('div');
+                    heading.style.cssText = 'color:var(--accent);font-weight:bold;margin-top:1em;margin-bottom:0.3em;font-size:0.95em;text-transform:uppercase';
+                    heading.textContent = domain;
+                    list.appendChild(heading);
+
+                    var vars = domains[domain].sort(function(a, b) {
+                        // username before password before key before other
+                        function suffixOrder(n) {
+                            if (n.endsWith('_username')) return 0;
+                            if (n.endsWith('_password')) return 1;
+                            if (n.endsWith('_domain')) return 2;
+                            if (n.endsWith('_key')) return 3;
+                            return 4;
+                        }
+                        var oa = suffixOrder(a.name), ob = suffixOrder(b.name);
+                        return oa !== ob ? oa - ob : a.name.localeCompare(b.name);
+                    });
+                    vars.forEach(function(v) {
+                        var name = v.name;
+                        var isSecret = name.endsWith('_password') || name.endsWith('_key');
+                        var row = document.createElement('label');
+                        row.style.cssText = 'display:block;margin-top:0.5em;color:var(--text-muted);font-size:0.9em';
+                        var displayName = name.replace(domain + '_', '');
+                        row.textContent = displayName;
+                        var hint = document.createElement('span');
+                        hint.style.cssText = 'color:var(--text-dim);font-size:0.8em;margin-left:0.5em';
+                        hint.textContent = '(' + v.entry_count + ' ' + (v.entry_count === 1 ? 'entry' : 'entries') + ')';
+                        row.appendChild(hint);
+
+                        var input;
+                        if (name.endsWith('_key')) {
+                            input = document.createElement('textarea');
+                            input.rows = 3;
+                            input.placeholder = 'Paste SSH private key';
+                        } else {
+                            input = document.createElement('input');
+                            input.type = isSecret ? 'password' : 'text';
+                            input.placeholder = isSecret ? '••••••••' : '';
+                        }
+                        input.setAttribute('data-var', name);
+                        input.className = 'my-cred-input';
+
+                        // Pre-fill with saved value (non-secret) or leave blank (secret shows placeholder)
+                        var sv = saved[name];
+                        if (sv) {
+                            if (isSecret) {
+                                input.placeholder = '(saved — leave blank to keep)';
+                            } else {
+                                input.value = sv.display || '';
+                            }
+                        }
+
+                        row.appendChild(input);
+                        list.appendChild(row);
+                    });
+                });
+            }).catch(function(err) {
+                loading.style.display = 'none';
+                errEl.textContent = 'Failed to load: ' + err.message;
+            });
+        }
+
+        function saveMyCredentials() {
+            var inputs = document.querySelectorAll('.my-cred-input');
+            var creds = {};
+            var hasChanges = false;
+            inputs.forEach(function(el) {
+                var name = el.getAttribute('data-var');
+                var val = el.value.trim();
+                if (val) {
+                    creds[name] = val;
+                    hasChanges = true;
+                }
+            });
+            if (!hasChanges) {
+                document.getElementById('my-creds-modal').classList.remove('active');
+                return;
+            }
+            var errEl = document.getElementById('my-creds-error');
+            var btn = document.getElementById('my-creds-save');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+            errEl.textContent = '';
+
+            fetch('/api/me/credentials', {
+                method: 'PUT',
+                headers: apiHeaders({ 'Content-Type': 'application/json' }),
+                credentials: 'same-origin',
+                body: JSON.stringify({ credentials: creds })
+            })
+            .then(function(res) {
+                if (!res.ok) return res.json().then(function(j) { throw new Error(j.error || 'Save failed'); });
+                return res.json();
+            })
+            .then(function() {
+                document.getElementById('my-creds-modal').classList.remove('active');
+            })
+            .catch(function(err) {
+                errEl.textContent = err.message;
+            })
+            .finally(function() {
+                btn.disabled = false;
+                btn.textContent = 'Save';
+            });
+        }
 
         init();
     </script>

@@ -14,7 +14,9 @@ mod tunnel;
 mod vault;
 mod websocket;
 
-use crate::api::{AppState, OidcEnabled, SiteTitle, ThemeData, VaultConfigured, VaultState};
+use crate::api::{
+    AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultConfigured, VaultState,
+};
 use crate::config::Config;
 use crate::db::Db;
 use crate::session::SessionManager;
@@ -583,6 +585,7 @@ async fn run_server(config: Config, database: Db) {
 
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
     let vault_configured = VaultConfigured(config.vault.is_some());
+    let drive_configured = DriveConfigured(config.drive.is_some());
     let site_title = SiteTitle(config.site_title.clone());
     let theme_data = {
         let (admin_preset, admin_colors) = config
@@ -671,6 +674,7 @@ async fn run_server(config: Config, database: Db) {
 
     // Build TLS connector for guacd if configured
     let guacd_tls = build_guacd_tls(&config);
+    let rate_limit_enabled = config.rate_limit;
 
     // Create session manager
     let manager: AppState = Arc::new(SessionManager::new(config, guacd_tls));
@@ -717,36 +721,27 @@ async fn run_server(config: Config, database: Db) {
         }
     }
 
-    // Rate limit configs
-    let api_governor_conf = GovernorConfigBuilder::default()
-        .per_second(20)
-        .burst_size(100)
-        .key_extractor(SmartIpKeyExtractor)
-        .finish()
-        .expect("Failed to build API rate limit config");
+    // Rate limiting (disabled by default — handle upstream in reverse proxy)
+    if rate_limit_enabled {
+        tracing::info!("API rate limiting enabled");
+    }
 
-    let session_create_governor_conf = GovernorConfigBuilder::default()
-        .per_second(2)
-        .burst_size(10)
-        .key_extractor(SmartIpKeyExtractor)
-        .finish()
-        .expect("Failed to build session creation rate limit config");
-
-    let ws_governor_conf = GovernorConfigBuilder::default()
-        .per_second(5)
-        .burst_size(50)
-        .key_extractor(SmartIpKeyExtractor)
-        .finish()
-        .expect("Failed to build WebSocket rate limit config");
-
-    // Session creation route with extra rate limit layer
-    let session_create_route = Router::new()
+    // Session creation route (rate-limited only when enabled)
+    let mut session_create_route = Router::new()
         .route("/api/sessions", post(api::create_session))
-        .with_state(manager.clone())
-        .layer(GovernorLayer::new(session_create_governor_conf));
+        .with_state(manager.clone());
+    if rate_limit_enabled {
+        let conf = GovernorConfigBuilder::default()
+            .per_second(2)
+            .burst_size(10)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .expect("Failed to build session creation rate limit config");
+        session_create_route = session_create_route.layer(GovernorLayer::new(conf));
+    }
 
     // API routes that require authentication
-    let api_routes = Router::new()
+    let mut api_routes = Router::new()
         .route("/api/sessions", get(api::list_sessions))
         .route("/api/sessions/{id}", get(api::get_session))
         .route("/api/sessions/{id}", delete(api::delete_session))
@@ -777,6 +772,13 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/me/tokens", get(api::list_my_tokens))
         .route("/api/me/tokens", post(api::create_my_token))
         .route("/api/me/tokens/{id}", delete(api::revoke_my_token))
+        // User credential variables
+        .route("/api/me/credentials", get(api::get_my_credentials))
+        .route("/api/me/credentials", put(api::put_my_credentials))
+        .route(
+            "/api/credential-variables",
+            get(api::list_credential_variables),
+        )
         // Admin token management
         .route("/api/admin/user-tokens", get(api::admin_list_user_tokens))
         .route("/api/admin/user-tokens", post(api::admin_create_user_token))
@@ -820,18 +822,36 @@ async fn run_server(config: Config, database: Db) {
             post(api::ab_connect_entry),
         )
         .merge(session_create_route)
-        .with_state(manager.clone())
-        .layer(GovernorLayer::new(api_governor_conf))
+        .with_state(manager.clone());
+    if rate_limit_enabled {
+        let conf = GovernorConfigBuilder::default()
+            .per_second(20)
+            .burst_size(100)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .expect("Failed to build API rate limit config");
+        api_routes = api_routes.layer(GovernorLayer::new(conf));
+    }
+    let api_routes = api_routes
         .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(database.clone()));
 
-    // WebSocket route with optional auth and rate limiting
-    let ws_route = Router::new()
+    // WebSocket route with optional auth
+    let mut ws_route = Router::new()
         .route("/ws/{session_id}", get(websocket::ws_handler))
-        .with_state(manager.clone())
-        .layer(GovernorLayer::new(ws_governor_conf))
+        .with_state(manager.clone());
+    if rate_limit_enabled {
+        let conf = GovernorConfigBuilder::default()
+            .per_second(5)
+            .burst_size(50)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .expect("Failed to build WebSocket rate limit config");
+        ws_route = ws_route.layer(GovernorLayer::new(conf));
+    }
+    let ws_route = ws_route
         .layer(middleware::from_fn(auth::optional_auth))
         .layer(Extension(database.clone()));
 
@@ -905,6 +925,7 @@ async fn run_server(config: Config, database: Db) {
         .layer(middleware::from_fn(security_headers))
         .layer(Extension(tls_enabled))
         .layer(Extension(oidc_enabled))
+        .layer(Extension(drive_configured))
         .layer(Extension(site_title))
         .layer(Extension(theme_data))
         .layer(Extension(trusted_proxies))

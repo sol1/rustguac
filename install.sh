@@ -81,7 +81,7 @@ install_deps() {
     # Xvnc and Chromium for web browser sessions
     apt-get install -y \
         tigervnc-standalone-server \
-        chromium \
+        chromium chromium-sandbox \
         x11-utils
 
     # Runtime utilities
@@ -186,6 +186,25 @@ build_guacd() {
 
     info "Installing guacd to $PREFIX..."
     make install
+
+    # Verify FreeRDP plugins were installed (required for drive redirection + audio)
+    local freerdp_plugin_dir
+    freerdp_plugin_dir=$(pkg-config --variable=libdir freerdp3 2>/dev/null || pkg-config --variable=libdir freerdp2 2>/dev/null)/freerdp3
+    if [[ -d "$freerdp_plugin_dir" ]]; then
+        local plugin_count
+        plugin_count=$(find "$freerdp_plugin_dir" -name "libguac*" 2>/dev/null | wc -l)
+        if [[ "$plugin_count" -gt 0 ]]; then
+            info "FreeRDP plugins installed to $freerdp_plugin_dir ($plugin_count plugins)"
+        else
+            warn "FreeRDP plugins NOT found in $freerdp_plugin_dir — drive redirection will not work"
+            # Try to copy from the build
+            if [[ -d "$BUILD_DIR/guacd-build/src/protocols/rdp/.libs" ]]; then
+                info "Copying FreeRDP plugins manually..."
+                cp -a "$BUILD_DIR/guacd-build/src/protocols/rdp/.libs"/libguac-common-svc-client*.so* "$freerdp_plugin_dir/" 2>/dev/null || true
+                cp -a "$BUILD_DIR/guacd-build/src/protocols/rdp/.libs"/libguacai-client*.so* "$freerdp_plugin_dir/" 2>/dev/null || true
+            fi
+        fi
+    fi
 
     info "guacd installed: $PREFIX/sbin/guacd"
 }

@@ -418,6 +418,14 @@ impl SessionManager {
 
                 let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
+                tracing::info!(
+                    %session_id,
+                    drive_enabled,
+                    entry_enable_drive = ?req.enable_drive,
+                    has_drive_config = self.config.drive.is_some(),
+                    drive_path = ?drive_cfg.drive_path,
+                    "Drive configuration"
+                );
 
                 // Create per-session drive directory for RDP
                 let session_drive_path = if drive_enabled {
@@ -440,6 +448,7 @@ impl SessionManager {
                     ignore_cert = rdp_ignore_cert,
                     security = ?rdp_security,
                     enable_drive = rdp_enable_drive,
+                    drive_path = ?session_drive_path,
                     domain = ?req.domain,
                     has_password = req.password.is_some(),
                     "RDP session params"

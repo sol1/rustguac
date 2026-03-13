@@ -316,6 +316,15 @@ async fn guacd_to_ws(
 
         // Forward to browser via WebSocket
         let text = String::from_utf8_lossy(data).into_owned();
+
+        // Log filesystem and clipboard instructions from guacd
+        if text.contains(".filesystem,") {
+            tracing::info!("guacd sent filesystem instruction");
+        }
+        if text.contains(".clipboard,") {
+            tracing::info!("guacd sent clipboard instruction to browser");
+        }
+
         ws.send(Message::Text(text.into())).await?;
     }
 
@@ -331,6 +340,10 @@ async fn ws_to_guacd(
         let msg = msg?;
         match msg {
             Message::Text(text) => {
+                // Log clipboard instructions from browser → guacd
+                if text.contains(".clipboard,") {
+                    tracing::info!("browser sent clipboard instruction to guacd");
+                }
                 guacd.write_all(text.as_bytes()).await?;
             }
             Message::Binary(data) => {
