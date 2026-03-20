@@ -140,7 +140,7 @@ To persist config changes across container restarts, bind-mount a local `config.
 1. **Copy the default config** from the image:
 
 ```bash
-docker run --rm sol1/rustguac:latest cat /opt/rustguac/config.toml.default > config.toml
+docker run --rm --entrypoint cat sol1/rustguac:latest /opt/rustguac/config.toml.default > config.toml
 ```
 
 2. **Edit** `config.toml` as needed (see [Configuration](configuration.md)):
