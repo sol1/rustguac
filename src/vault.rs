@@ -1543,7 +1543,7 @@ mod tests {
         assert!(!is_credential_variable("plain_text"));
         assert!(!is_credential_variable(""));
         assert!(!is_credential_variable("$has spaces"));
-        assert!(!is_credential_variable("$has-dashes"));
+        assert!(is_credential_variable("$has-dashes")); // hyphens allowed since v0.8.0
     }
 
     #[test]

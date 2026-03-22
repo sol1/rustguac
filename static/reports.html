@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>rustguac - Reports</title>
+    <style>
+        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #666; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1b4332; --type-ssh-fg: #52b788; --type-rdp-bg: #3d1f00; --type-rdp-fg: #f0a050; --type-vnc-bg: #2d1b4e; --type-vnc-fg: #b07ff0; --type-web-bg: #1a1a4e; --type-web-fg: #7b8ff0; --hop-bg: #1b4332; --hop-fg: #52b788; --bg-pattern: none; }
+        body { font-family: monospace; background-color: var(--bg); background-image: var(--bg-pattern); background-attachment: fixed; min-height: 100vh; color: var(--text); padding: 2em; font-size: 18px; }
+        h1 { color: var(--primary); }
+        a { color: var(--accent); }
+        nav { margin-top: 0.8em; margin-bottom: 1.5em; padding-bottom: 0.8em; border-bottom: 1px solid var(--border); font-size: 0.95em; }
+        nav a { margin-right: 1.5em; text-decoration: none; }
+        nav a:hover { text-decoration: underline; }
+        nav .active { color: var(--primary); font-weight: bold; }
+        #user-menu-wrapper { position: relative; float: right; }
+        #user-menu-btn { cursor: pointer; font-size: 1.3em; color: var(--text-muted); }
+        #user-menu-btn:hover { color: var(--text); }
+        #user-menu { display:none; position:absolute; right:0; top:1.8em; background:var(--surface); border:1px solid var(--border); border-radius:6px; min-width:220px; z-index:50; padding:0.4em 0; }
+        .um-section-label { padding:0.4em 0.9em; font-size:0.8em; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
+        .um-item { padding:0.5em 0.9em; cursor:pointer; display:flex; align-items:center; gap:0.6em; font-size:0.9em; }
+        .um-item:hover { background:var(--input); }
+        .um-item.active { color:var(--accent); }
+        .um-theme-info { display:flex; flex-direction:column; }
+        .um-theme-name { font-weight:bold; }
+        .um-theme-desc { font-size:0.8em; color:var(--text-dim); }
+        .um-swatch { display:inline-block; width:16px; height:16px; border-radius:50%; border:1px solid var(--border); flex-shrink:0; }
+        .um-divider { height:1px; background:var(--border); margin:0.3em 0; }
+        .um-logout { color:var(--text-muted); }
+        .um-logout:hover { color:var(--primary); background:var(--input); }
+
+        /* Summary cards */
+        .summary-cards {
+            display: flex;
+            gap: 1em;
+            margin: 1.5em 0;
+            flex-wrap: wrap;
+        }
+        .summary-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 1em 1.5em;
+            flex: 1;
+            min-width: 160px;
+        }
+        .summary-card .card-label {
+            color: var(--text-muted);
+            font-size: 0.8em;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .summary-card .card-value {
+            color: var(--accent);
+            font-size: 1.8em;
+            font-weight: bold;
+            margin-top: 0.2em;
+        }
+
+        /* Tables */
+        table { border-collapse: collapse; width: 100%; }
+        th, td { text-align: left; padding: 0.4em 0.8em; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-muted); font-size: 0.85em; }
+        th.sortable { cursor: pointer; user-select: none; }
+        th.sortable:hover { color: var(--text); }
+        th .sort-arrow { font-size: 0.7em; margin-left: 0.3em; }
+
+        /* Filter input */
+        .filter-bar {
+            margin: 1em 0 0.5em 0;
+        }
+        .filter-bar input {
+            padding: 0.4em 0.8em;
+            background: var(--input);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: monospace;
+            font-size: 0.9em;
+            border-radius: 3px;
+            width: 300px;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+        .filter-bar input:focus { outline: none; border-color: var(--primary); }
+
+        /* Type badges */
+        .type-badge {
+            display: inline-block;
+            padding: 0.15em 0.5em;
+            border-radius: 3px;
+            font-size: 0.85em;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .type-ssh { background: var(--type-ssh-bg); color: var(--type-ssh-fg); }
+        .type-rdp { background: var(--type-rdp-bg); color: var(--type-rdp-fg); }
+        .type-vnc { background: var(--type-vnc-bg); color: var(--type-vnc-fg); }
+        .type-web { background: var(--type-web-bg); color: var(--type-web-fg); }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-block;
+            padding: 0.15em 0.5em;
+            border-radius: 3px;
+            font-size: 0.85em;
+        }
+        .status-active { color: var(--status-active); }
+        .status-completed { color: var(--status-completed); }
+        .status-error { color: var(--status-error); }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            align-items: center;
+            gap: 1em;
+            margin: 1em 0;
+            font-size: 0.9em;
+        }
+        .pagination button {
+            background: var(--input);
+            color: var(--text);
+            border: 1px solid var(--border);
+            font-family: monospace;
+            font-size: 0.9em;
+            padding: 0.3em 1em;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-top: 0;
+        }
+        .pagination button:hover { background: var(--surface); border-color: var(--accent); }
+        .pagination button:disabled { color: var(--text-dim); cursor: default; border-color: var(--border); background: var(--input); }
+        .pagination .page-info { color: var(--text-muted); }
+
+        /* Recording link */
+        .btn-small {
+            background: none; border: none; color: var(--accent);
+            cursor: pointer; font-family: monospace; padding: 0; font-size: 0.9em;
+        }
+        .btn-small:hover { text-decoration: underline; }
+
+        /* Side-by-side panels */
+        .panels {
+            display: flex;
+            gap: 1.5em;
+            margin-top: 2em;
+            flex-wrap: wrap;
+        }
+        .panel {
+            flex: 1;
+            min-width: 300px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 1em;
+        }
+        .panel-title {
+            color: var(--primary);
+            font-weight: bold;
+            margin-bottom: 0.8em;
+            font-size: 0.95em;
+        }
+        .panel table { width: 100%; }
+        .panel th, .panel td { padding: 0.3em 0.6em; }
+
+        .empty { color: var(--text-dim); margin: 2em 0; }
+    </style>
+    <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
+</head>
+<body>
+    <img id="site-logo" src="/logo.svg" style="max-height:40px;vertical-align:middle;margin-right:0.5em" alt=""><h1 style="display:inline;vertical-align:middle">rustguac</h1>
+    <nav>
+        <a href="/addressbook.html">Address Book</a>
+        <a href="/sessions.html" id="sessions-link">Sessions</a>
+        <a href="/recordings.html">Recordings</a>
+        <a href="/reports.html" class="active">Reports</a>
+        <a href="/docs.html">Docs</a>
+        <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
+        <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
+        <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881;</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item um-logout" id="logout-item">Logout</div></div></span>
+    </nav>
+
+    <strong>Reports</strong>
+
+    <div class="summary-cards" id="summary-cards">
+        <div class="summary-card">
+            <div class="card-label">Total Sessions</div>
+            <div class="card-value" id="stat-total-sessions">--</div>
+        </div>
+        <div class="summary-card">
+            <div class="card-label">Total Hours</div>
+            <div class="card-value" id="stat-total-hours">--</div>
+        </div>
+        <div class="summary-card">
+            <div class="card-label">Unique Users</div>
+            <div class="card-value" id="stat-unique-users">--</div>
+        </div>
+        <div class="summary-card">
+            <div class="card-label">Active Now</div>
+            <div class="card-value" id="stat-active-now">--</div>
+        </div>
+    </div>
+
+    <div style="margin-top:2em">
+        <strong>Session History</strong>
+        <div class="filter-bar" style="display:flex;align-items:center;gap:1em">
+            <input type="text" id="filter-input" placeholder="Filter sessions...">
+            <button id="export-csv-btn" style="background:var(--input);color:var(--text);border:1px solid var(--border);font-family:monospace;font-size:0.9em;padding:0.4em 1em;border-radius:3px;cursor:pointer;white-space:nowrap">Export CSV</button>
+        </div>
+        <table id="history-table">
+            <thead>
+                <tr>
+                    <th class="sortable" data-col="created_by">User <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-col="entry_display_name">Entry <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-col="address_book_folder">Folder <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-col="session_type">Type <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-col="hostname">Hostname <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-col="started_at">Started <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-col="duration_secs">Duration <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-col="status">Status <span class="sort-arrow"></span></th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+        </table>
+        <div class="pagination" id="pagination">
+            <button id="prev-btn" disabled>Previous</button>
+            <span class="page-info" id="page-info"></span>
+            <button id="next-btn" disabled>Next</button>
+        </div>
+    </div>
+
+    <div class="panels">
+        <div class="panel">
+            <div class="panel-title">Top Connections</div>
+            <table>
+                <thead>
+                    <tr><th>Name</th><th>Type</th><th>Sessions</th><th>Total Hours</th></tr>
+                </thead>
+                <tbody id="top-connections-body"></tbody>
+            </table>
+            <p class="empty" id="top-connections-empty" style="display:none">No data yet.</p>
+        </div>
+        <div class="panel">
+            <div class="panel-title">Top Users</div>
+            <table>
+                <thead>
+                    <tr><th>User</th><th>Sessions</th><th>Total Hours</th><th>Last Session</th></tr>
+                </thead>
+                <tbody id="top-users-body"></tbody>
+            </table>
+            <p class="empty" id="top-users-empty" style="display:none">No data yet.</p>
+        </div>
+    </div>
+
+    <script>
+        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
+        var _themePresets={},_adminPreset='dark';
+        var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',aurora:'Midnight blue with ambient glow',jaguar:'Racing green & gold'};
+        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'dark';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){if(l.src!==t.logo_url&&!l.src.endsWith(t.logo_url))l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
+        var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
+        fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
+            if(d.site_title){document.title=d.site_title+' - Reports';document.querySelector('h1').textContent=d.site_title;}
+            initTheme(d.theme);
+        });
+        var apiKey = sessionStorage.getItem('rustguac_api_key');
+
+        // Check auth: either API key or cookie
+        var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
+        if (apiKey) {
+            document.getElementById('admin-link').style.display = '';
+            document.getElementById('tokens-link').style.display = '';
+        } else {
+            fetch('/api/me', { credentials: 'same-origin' })
+            .then(function(res) {
+                if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
+                if (!res.ok) return;
+                return res.json();
+            })
+            .then(function(data) {
+                if (!data) return;
+                if (data.role === 'admin') document.getElementById('admin-link').style.display = '';
+                var level = roleLevel[data.role] || 0;
+                if (level >= 2) document.getElementById('tokens-link').style.display = '';
+                if (level < 3) {
+                    document.getElementById('sessions-link').style.display = 'none';
+                }
+            })
+            .catch(function() {});
+        }
+
+        document.getElementById('logout-item').addEventListener('click', function() {
+            sessionStorage.removeItem('rustguac_api_key');
+            fetch('/auth/logout', { credentials: 'same-origin' })
+            .finally(function() { window.location.href = '/'; });
+        });
+
+        function apiHeaders() {
+            var h = {};
+            if (apiKey) h['Authorization'] = 'Bearer ' + apiKey;
+            return h;
+        }
+
+        function escapeHtml(s) {
+            if (!s) return '';
+            var d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        // ── Duration formatting ──
+        function formatDuration(secs) {
+            if (secs == null || secs < 0) return '--';
+            var h = Math.floor(secs / 3600);
+            var m = Math.floor((secs % 3600) / 60);
+            var s = Math.floor(secs % 60);
+            if (h > 0) return h + 'h ' + m + 'm';
+            if (m > 0) return m + 'm ' + s + 's';
+            return s + 's';
+        }
+
+        function formatDate(iso) {
+            if (!iso) return '--';
+            try {
+                return new Date(iso).toLocaleString();
+            } catch(e) {
+                return iso;
+            }
+        }
+
+        function typeBadge(type) {
+            var t = (type || '').toLowerCase();
+            return '<span class="type-badge type-' + escapeHtml(t) + '">' + escapeHtml(t) + '</span>';
+        }
+
+        function statusBadge(status) {
+            var s = (status || '').toLowerCase();
+            return '<span class="status-badge status-' + escapeHtml(s) + '">' + escapeHtml(s) + '</span>';
+        }
+
+        // ── Summary ──
+        function loadSummary() {
+            fetch('/api/reports/summary', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) {
+                if (!res.ok) throw new Error('Failed');
+                return res.json();
+            })
+            .then(function(data) {
+                document.getElementById('stat-total-sessions').textContent = data.total_sessions != null ? data.total_sessions : '--';
+                document.getElementById('stat-total-hours').textContent = data.total_hours != null ? data.total_hours.toFixed(1) : '--';
+                document.getElementById('stat-unique-users').textContent = data.unique_users != null ? data.unique_users : '--';
+                document.getElementById('stat-active-now').textContent = data.active_now != null ? data.active_now : '--';
+            })
+            .catch(function() {});
+        }
+
+        // ── Session history ──
+        var currentOffset = 0;
+        var currentLimit = 100;
+        var totalSessions = 0;
+        var sessionsData = [];
+        var sortCol = 'started_at';
+        var sortDir = -1; // -1 = desc, 1 = asc
+
+        function loadSessions() {
+            fetch('/api/reports/sessions?limit=' + currentLimit + '&offset=' + currentOffset, { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) {
+                if (!res.ok) throw new Error('Failed');
+                return res.json();
+            })
+            .then(function(data) {
+                sessionsData = data.sessions || [];
+                totalSessions = data.total || 0;
+                currentLimit = data.limit || 100;
+                currentOffset = data.offset || 0;
+                applySortAndRender();
+                updatePagination();
+            })
+            .catch(function() {
+                document.getElementById('history-body').innerHTML = '<tr><td colspan="9" class="empty">Failed to load session history.</td></tr>';
+            });
+        }
+
+        function applySortAndRender() {
+            var sorted = sessionsData.slice();
+            sorted.sort(function(a, b) {
+                var va = a[sortCol], vb = b[sortCol];
+                if (va == null) va = '';
+                if (vb == null) vb = '';
+                if (typeof va === 'number' && typeof vb === 'number') {
+                    return (va - vb) * sortDir;
+                }
+                va = String(va).toLowerCase();
+                vb = String(vb).toLowerCase();
+                if (va < vb) return -1 * sortDir;
+                if (va > vb) return 1 * sortDir;
+                return 0;
+            });
+
+            // Apply text filter
+            var filterText = (document.getElementById('filter-input').value || '').toLowerCase();
+            if (filterText) {
+                sorted = sorted.filter(function(s) {
+                    var searchable = [
+                        s.created_by, s.entry_display_name, s.address_book_folder,
+                        s.session_type, s.hostname, s.status,
+                        formatDate(s.started_at), formatDuration(s.duration_secs)
+                    ].join(' ').toLowerCase();
+                    return searchable.indexOf(filterText) !== -1;
+                });
+            }
+
+            renderSessions(sorted);
+            updateSortArrows();
+        }
+
+        function renderSessions(sessions) {
+            var tbody = document.getElementById('history-body');
+            if (sessions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="empty">No sessions found.</td></tr>';
+                return;
+            }
+            var html = '';
+            sessions.forEach(function(s) {
+                var recLink = '';
+                if (s.recording_file) {
+                    recLink = '<a class="btn-small" href="/recordings.html" title="' + escapeHtml(s.recording_file) + '">recording</a>';
+                }
+                html += '<tr>' +
+                    '<td>' + escapeHtml(s.created_by || s.username || '') + '</td>' +
+                    '<td>' + escapeHtml(s.entry_display_name || s.address_book_entry || '') + '</td>' +
+                    '<td>' + escapeHtml(s.address_book_folder || '') + '</td>' +
+                    '<td>' + typeBadge(s.session_type) + '</td>' +
+                    '<td>' + escapeHtml(s.hostname || '') + '</td>' +
+                    '<td>' + formatDate(s.started_at) + '</td>' +
+                    '<td>' + formatDuration(s.duration_secs) + '</td>' +
+                    '<td>' + statusBadge(s.status) + '</td>' +
+                    '<td>' + recLink + '</td>' +
+                    '</tr>';
+            });
+            tbody.innerHTML = html;
+        }
+
+        function updatePagination() {
+            var prevBtn = document.getElementById('prev-btn');
+            var nextBtn = document.getElementById('next-btn');
+            var info = document.getElementById('page-info');
+
+            prevBtn.disabled = currentOffset === 0;
+            nextBtn.disabled = (currentOffset + currentLimit) >= totalSessions;
+
+            var start = totalSessions === 0 ? 0 : currentOffset + 1;
+            var end = Math.min(currentOffset + currentLimit, totalSessions);
+            info.textContent = start + '-' + end + ' of ' + totalSessions;
+        }
+
+        document.getElementById('prev-btn').addEventListener('click', function() {
+            currentOffset = Math.max(0, currentOffset - currentLimit);
+            loadSessions();
+        });
+        document.getElementById('next-btn').addEventListener('click', function() {
+            currentOffset += currentLimit;
+            loadSessions();
+        });
+
+        // ── Sorting ──
+        function updateSortArrows() {
+            var ths = document.querySelectorAll('#history-table th.sortable');
+            for (var i = 0; i < ths.length; i++) {
+                var arrow = ths[i].querySelector('.sort-arrow');
+                if (ths[i].getAttribute('data-col') === sortCol) {
+                    arrow.textContent = sortDir === 1 ? '\u25B2' : '\u25BC';
+                } else {
+                    arrow.textContent = '';
+                }
+            }
+        }
+
+        document.getElementById('history-table').addEventListener('click', function(e) {
+            var th = e.target.closest('th.sortable');
+            if (!th) return;
+            var col = th.getAttribute('data-col');
+            if (col === sortCol) {
+                sortDir = sortDir * -1;
+            } else {
+                sortCol = col;
+                sortDir = 1;
+            }
+            applySortAndRender();
+        });
+
+        // ── Filter ──
+        document.getElementById('filter-input').addEventListener('input', function() {
+            applySortAndRender();
+        });
+
+        // ── Export CSV ──
+        document.getElementById('export-csv-btn').addEventListener('click', function() {
+            var params = [];
+            var filterUser = document.getElementById('filter-input').value;
+            if (filterUser) params.push('user=' + encodeURIComponent(filterUser));
+            if (apiKey) params.push('key=' + encodeURIComponent(apiKey));
+            var url = '/api/reports/sessions/csv';
+            if (params.length > 0) url += '?' + params.join('&');
+            window.location.href = url;
+        });
+
+        // ── Top Connections ──
+        function loadTopConnections() {
+            fetch('/api/reports/top-connections', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) {
+                if (!res.ok) throw new Error('Failed');
+                return res.json();
+            })
+            .then(function(data) {
+                var tbody = document.getElementById('top-connections-body');
+                var empty = document.getElementById('top-connections-empty');
+                if (!data || data.length === 0) {
+                    tbody.innerHTML = '';
+                    empty.style.display = '';
+                    return;
+                }
+                empty.style.display = 'none';
+                var html = '';
+                data.forEach(function(c) {
+                    html += '<tr>' +
+                        '<td>' + escapeHtml(c.name || c.address_book_entry || '') + '</td>' +
+                        '<td>' + typeBadge(c.session_type) + '</td>' +
+                        '<td>' + (c.session_count || 0) + '</td>' +
+                        '<td>' + (c.total_hours != null ? c.total_hours.toFixed(1) : '0') + '</td>' +
+                        '</tr>';
+                });
+                tbody.innerHTML = html;
+            })
+            .catch(function() {
+                document.getElementById('top-connections-empty').style.display = '';
+            });
+        }
+
+        // ── Top Users ──
+        function loadTopUsers() {
+            fetch('/api/reports/top-users', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) {
+                if (!res.ok) throw new Error('Failed');
+                return res.json();
+            })
+            .then(function(data) {
+                var tbody = document.getElementById('top-users-body');
+                var empty = document.getElementById('top-users-empty');
+                if (!data || data.length === 0) {
+                    tbody.innerHTML = '';
+                    empty.style.display = '';
+                    return;
+                }
+                empty.style.display = 'none';
+                var html = '';
+                data.forEach(function(u) {
+                    html += '<tr>' +
+                        '<td>' + escapeHtml(u.user || '') + '</td>' +
+                        '<td>' + (u.session_count || 0) + '</td>' +
+                        '<td>' + (u.total_hours != null ? u.total_hours.toFixed(1) : '0') + '</td>' +
+                        '<td>' + formatDate(u.last_session) + '</td>' +
+                        '</tr>';
+                });
+                tbody.innerHTML = html;
+            })
+            .catch(function() {
+                document.getElementById('top-users-empty').style.display = '';
+            });
+        }
+
+        // ── Load everything ──
+        loadSummary();
+        loadSessions();
+        loadTopConnections();
+        loadTopUsers();
+    </script>
+</body>
+</html>

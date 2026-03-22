@@ -20,6 +20,18 @@ pub struct RecordingMeta {
     pub address_book_entry: Option<String>,
     /// ISO 8601 timestamp when the recording was created.
     pub created_at: String,
+    /// User who created the session (email).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// Address book folder name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// Display name of the address book entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_display_name: Option<String>,
+    /// Session type (ssh, rdp, vnc, web).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_type: Option<String>,
 }
 
 /// Get the disk usage percentage for the filesystem containing `path`.

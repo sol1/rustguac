@@ -209,6 +209,10 @@ pub struct Config {
     #[serde(default = "default_auth_session_ttl_secs")]
     pub auth_session_ttl_secs: u64,
 
+    /// Session history retention in days. Default: 90. Set to 0 to keep forever.
+    #[serde(default = "default_session_history_retention_days")]
+    pub session_history_retention_days: u32,
+
     #[serde(default = "default_xvnc_path")]
     pub xvnc_path: String,
 
@@ -747,6 +751,10 @@ fn default_auth_session_ttl_secs() -> u64 {
     86400 // 24 hours
 }
 
+fn default_session_history_retention_days() -> u32 {
+    90
+}
+
 fn default_xvnc_path() -> String {
     "Xvnc".into()
 }
@@ -811,6 +819,7 @@ impl Default for Config {
             rdp_allowed_networks: default_localhost_networks(),
             vnc_allowed_networks: default_localhost_networks(),
             web_allowed_networks: default_localhost_networks(),
+            session_history_retention_days: default_session_history_retention_days(),
             rate_limit: false,
             trusted_proxies: Vec::new(),
             tls: None,

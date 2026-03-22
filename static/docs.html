@@ -117,6 +117,7 @@
             <a href="/addressbook.html">Address Book</a>
             <a href="/sessions.html" id="sessions-link">Sessions</a>
             <a href="/recordings.html">Recordings</a>
+            <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
             <a href="/docs.html" class="active">Docs</a>
             <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
             <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
@@ -210,6 +211,7 @@
         if (apiKey) {
             document.getElementById('admin-link').style.display = '';
             document.getElementById('tokens-link').style.display = '';
+            document.getElementById('reports-link').style.display = '';
         } else {
             fetch('/api/me', { credentials: 'same-origin' })
             .then(function(res) {
@@ -222,6 +224,9 @@
                 if (data.role === 'admin') document.getElementById('admin-link').style.display = '';
                 var level = roleLevel[data.role] || 0;
                 if (level >= 2) document.getElementById('tokens-link').style.display = '';
+                if (level >= 3) {
+                    document.getElementById('reports-link').style.display = '';
+                }
                 if (level < 3) {
                     document.getElementById('sessions-link').style.display = 'none';
                 }

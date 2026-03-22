@@ -255,6 +255,7 @@
         <a href="/addressbook.html" class="active">Address Book</a>
         <a href="/sessions.html" id="sessions-link">Sessions</a>
         <a href="/recordings.html">Recordings</a>
+        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
@@ -710,6 +711,9 @@
                 var level = roleLevel[data.role] || 0;
                 if (level < 3) {
                     document.getElementById('sessions-link').style.display = 'none';
+                }
+                if (level >= 3) {
+                    document.getElementById('reports-link').style.display = '';
                 }
                 if (isAdmin) {
                     document.getElementById('admin-link').style.display = '';

@@ -137,7 +137,28 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             ip_addr    TEXT,
             details    TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );",
+        );
+
+        CREATE TABLE IF NOT EXISTS session_history (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id         TEXT NOT NULL,
+            session_type       TEXT NOT NULL,
+            hostname           TEXT NOT NULL,
+            port               INTEGER,
+            username           TEXT NOT NULL DEFAULT '',
+            created_by         TEXT NOT NULL,
+            address_book_entry TEXT,
+            address_book_folder TEXT,
+            entry_display_name TEXT,
+            started_at         TEXT NOT NULL DEFAULT (datetime('now')),
+            ended_at           TEXT,
+            duration_secs      INTEGER,
+            recording_file     TEXT,
+            status             TEXT NOT NULL DEFAULT 'active'
+        );
+        CREATE INDEX IF NOT EXISTS idx_sh_created_by ON session_history(created_by);
+        CREATE INDEX IF NOT EXISTS idx_sh_entry ON session_history(address_book_entry);
+        CREATE INDEX IF NOT EXISTS idx_sh_started ON session_history(started_at);",
     )?;
 
     // Migration: add oidc_groups column if it doesn't exist
@@ -881,6 +902,249 @@ pub fn cleanup_old_audit_log(db: &Db, retain_days: u32) -> rusqlite::Result<usiz
     )
 }
 
+// ── Session history ──
+
+/// Record a new session in the history table.
+#[allow(clippy::too_many_arguments)]
+pub fn insert_session_history(
+    db: &Db,
+    session_id: &str,
+    session_type: &str,
+    hostname: &str,
+    port: Option<u16>,
+    username: &str,
+    created_by: &str,
+    address_book_entry: Option<&str>,
+    address_book_folder: Option<&str>,
+    entry_display_name: Option<&str>,
+) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO session_history
+         (session_id, session_type, hostname, port, username, created_by,
+          address_book_entry, address_book_folder, entry_display_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            session_id,
+            session_type,
+            hostname,
+            port.map(|p| p as i64),
+            username,
+            created_by,
+            address_book_entry,
+            address_book_folder,
+            entry_display_name,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Mark a session as ended in the history table.
+pub fn end_session_history(
+    db: &Db,
+    session_id: &str,
+    status: &str,
+    duration_secs: u64,
+    recording_file: Option<&str>,
+) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE session_history
+         SET ended_at = datetime('now'), duration_secs = ?2, status = ?3, recording_file = ?4
+         WHERE session_id = ?1 AND ended_at IS NULL",
+        params![session_id, duration_secs as i64, status, recording_file],
+    )?;
+    Ok(())
+}
+
+/// Query session history with optional filters. Returns JSON-ready rows.
+#[allow(clippy::too_many_arguments)]
+pub fn query_session_history(
+    db: &Db,
+    user: Option<&str>,
+    entry: Option<&str>,
+    session_type: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+    limit: u32,
+    offset: u32,
+) -> rusqlite::Result<(Vec<serde_json::Value>, u32)> {
+    let conn = db.lock().unwrap();
+    let mut conditions = vec!["1=1".to_string()];
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut idx = 1;
+
+    if let Some(u) = user {
+        conditions.push(format!("created_by LIKE ?{}", idx));
+        params_vec.push(Box::new(format!("%{}%", u)));
+        idx += 1;
+    }
+    if let Some(e) = entry {
+        conditions.push(format!(
+            "(address_book_entry LIKE ?{} OR entry_display_name LIKE ?{})",
+            idx, idx
+        ));
+        params_vec.push(Box::new(format!("%{}%", e)));
+        idx += 1;
+    }
+    if let Some(t) = session_type {
+        conditions.push(format!("session_type = ?{}", idx));
+        params_vec.push(Box::new(t.to_string()));
+        idx += 1;
+    }
+    if let Some(f) = from {
+        conditions.push(format!("started_at >= ?{}", idx));
+        params_vec.push(Box::new(f.to_string()));
+        idx += 1;
+    }
+    if let Some(t) = to {
+        conditions.push(format!("started_at <= ?{}", idx));
+        params_vec.push(Box::new(t.to_string()));
+        idx += 1;
+    }
+
+    let where_clause = conditions.join(" AND ");
+
+    // Count total matching rows
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM session_history WHERE {}",
+        where_clause
+    );
+    let total: u32 = {
+        let mut stmt = conn.prepare(&count_sql)?;
+        stmt.query_row(rusqlite::params_from_iter(params_vec.iter()), |row| {
+            row.get(0)
+        })?
+    };
+
+    // Fetch page
+    let query_sql = format!(
+        "SELECT session_id, session_type, hostname, port, username, created_by,
+                address_book_entry, address_book_folder, entry_display_name,
+                started_at, ended_at, duration_secs, recording_file, status
+         FROM session_history WHERE {} ORDER BY started_at DESC LIMIT ?{} OFFSET ?{}",
+        where_clause,
+        idx,
+        idx + 1
+    );
+    params_vec.push(Box::new(limit));
+    params_vec.push(Box::new(offset));
+
+    let mut stmt = conn.prepare(&query_sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
+            Ok(serde_json::json!({
+                "session_id": row.get::<_, String>(0)?,
+                "session_type": row.get::<_, String>(1)?,
+                "hostname": row.get::<_, String>(2)?,
+                "port": row.get::<_, Option<i64>>(3)?,
+                "username": row.get::<_, String>(4)?,
+                "created_by": row.get::<_, String>(5)?,
+                "address_book_entry": row.get::<_, Option<String>>(6)?,
+                "address_book_folder": row.get::<_, Option<String>>(7)?,
+                "entry_display_name": row.get::<_, Option<String>>(8)?,
+                "started_at": row.get::<_, String>(9)?,
+                "ended_at": row.get::<_, Option<String>>(10)?,
+                "duration_secs": row.get::<_, Option<i64>>(11)?,
+                "recording_file": row.get::<_, Option<String>>(12)?,
+                "status": row.get::<_, String>(13)?,
+            }))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok((rows, total))
+}
+
+/// Top connections by session count and total hours.
+pub fn top_connections(db: &Db, limit: u32) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(entry_display_name, hostname) AS name,
+                address_book_entry, address_book_folder, session_type,
+                COUNT(*) AS session_count,
+                COALESCE(SUM(duration_secs), 0) AS total_secs
+         FROM session_history
+         GROUP BY COALESCE(address_book_entry, hostname || ':' || COALESCE(port, 0))
+         ORDER BY session_count DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(serde_json::json!({
+                "name": row.get::<_, String>(0)?,
+                "address_book_entry": row.get::<_, Option<String>>(1)?,
+                "folder": row.get::<_, Option<String>>(2)?,
+                "session_type": row.get::<_, Option<String>>(3)?,
+                "session_count": row.get::<_, i64>(4)?,
+                "total_hours": row.get::<_, i64>(5)? as f64 / 3600.0,
+            }))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Top users by session count and total hours.
+pub fn top_users(db: &Db, limit: u32) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT created_by,
+                COUNT(*) AS session_count,
+                COALESCE(SUM(duration_secs), 0) AS total_secs,
+                MAX(started_at) AS last_session
+         FROM session_history
+         GROUP BY created_by
+         ORDER BY session_count DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(serde_json::json!({
+                "user": row.get::<_, String>(0)?,
+                "session_count": row.get::<_, i64>(1)?,
+                "total_hours": row.get::<_, i64>(2)? as f64 / 3600.0,
+                "last_session": row.get::<_, String>(3)?,
+            }))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Summary statistics.
+pub fn session_summary(db: &Db) -> rusqlite::Result<serde_json::Value> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) AS total_sessions,
+                COALESCE(SUM(duration_secs), 0) AS total_secs,
+                COUNT(DISTINCT created_by) AS unique_users,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_now
+         FROM session_history",
+    )?;
+    stmt.query_row([], |row| {
+        Ok(serde_json::json!({
+            "total_sessions": row.get::<_, i64>(0)?,
+            "total_hours": row.get::<_, i64>(1)? as f64 / 3600.0,
+            "unique_users": row.get::<_, i64>(2)?,
+            "active_now": row.get::<_, i64>(3)?,
+        }))
+    })
+}
+
+/// Clean up old session history entries (retain last N days). Returns rows deleted.
+pub fn cleanup_session_history(db: &Db, retain_days: u32) -> rusqlite::Result<usize> {
+    if retain_days == 0 {
+        return Ok(0); // 0 = keep forever
+    }
+    let conn = db.lock().unwrap();
+    let modifier = format!("-{} days", retain_days);
+    conn.execute(
+        "DELETE FROM session_history WHERE started_at < datetime('now', ?1)",
+        params![modifier],
+    )
+}
+
 /// Resolve the best role for a user based on their OIDC groups and the group-to-role mappings.
 /// Returns `Some(role)` if at least one group matched a mapping (highest wins),
 /// or `None` if no mappings matched (caller should preserve the existing role).
@@ -997,5 +1261,253 @@ mod tests {
             oidc_groups: "solo-group".into(),
         };
         assert_eq!(user.groups_vec(), vec!["solo-group"]);
+    }
+
+    fn test_db() -> Db {
+        init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn test_session_history_insert_and_query() {
+        let db = test_db();
+        insert_session_history(
+            &db,
+            "sess-1",
+            "rdp",
+            "10.0.0.1",
+            Some(3389),
+            "bench01",
+            "dave@sol1.com.au",
+            Some("shared/prod/rdp-host-1"),
+            Some("prod"),
+            Some("RDP Host 1"),
+        )
+        .unwrap();
+        insert_session_history(
+            &db,
+            "sess-2",
+            "ssh",
+            "10.0.0.2",
+            Some(22),
+            "bench02",
+            "andy@sol1.com.au",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let (rows, total) =
+            query_session_history(&db, None, None, None, None, None, 100, 0).unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(rows.len(), 2);
+        // Most recent first
+        assert_eq!(rows[0]["session_id"], "sess-2");
+        assert_eq!(rows[1]["session_id"], "sess-1");
+    }
+
+    #[test]
+    fn test_session_history_filter_by_user() {
+        let db = test_db();
+        insert_session_history(
+            &db,
+            "s1",
+            "rdp",
+            "h1",
+            None,
+            "",
+            "dave@sol1.com.au",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        insert_session_history(
+            &db,
+            "s2",
+            "ssh",
+            "h2",
+            None,
+            "",
+            "andy@sol1.com.au",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let (rows, total) =
+            query_session_history(&db, Some("dave"), None, None, None, None, 100, 0).unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows[0]["created_by"], "dave@sol1.com.au");
+    }
+
+    #[test]
+    fn test_session_history_filter_by_type() {
+        let db = test_db();
+        insert_session_history(&db, "s1", "rdp", "h1", None, "", "user1", None, None, None)
+            .unwrap();
+        insert_session_history(&db, "s2", "ssh", "h2", None, "", "user2", None, None, None)
+            .unwrap();
+
+        let (rows, total) =
+            query_session_history(&db, None, None, Some("ssh"), None, None, 100, 0).unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows[0]["session_type"], "ssh");
+    }
+
+    #[test]
+    fn test_session_history_end() {
+        let db = test_db();
+        insert_session_history(&db, "s1", "rdp", "h1", None, "", "user1", None, None, None)
+            .unwrap();
+        end_session_history(&db, "s1", "completed", 3600, Some("s1.guac")).unwrap();
+
+        let (rows, _) = query_session_history(&db, None, None, None, None, None, 100, 0).unwrap();
+        assert_eq!(rows[0]["status"], "completed");
+        assert_eq!(rows[0]["duration_secs"], 3600);
+        assert_eq!(rows[0]["recording_file"], "s1.guac");
+    }
+
+    #[test]
+    fn test_top_connections() {
+        let db = test_db();
+        for i in 0..5 {
+            insert_session_history(
+                &db,
+                &format!("s{}", i),
+                "rdp",
+                "host-a",
+                None,
+                "",
+                "user1",
+                Some("shared/prod/host-a"),
+                Some("prod"),
+                Some("Host A"),
+            )
+            .unwrap();
+            end_session_history(&db, &format!("s{}", i), "completed", 600, None).unwrap();
+        }
+        for i in 5..7 {
+            insert_session_history(
+                &db,
+                &format!("s{}", i),
+                "ssh",
+                "host-b",
+                None,
+                "",
+                "user2",
+                Some("shared/dev/host-b"),
+                Some("dev"),
+                Some("Host B"),
+            )
+            .unwrap();
+            end_session_history(&db, &format!("s{}", i), "completed", 300, None).unwrap();
+        }
+
+        let top = top_connections(&db, 10).unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0]["name"], "Host A");
+        assert_eq!(top[0]["session_count"], 5);
+        assert_eq!(top[1]["name"], "Host B");
+        assert_eq!(top[1]["session_count"], 2);
+    }
+
+    #[test]
+    fn test_top_users() {
+        let db = test_db();
+        for i in 0..3 {
+            insert_session_history(
+                &db,
+                &format!("s{}", i),
+                "rdp",
+                "h",
+                None,
+                "",
+                "alice@co.com",
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            end_session_history(&db, &format!("s{}", i), "completed", 1800, None).unwrap();
+        }
+        insert_session_history(
+            &db,
+            "s9",
+            "ssh",
+            "h",
+            None,
+            "",
+            "bob@co.com",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        end_session_history(&db, "s9", "completed", 3600, None).unwrap();
+
+        let top = top_users(&db, 10).unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0]["user"], "alice@co.com");
+        assert_eq!(top[0]["session_count"], 3);
+        assert_eq!(top[1]["user"], "bob@co.com");
+        assert_eq!(top[1]["session_count"], 1);
+    }
+
+    #[test]
+    fn test_session_summary() {
+        let db = test_db();
+        insert_session_history(&db, "s1", "rdp", "h", None, "", "alice", None, None, None).unwrap();
+        end_session_history(&db, "s1", "completed", 7200, None).unwrap();
+        insert_session_history(&db, "s2", "ssh", "h", None, "", "bob", None, None, None).unwrap();
+        // s2 still active
+
+        let summary = session_summary(&db).unwrap();
+        assert_eq!(summary["total_sessions"], 2);
+        assert_eq!(summary["unique_users"], 2);
+        assert_eq!(summary["active_now"], 1);
+        assert_eq!(summary["total_hours"], 7200.0 / 3600.0);
+    }
+
+    #[test]
+    fn test_cleanup_session_history_zero_keeps_all() {
+        let db = test_db();
+        insert_session_history(&db, "s1", "rdp", "h", None, "", "u", None, None, None).unwrap();
+        let deleted = cleanup_session_history(&db, 0).unwrap();
+        assert_eq!(deleted, 0);
+        let (_, total) = query_session_history(&db, None, None, None, None, None, 100, 0).unwrap();
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn test_session_history_pagination() {
+        let db = test_db();
+        for i in 0..25 {
+            insert_session_history(
+                &db,
+                &format!("s{:02}", i),
+                "rdp",
+                "h",
+                None,
+                "",
+                "u",
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        }
+
+        let (rows, total) =
+            query_session_history(&db, None, None, None, None, None, 10, 0).unwrap();
+        assert_eq!(total, 25);
+        assert_eq!(rows.len(), 10);
+
+        let (rows2, _) = query_session_history(&db, None, None, None, None, None, 10, 10).unwrap();
+        assert_eq!(rows2.len(), 10);
+
+        let (rows3, _) = query_session_history(&db, None, None, None, None, None, 10, 20).unwrap();
+        assert_eq!(rows3.len(), 5);
     }
 }

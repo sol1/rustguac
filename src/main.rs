@@ -624,6 +624,7 @@ async fn run_server(config: Config, database: Db) {
             "addressbook.html",
             "sessions.html",
             "recordings.html",
+            "reports.html",
             "admin.html",
             "tokens.html",
             "docs.html",
@@ -637,6 +638,7 @@ async fn run_server(config: Config, database: Db) {
     };
 
     // Periodically clean up expired auth sessions from the database
+    let history_retention_days = config.session_history_retention_days;
     let cleanup_db = database.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
@@ -658,6 +660,11 @@ async fn run_server(config: Config, database: Db) {
                 Err(e) => tracing::warn!("Failed to clean up audit log: {}", e),
                 _ => {}
             }
+            match db::cleanup_session_history(&cleanup_db, history_retention_days) {
+                Ok(n) if n > 0 => tracing::info!("Cleaned up {} old session history entries", n),
+                Err(e) => tracing::warn!("Failed to clean up session history: {}", e),
+                _ => {}
+            }
         }
     });
 
@@ -677,7 +684,11 @@ async fn run_server(config: Config, database: Db) {
     let rate_limit_enabled = config.rate_limit;
 
     // Create session manager
-    let manager: AppState = Arc::new(SessionManager::new(config, guacd_tls));
+    let manager: AppState = Arc::new(SessionManager::new_with_db(
+        config,
+        guacd_tls,
+        database.clone(),
+    ));
 
     // Spawn background task to reap sessions that exceed max duration
     {
@@ -748,6 +759,14 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/recordings", get(api::list_recordings))
         .route("/api/recordings/{name}", get(api::serve_recording))
         .route("/api/recordings/{name}", delete(api::delete_recording))
+        .route("/api/reports/sessions", get(api::report_sessions))
+        .route("/api/reports/sessions/csv", get(api::report_sessions_csv))
+        .route(
+            "/api/reports/top-connections",
+            get(api::report_top_connections),
+        )
+        .route("/api/reports/top-users", get(api::report_top_users))
+        .route("/api/reports/summary", get(api::report_summary))
         .route("/api/users", get(api::list_users))
         .route("/api/users/{email}/role", put(api::set_user_role))
         .route(

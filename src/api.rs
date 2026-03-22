@@ -308,11 +308,31 @@ pub async fn list_recordings(State(manager): State<AppState>) -> impl IntoRespon
                     dt.to_rfc3339()
                 })
                 .unwrap_or_default();
-            recordings.push(json!({
+            let mut rec = json!({
                 "name": name,
                 "size_bytes": meta.len(),
                 "modified": modified,
-            }));
+            });
+            // Read sidecar .meta file for extra context
+            if let Some(sidecar) = crate::recording::read_meta(&path) {
+                if let Some(ref e) = sidecar.address_book_entry {
+                    rec["address_book_entry"] = json!(e);
+                }
+                rec["created_at"] = json!(sidecar.created_at);
+                if let Some(ref u) = sidecar.user {
+                    rec["user"] = json!(u);
+                }
+                if let Some(ref f) = sidecar.folder {
+                    rec["folder"] = json!(f);
+                }
+                if let Some(ref d) = sidecar.entry_display_name {
+                    rec["entry_display_name"] = json!(d);
+                }
+                if let Some(ref t) = sidecar.session_type {
+                    rec["session_type"] = json!(t);
+                }
+            }
+            recordings.push(rec);
         }
         recordings.sort_by(|a, b| {
             let ma = a["modified"].as_str().unwrap_or("");
@@ -327,6 +347,241 @@ pub async fn list_recordings(State(manager): State<AppState>) -> impl IntoRespon
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": "failed to list recordings"})),
+        )
+            .into_response(),
+    }
+}
+
+// ── Report endpoints ──
+
+#[derive(Deserialize)]
+pub struct ReportQuery {
+    pub user: Option<String>,
+    pub entry: Option<String>,
+    #[serde(rename = "type")]
+    pub session_type: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+/// GET /api/reports/sessions — Paginated session history with filters. Poweruser+ only.
+pub async fn report_sessions(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Query(q): Query<ReportQuery>,
+) -> impl IntoResponse {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("poweruser"))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "poweruser role required"})),
+        )
+            .into_response();
+    }
+    let limit = q.limit.unwrap_or(100).min(1000);
+    let offset = q.offset.unwrap_or(0);
+    match db::query_session_history(
+        &database,
+        q.user.as_deref(),
+        q.entry.as_deref(),
+        q.session_type.as_deref(),
+        q.from.as_deref(),
+        q.to.as_deref(),
+        limit,
+        offset,
+    ) {
+        Ok((rows, total)) => {
+            Json(json!({"sessions": rows, "total": total, "limit": limit, "offset": offset}))
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/reports/sessions/csv — Export session history as CSV. Poweruser+ only.
+pub async fn report_sessions_csv(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Query(q): Query<ReportQuery>,
+) -> impl IntoResponse {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("poweruser"))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "poweruser role required"})),
+        )
+            .into_response();
+    }
+    match db::query_session_history(
+        &database,
+        q.user.as_deref(),
+        q.entry.as_deref(),
+        q.session_type.as_deref(),
+        q.from.as_deref(),
+        q.to.as_deref(),
+        100_000,
+        0,
+    ) {
+        Ok((rows, _total)) => {
+            let mut csv = String::from("Session ID,Type,Hostname,Username,User,Entry,Folder,Started,Ended,Duration (secs),Status,Recording\n");
+            for row in &rows {
+                let fields = [
+                    row["session_id"].as_str().unwrap_or(""),
+                    row["session_type"].as_str().unwrap_or(""),
+                    row["hostname"].as_str().unwrap_or(""),
+                    row["username"].as_str().unwrap_or(""),
+                    row["created_by"].as_str().unwrap_or(""),
+                    row["entry_display_name"]
+                        .as_str()
+                        .or_else(|| row["address_book_entry"].as_str())
+                        .unwrap_or(""),
+                    row["address_book_folder"].as_str().unwrap_or(""),
+                    row["started_at"].as_str().unwrap_or(""),
+                    row["ended_at"].as_str().unwrap_or(""),
+                ];
+                for (i, f) in fields.iter().enumerate() {
+                    if i > 0 {
+                        csv.push(',');
+                    }
+                    csv_escape_into(&mut csv, f);
+                }
+                // duration_secs (numeric)
+                csv.push(',');
+                if let Some(d) = row["duration_secs"].as_i64() {
+                    csv.push_str(&d.to_string());
+                }
+                // status
+                csv.push(',');
+                csv_escape_into(&mut csv, row["status"].as_str().unwrap_or(""));
+                // recording
+                csv.push(',');
+                csv_escape_into(&mut csv, row["recording_file"].as_str().unwrap_or(""));
+                csv.push('\n');
+            }
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/csv; charset=utf-8")
+                .header(
+                    "Content-Disposition",
+                    "attachment; filename=\"session-history.csv\"",
+                )
+                .body(Body::from(csv))
+                .unwrap()
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// Escape a field for CSV output: wrap in double quotes if it contains commas, quotes, or newlines.
+fn csv_escape_into(buf: &mut String, field: &str) {
+    if field.contains(',') || field.contains('"') || field.contains('\n') {
+        buf.push('"');
+        for ch in field.chars() {
+            if ch == '"' {
+                buf.push('"');
+            }
+            buf.push(ch);
+        }
+        buf.push('"');
+    } else {
+        buf.push_str(field);
+    }
+}
+
+/// GET /api/reports/top-connections — Most-used connections. Poweruser+ only.
+pub async fn report_top_connections(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Query(q): Query<ReportQuery>,
+) -> impl IntoResponse {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("poweruser"))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "poweruser role required"})),
+        )
+            .into_response();
+    }
+    let limit = q.limit.unwrap_or(20).min(100);
+    match db::top_connections(&database, limit) {
+        Ok(rows) => Json(json!(rows)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/reports/top-users — Most active users. Poweruser+ only.
+pub async fn report_top_users(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Query(q): Query<ReportQuery>,
+) -> impl IntoResponse {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("poweruser"))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "poweruser role required"})),
+        )
+            .into_response();
+    }
+    let limit = q.limit.unwrap_or(20).min(100);
+    match db::top_users(&database, limit) {
+        Ok(rows) => Json(json!(rows)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/reports/summary — Dashboard statistics. Poweruser+ only.
+pub async fn report_summary(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> impl IntoResponse {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("poweruser"))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "poweruser role required"})),
+        )
+            .into_response();
+    }
+    match db::session_summary(&database) {
+        Ok(summary) => Json(summary).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
         )
             .into_response(),
     }
@@ -1308,6 +1563,8 @@ pub async fn ab_connect_entry(
         remote_app_args: ab_entry.remote_app_args,
         enable_recording: ab_entry.enable_recording,
         address_book_entry: Some(ab_entry_key),
+        address_book_folder: Some(folder.to_string()),
+        entry_display_name: ab_entry.display_name.clone(),
         max_recordings: ab_entry.max_recordings,
         login_script: ab_entry.login_script,
         autofill: ab_entry.autofill,
@@ -2675,6 +2932,8 @@ pub async fn quick_connect(
             remote_app_args: ab_entry.remote_app_args,
             enable_recording: ab_entry.enable_recording,
             address_book_entry: Some(ab_entry_key),
+            address_book_folder: Some(folder.to_string()),
+            entry_display_name: ab_entry.display_name.clone(),
             max_recordings: ab_entry.max_recordings,
             login_script: ab_entry.login_script,
             autofill: ab_entry.autofill,
@@ -2761,6 +3020,8 @@ pub async fn quick_connect(
         remote_app_args: None,
         enable_recording: None,
         address_book_entry: None,
+        address_book_folder: None,
+        entry_display_name: None,
         max_recordings: None,
         login_script: None,
         autofill: None,

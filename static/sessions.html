@@ -201,6 +201,7 @@
         <a href="/addressbook.html">Address Book</a>
         <a href="/sessions.html" class="active" id="sessions-link">Sessions</a>
         <a href="/recordings.html">Recordings</a>
+        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
@@ -353,6 +354,7 @@
                 if (level >= 3) {
                     // poweruser+ can create ad-hoc sessions
                     document.getElementById('session-form').style.display = '';
+                    document.getElementById('reports-link').style.display = '';
                 }
             })
             .catch(function() {});
@@ -362,6 +364,7 @@
             document.getElementById('session-form').style.display = '';
             document.getElementById('admin-link').style.display = '';
             document.getElementById('tokens-link').style.display = '';
+            document.getElementById('reports-link').style.display = '';
         } else {
             checkRole();
         }

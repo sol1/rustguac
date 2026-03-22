@@ -86,6 +86,7 @@
         <a href="/addressbook.html">Address Book</a>
         <a href="/sessions.html" id="sessions-link">Sessions</a>
         <a href="/recordings.html">Recordings</a>
+        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" class="active">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
@@ -168,6 +169,7 @@
                 // API key users are admins — redirect to admin page for token management
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('admin-link').style.display = '';
+                document.getElementById('reports-link').style.display = '';
                 document.getElementById('no-permission').style.display = '';
                 document.getElementById('no-permission').textContent = 'API key admins manage user tokens via the Admin page.';
                 return;
@@ -202,6 +204,7 @@
                     // poweruser+ can create and revoke tokens
                     canCreate = true;
                     document.getElementById('create-section').style.display = '';
+                    document.getElementById('reports-link').style.display = '';
                     populateMaxRoles(data.role);
                 }
 

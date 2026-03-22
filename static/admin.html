@@ -88,6 +88,7 @@
         <a href="/addressbook.html">Address Book</a>
         <a href="/sessions.html" id="sessions-link">Sessions</a>
         <a href="/recordings.html">Recordings</a>
+        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html">Tokens</a>
         <a href="/admin.html" class="active">Admin</a>
@@ -200,6 +201,7 @@
                     window.location.href = '/addressbook.html';
                     return;
                 }
+                document.getElementById('reports-link').style.display = '';
                 loadUsers();
                 loadMappings();
                 loadAllTokens();

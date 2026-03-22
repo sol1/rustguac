@@ -149,16 +149,28 @@ async fn handle_ws(
                     .await;
                 }
 
-                // Write sidecar .meta file if this session has an address book entry
-                if let Some((ab_entry, _)) = manager.get_recording_meta(session_id).await {
-                    if ab_entry.is_some() {
-                        let meta = crate::recording::RecordingMeta {
-                            address_book_entry: ab_entry,
-                            created_at: chrono::Utc::now().to_rfc3339(),
-                        };
-                        if let Err(e) = crate::recording::write_meta(&recording_path, &meta) {
-                            tracing::warn!(session_id = %session_id, error = %e, "Failed to write recording .meta");
-                        }
+                // Write sidecar .meta file with session context
+                {
+                    let session_info = manager.get_session(session_id).await;
+                    let ab_entry = session_info
+                        .as_ref()
+                        .and_then(|s| s.address_book_entry.clone());
+                    let meta = crate::recording::RecordingMeta {
+                        address_book_entry: ab_entry,
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                        user: session_info.as_ref().map(|s| s.created_by.clone()),
+                        folder: session_info
+                            .as_ref()
+                            .and_then(|s| s.address_book_folder.clone()),
+                        entry_display_name: session_info
+                            .as_ref()
+                            .and_then(|s| s.entry_display_name.clone()),
+                        session_type: session_info
+                            .as_ref()
+                            .map(|s| format!("{:?}", s.session_type).to_lowercase()),
+                    };
+                    if let Err(e) = crate::recording::write_meta(&recording_path, &meta) {
+                        tracing::warn!(session_id = %session_id, error = %e, "Failed to write recording .meta");
                     }
                 }
 
@@ -219,17 +231,32 @@ async fn handle_ws(
         }
     };
 
+    let status_str;
     if mark_error {
         manager.error_session(session_id).await;
+        status_str = "error";
     } else {
         // Only mark completed if no more active connections
         let info = manager.get_session(session_id).await;
         if let Some(info) = info {
             if info.active_connections == 0 {
                 manager.complete_session(session_id).await;
+                status_str = "completed";
+            } else {
+                status_str = "active";
             }
+        } else {
+            status_str = "completed";
         }
     }
+
+    // Record session end in history
+    manager.end_session_history(
+        session_id,
+        status_str,
+        elapsed.as_secs(),
+        is_recording_enabled,
+    );
 
     // Per-entry recording rotation (after session ends, recording file is complete)
     if is_recording_enabled {

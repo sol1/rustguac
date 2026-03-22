@@ -78,6 +78,10 @@ pub struct CreateSessionRequest {
     pub enable_recording: Option<bool>,
     /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
     pub address_book_entry: Option<String>,
+    /// Address book folder name (for reporting).
+    pub address_book_folder: Option<String>,
+    /// Display name of the address book entry (for reporting).
+    pub entry_display_name: Option<String>,
     /// Per-entry max recordings to keep.
     pub max_recordings: Option<u32>,
     /// Login script filename to run after browser spawns (web sessions only).
@@ -127,6 +131,12 @@ pub struct SessionInfo {
     pub banner: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address_book_entry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address_book_folder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_display_name: Option<String>,
 }
 
 /// Internal session state including the guacd connection.
@@ -160,6 +170,10 @@ pub struct Session {
     pub recording_enabled: bool,
     /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
     pub address_book_entry: Option<String>,
+    /// Address book folder name (for reporting).
+    pub address_book_folder: Option<String>,
+    /// Display name of the address book entry (for reporting).
+    pub entry_display_name: Option<String>,
     /// Per-entry max recordings to keep (from address book entry).
     pub max_recordings: Option<u32>,
     /// Login script task handle (aborted on session cleanup).
@@ -239,6 +253,9 @@ impl Session {
             created_by: self.created_by.clone(),
             banner: self.banner.clone(),
             url: self.url.clone(),
+            address_book_entry: self.address_book_entry.clone(),
+            address_book_folder: self.address_book_folder.clone(),
+            entry_display_name: self.entry_display_name.clone(),
         }
     }
 }
@@ -249,9 +266,16 @@ pub struct SessionManager {
     config: Config,
     browser_manager: Arc<BrowserManager>,
     guacd_tls: Option<TlsConnector>,
+    db: Option<crate::db::Db>,
 }
 
 impl SessionManager {
+    pub fn new_with_db(config: Config, guacd_tls: Option<TlsConnector>, db: crate::db::Db) -> Self {
+        let mut mgr = Self::new(config, guacd_tls);
+        mgr.db = Some(db);
+        mgr
+    }
+
     pub fn new(config: Config, guacd_tls: Option<TlsConnector>) -> Self {
         // Ensure recording directory exists with restrictive permissions
         let rec_path = config.effective_recording_path();
@@ -281,6 +305,7 @@ impl SessionManager {
             config,
             browser_manager,
             guacd_tls,
+            db: None,
         }
     }
 
@@ -850,6 +875,8 @@ impl SessionManager {
             tunnels: ssh_tunnels,
             recording_enabled,
             address_book_entry: req.address_book_entry,
+            address_book_folder: req.address_book_folder,
+            entry_display_name: req.entry_display_name,
             max_recordings: req.max_recordings,
             login_script_handle,
         };
@@ -861,6 +888,25 @@ impl SessionManager {
             .write()
             .await
             .insert(session_id, session.clone());
+
+        // Record in session history
+        if let Some(ref db) = self.db {
+            let st = format!("{:?}", info.session_type).to_lowercase();
+            if let Err(e) = crate::db::insert_session_history(
+                db,
+                &session_id.to_string(),
+                &st,
+                &info.hostname,
+                None,
+                &info.username,
+                &info.created_by,
+                info.address_book_entry.as_deref(),
+                info.address_book_folder.as_deref(),
+                info.entry_display_name.as_deref(),
+            ) {
+                tracing::warn!(session_id = %session_id, error = %e, "Failed to record session history");
+            }
+        }
 
         // Spawn timeout task for pending sessions
         let sessions_ref = Arc::clone(&self.sessions);
@@ -1039,6 +1085,26 @@ impl SessionManager {
             session.status = SessionStatus::Error;
             session.guacd_stream = None;
             cleanup_browser(&self.browser_manager, &mut session).await;
+        }
+    }
+
+    /// Record session end in history table.
+    pub fn end_session_history(&self, id: Uuid, status: &str, duration_secs: u64, recording: bool) {
+        if let Some(ref db) = self.db {
+            let rec_file = if recording {
+                Some(format!("{}.guac", id))
+            } else {
+                None
+            };
+            if let Err(e) = crate::db::end_session_history(
+                db,
+                &id.to_string(),
+                status,
+                duration_secs,
+                rec_file.as_deref(),
+            ) {
+                tracing::warn!(session_id = %id, error = %e, "Failed to update session history");
+            }
         }
     }
 
