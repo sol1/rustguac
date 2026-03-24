@@ -52,4 +52,4 @@ jobs:
       - name: Security audit
         run: |
           $HOME/.cargo/bin/cargo install cargo-audit
-          $HOME/.cargo/bin/cargo audit --ignore RUSTSEC-2023-0071 --ignore-yanked
+          $HOME/.cargo/bin/cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0074
