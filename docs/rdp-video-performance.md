@@ -16,9 +16,25 @@ These settings appear in the address book entry editor for RDP entries under "Vi
 
 ## Windows RDP Server Tuning
 
-For the best video experience, configure the Windows RDP server:
+For the best video experience, configure the Windows RDP server (2022+).
 
-### Enable AVC 4:4:4 (H.264 full-colour)
+### Quick Setup with Script
+
+A PowerShell script is provided in `contrib/`. Run on the **Windows RDP target server** as Administrator:
+
+```powershell
+# Standard setup (software encoding, AVC444, 60fps)
+.\setup-rdp-performance.ps1
+
+# With GPU hardware encoding (requires DirectX 11+ GPU)
+.\setup-rdp-performance.ps1 -EnableGPU
+```
+
+This configures: AVC 4:4:4, 60 FPS, desktop composition, RemoteFX, audio, and network tuning. A reboot is recommended after.
+
+### Manual Setup
+
+#### Enable AVC 4:4:4 (H.264 full-colour)
 
 Group Policy: `Computer Configuration > Administrative Templates > Windows Components > Remote Desktop Services > Remote Desktop Session Host > Remote Session Environment`
 
