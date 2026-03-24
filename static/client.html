@@ -217,6 +217,20 @@
             var displayEl = document.getElementById('display');
             displayEl.appendChild(client.getDisplay().getElement());
 
+            // ── Resume AudioContext on user interaction (browser autoplay policy) ──
+            function resumeAudio() {
+                var ctx = Guacamole.AudioContextFactory.getAudioContext();
+                if (ctx && ctx.state === 'suspended') {
+                    ctx.resume().then(function() {
+                        if (typeof console !== 'undefined') console.log('[rustguac] AudioContext resumed');
+                    });
+                }
+            }
+            // Try on every interaction type — browsers are strict about this
+            ['click', 'keydown', 'mousedown', 'touchstart'].forEach(function(evt) {
+                document.addEventListener(evt, resumeAudio, true);
+            });
+
             // ── Clipboard state ──
             var remoteClipboard = '';
             var panelOpen = false;

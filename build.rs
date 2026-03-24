@@ -10,6 +10,7 @@ const DOC_FILES: &[&str] = &[
     "configuration.md",
     "credential-variables.md",
     "reports.md",
+    "rdp-video-performance.md",
     "web-sessions.md",
     "security.md",
     "roles-and-access-control.md",

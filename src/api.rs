@@ -1571,6 +1571,9 @@ pub async fn ab_connect_entry(
         allowed_domains: ab_entry.allowed_domains,
         disable_copy: ab_entry.disable_copy,
         disable_paste: ab_entry.disable_paste,
+        enable_gfx: ab_entry.enable_gfx,
+        enable_desktop_composition: ab_entry.enable_desktop_composition,
+        force_lossless: ab_entry.force_lossless,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -2940,6 +2943,9 @@ pub async fn quick_connect(
             allowed_domains: ab_entry.allowed_domains,
             disable_copy: ab_entry.disable_copy,
             disable_paste: ab_entry.disable_paste,
+            enable_gfx: ab_entry.enable_gfx,
+            enable_desktop_composition: ab_entry.enable_desktop_composition,
+            force_lossless: ab_entry.force_lossless,
         };
 
         tracing::info!(
@@ -3028,6 +3034,9 @@ pub async fn quick_connect(
         allowed_domains: None,
         disable_copy: None,
         disable_paste: None,
+        enable_gfx: None,
+        enable_desktop_composition: None,
+        force_lossless: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

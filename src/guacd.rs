@@ -73,6 +73,12 @@ pub struct RdpParams {
     pub remote_app_args: Option<String>,
     pub disable_copy: bool,
     pub disable_paste: bool,
+    /// Enable Graphics Pipeline Extension (GFX/RDPGFX). Enables RemoteFX codec, 32bpp.
+    pub enable_gfx: bool,
+    /// Enable desktop composition (DWM). Required for smooth video overlay rendering.
+    pub enable_desktop_composition: bool,
+    /// Force lossless encoding (PNG only). Better for text-heavy workloads.
+    pub force_lossless: bool,
 }
 
 /// Connection parameters — SSH, VNC, or RDP.
@@ -219,7 +225,12 @@ pub async fn connect_and_handshake(
                 "enable-theming" => "false".into(),
                 "enable-font-smoothing" => "true".into(),
                 "enable-full-window-drag" => "false".into(),
-                "enable-desktop-composition" => "false".into(),
+                "enable-desktop-composition" => if p.enable_desktop_composition {
+                    "true"
+                } else {
+                    "false"
+                }
+                .into(),
                 "enable-menu-animations" => "false".into(),
                 "disable-bitmap-caching" => "false".into(),
                 "disable-offscreen-caching" => "false".into(),
@@ -235,6 +246,7 @@ pub async fn connect_and_handshake(
                 "console" => "false".into(),
                 "server-layout" => String::new(),
                 "timezone" => String::new(),
+                "disable-audio" => "false".into(),
                 "enable-audio-input" => "false".into(),
                 "enable-printing" => "false".into(),
                 "enable-drive" => if p.enable_drive { "true" } else { "false" }.into(),
@@ -246,6 +258,8 @@ pub async fn connect_and_handshake(
                 "auth-pkg" => p.auth_pkg.clone().unwrap_or_default(),
                 "kdc-url" => p.kdc_url.clone().unwrap_or_default(),
                 "kerberos-cache" => p.kerberos_cache.clone().unwrap_or_default(),
+                "disable-gfx" => if p.enable_gfx { "false" } else { "true" }.into(),
+                "force-lossless" => if p.force_lossless { "true" } else { "false" }.into(),
                 "remote-app" => p.remote_app.clone().unwrap_or_default(),
                 "remote-app-dir" => p.remote_app_dir.clone().unwrap_or_default(),
                 "remote-app-args" => p.remote_app_args.clone().unwrap_or_default(),
@@ -424,7 +438,7 @@ async fn send_handshake(
             "size",
             vec![width.to_string(), height.to_string(), dpi.to_string()],
         ),
-        Instruction::new("audio", vec![]),
+        Instruction::new("audio", vec!["audio/L16".into(), "audio/L8".into()]),
         Instruction::new("video", vec![]),
         Instruction::new(
             "image",

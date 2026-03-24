@@ -325,7 +325,7 @@ async fn guacd_to_ws(
     mut ws: futures_util::stream::SplitSink<WebSocket, Message>,
     recording: Option<Arc<tokio::sync::Mutex<tokio::fs::File>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut buf = vec![0u8; 8192];
+    let mut buf = vec![0u8; 65536];
 
     loop {
         let n = guacd.read(&mut buf).await?;

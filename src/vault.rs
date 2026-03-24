@@ -138,6 +138,15 @@ pub struct AddressBookEntry {
     /// Optional banner text shown before the session starts. User must click Continue to proceed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub banner: Option<String>,
+    /// Enable RDP Graphics Pipeline Extension (GFX). Enables RemoteFX codec for better video.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_gfx: Option<bool>,
+    /// Enable desktop composition (DWM). Improves video overlay rendering in RDP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_desktop_composition: Option<bool>,
+    /// Force lossless encoding (PNG only). Better for text-heavy, low-bandwidth sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force_lossless: Option<bool>,
 }
 
 impl AddressBookEntry {
@@ -230,6 +239,15 @@ pub struct EntryInfo {
     /// Credential variable names referenced by this entry (e.g. ["corp_user", "corp_password"]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub credential_variables: Vec<String>,
+    /// Enable RDP Graphics Pipeline Extension (GFX).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_gfx: Option<bool>,
+    /// Enable desktop composition (DWM).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_desktop_composition: Option<bool>,
+    /// Force lossless encoding (PNG only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force_lossless: Option<bool>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -274,6 +292,9 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             disable_paste: e.disable_paste,
             banner: e.banner.clone(),
             credential_variables: entry_credential_variables(e),
+            enable_gfx: e.enable_gfx,
+            enable_desktop_composition: e.enable_desktop_composition,
+            force_lossless: e.force_lossless,
         }
     }
 }

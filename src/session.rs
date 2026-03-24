@@ -95,6 +95,12 @@ pub struct CreateSessionRequest {
     pub disable_copy: Option<bool>,
     /// Disable clipboard paste (client → server).
     pub disable_paste: Option<bool>,
+    /// Enable RDP Graphics Pipeline Extension (GFX).
+    pub enable_gfx: Option<bool>,
+    /// Enable desktop composition (DWM) for RDP.
+    pub enable_desktop_composition: Option<bool>,
+    /// Force lossless encoding (PNG only) for RDP.
+    pub force_lossless: Option<bool>,
 }
 
 /// Session status in the lifecycle.
@@ -504,6 +510,9 @@ impl SessionManager {
                     remote_app_args: req.remote_app_args.clone(),
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
+                    enable_gfx: req.enable_gfx.unwrap_or(false),
+                    enable_desktop_composition: req.enable_desktop_composition.unwrap_or(false),
+                    force_lossless: req.force_lossless.unwrap_or(false),
                 }));
                 (
                     params,

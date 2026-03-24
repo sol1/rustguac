@@ -540,6 +540,26 @@
                     </div>
                 </div>
             </div>
+            <div id="em-video-perf-section" style="display:none;margin-top:0.8em;padding-top:0.8em;border-top:1px solid var(--border)">
+                <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-video-perf-toggle">
+                    <span id="em-video-perf-arrow">&#9654;</span> Video Performance
+                </label>
+                <div id="em-video-perf-fields" style="display:none">
+                    <div class="field-hint" style="margin-bottom:0.5em">RDP graphics pipeline and encoding settings.</div>
+                    <label style="margin-top:0.5em">
+                        <input type="checkbox" id="em-enable-gfx" style="display:inline;width:auto;margin-right:0.4em"> Enable Graphics Pipeline (GFX)
+                        <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Enables RemoteFX codec for better video compression. Recommended for video monitoring.</div>
+                    </label>
+                    <label style="margin-top:0.3em">
+                        <input type="checkbox" id="em-enable-desktop-comp" style="display:inline;width:auto;margin-right:0.4em"> Enable Desktop Composition
+                        <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Enables DWM compositing. Improves video overlay rendering.</div>
+                    </label>
+                    <label style="margin-top:0.3em">
+                        <input type="checkbox" id="em-force-lossless" style="display:inline;width:auto;margin-right:0.4em"> Force Lossless
+                        <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Forces PNG encoding. Better for text-heavy work, uses more bandwidth.</div>
+                    </label>
+                </div>
+            </div>
             <div id="em-clipboard-section" style="margin-top:0.8em">
                 <label>
                     <input type="checkbox" id="em-disable-copy" style="display:inline;width:auto;margin-right:0.4em"> Disable clipboard copy (server &rarr; client)
@@ -1281,6 +1301,8 @@
             document.getElementById('em-drive-section').style.display = (val === 'ssh' || val === 'rdp') ? '' : 'none';
             // Show RemoteApp for RDP only
             document.getElementById('em-remoteapp-section').style.display = val === 'rdp' ? '' : 'none';
+            // Show Video Performance for RDP only
+            document.getElementById('em-video-perf-section').style.display = val === 'rdp' ? '' : 'none';
             // Show tunnel option for all session types
             document.getElementById('em-tunnel-section').style.display = '';
             // Show recording settings for all types
@@ -1329,6 +1351,19 @@
         // Toggle recording sub-fields when override checkbox changes
         document.getElementById('em-override-recording').addEventListener('change', function() {
             document.getElementById('em-recording-sub').style.display = this.checked ? '' : 'none';
+        });
+
+        // Toggle Video Performance fields visibility
+        document.getElementById('em-video-perf-toggle').addEventListener('click', function() {
+            var fields = document.getElementById('em-video-perf-fields');
+            var arrow = document.getElementById('em-video-perf-arrow');
+            if (fields.style.display === 'none') {
+                fields.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                fields.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
         });
 
         // Toggle Autofill fields visibility
@@ -1646,6 +1681,11 @@
             renderAllowedDomains();
             document.getElementById('em-allowed-domains-fields').style.display = 'none';
             document.getElementById('em-allowed-domains-arrow').innerHTML = '&#9654;';
+            document.getElementById('em-enable-gfx').checked = false;
+            document.getElementById('em-enable-desktop-comp').checked = false;
+            document.getElementById('em-force-lossless').checked = false;
+            document.getElementById('em-video-perf-fields').style.display = 'none';
+            document.getElementById('em-video-perf-arrow').innerHTML = '&#9654;';
             document.getElementById('em-disable-copy').checked = false;
             document.getElementById('em-disable-paste').checked = false;
             document.getElementById('em-enable-drive').checked = false;
@@ -1790,6 +1830,16 @@
                     document.getElementById('em-recording-fields').style.display = '';
                     document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
                 }
+                // Populate video performance settings (RDP only)
+                if (type === 'rdp') {
+                    document.getElementById('em-enable-gfx').checked = !!entryData.enable_gfx;
+                    document.getElementById('em-enable-desktop-comp').checked = !!entryData.enable_desktop_comp;
+                    document.getElementById('em-force-lossless').checked = !!entryData.force_lossless;
+                    if (entryData.enable_gfx || entryData.enable_desktop_comp || entryData.force_lossless) {
+                        document.getElementById('em-video-perf-fields').style.display = '';
+                        document.getElementById('em-video-perf-arrow').innerHTML = '&#9660;';
+                    }
+                }
                 // Populate clipboard settings
                 document.getElementById('em-disable-copy').checked = !!entryData.disable_copy;
                 document.getElementById('em-disable-paste').checked = !!entryData.disable_paste;
@@ -1911,6 +1961,13 @@
                 entry.enable_recording = document.getElementById('em-enable-recording').checked;
                 var maxRec = parseInt(document.getElementById('em-max-recordings').value) || 0;
                 if (maxRec > 0) entry.max_recordings = maxRec;
+            }
+
+            // Video performance settings (RDP only)
+            if (type === 'rdp') {
+                if (document.getElementById('em-enable-gfx').checked) entry.enable_gfx = true;
+                if (document.getElementById('em-enable-desktop-comp').checked) entry.enable_desktop_comp = true;
+                if (document.getElementById('em-force-lossless').checked) entry.force_lossless = true;
             }
 
             // Clipboard settings (all types)
