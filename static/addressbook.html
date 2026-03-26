@@ -13,7 +13,7 @@
         nav a:hover { text-decoration: underline; }
         nav .active { color: var(--primary); font-weight: bold; }
         #user-menu-wrapper { position: relative; float: right; }
-        #user-menu-btn { cursor: pointer; font-size: 1.3em; color: var(--text-muted); }
+        #user-menu-btn { cursor: pointer; font-size: 0.95em; color: var(--text-muted); }
         #user-menu-btn:hover { color: var(--text); }
         #user-menu { display:none; position:absolute; right:0; top:1.8em; background:var(--surface); border:1px solid var(--border); border-radius:6px; min-width:220px; z-index:50; padding:0.4em 0; }
         .um-section-label { padding:0.4em 0.9em; font-size:0.8em; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
@@ -153,6 +153,9 @@
         .modal-actions { margin-top: 1.2em; display: flex; gap: 0.8em; }
         .modal-actions .btn-cancel { background: var(--border); }
         .modal-actions .btn-cancel:hover { background: #444; }
+        #onboard-body code { background: var(--input); padding: 0.1em 0.4em; border-radius: 3px; font-size: 0.9em; }
+        .onboard-key { display:inline-block; background:var(--surface); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.45em; font-size:0.85em; color:var(--text); }
+        .onboard-hl { color: var(--accent); font-weight: bold; }
 
         .field-hint { font-size: 0.8em; color: var(--text-dim); margin-top: 0.2em; }
         .pw-wrap { position: relative; }
@@ -259,7 +262,7 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
-        <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881;</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item" id="my-creds-item">&#128273; My Credentials</div><div class="um-divider"></div><div class="um-item um-logout" id="logout-item">Logout</div></div></span>
+        <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item" id="my-creds-item">&#128273; My Credentials</div><div class="um-item" id="show-tour-item">&#9432; Welcome Tour</div><div class="um-divider"></div><div class="um-item um-logout" id="logout-item">Logout</div></div></span>
     </nav>
 
     <div id="global-error"></div>
@@ -612,6 +615,25 @@
         </div>
     </div>
 
+    <!-- Onboarding wizard -->
+    <div class="modal-overlay" id="onboarding-modal">
+        <div class="modal" style="max-width:520px;min-width:380px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.3em">
+                <h3 id="onboard-title" style="margin:0"></h3>
+                <span id="onboard-step-indicator" style="color:var(--text-dim);font-size:0.85em"></span>
+            </div>
+            <div id="onboard-body" style="color:var(--text);font-size:0.92em;line-height:1.65;min-height:80px"></div>
+            <div style="display:flex;align-items:center;gap:0.6em;margin-top:1.2em">
+                <button id="onboard-back" class="btn-cancel">Back</button>
+                <button id="onboard-next" class="btn-connect">Next</button>
+                <span style="flex:1"></span>
+                <label style="color:var(--text-dim);font-size:0.8em;cursor:pointer;white-space:nowrap">
+                    <input type="checkbox" id="onboard-dismiss" style="display:inline;width:auto;margin-right:0.3em"> Don't show again
+                </label>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="cred-modal">
         <div class="modal">
             <h3 id="cred-modal-title">Enter Credentials</h3>
@@ -675,6 +697,7 @@
 
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
         var isAdmin = false;
+        var currentUserRole = 'viewer';
         var selectedFolder = null; // { name, scope, description }
         var folders = [];
         var folderEntryCounts = {}; // "scope/name" -> count
@@ -728,6 +751,7 @@
             .then(function(data) {
                 if (!data) return;
                 isAdmin = data.role === 'admin';
+                currentUserRole = data.role || 'viewer';
                 var level = roleLevel[data.role] || 0;
                 if (level < 3) {
                     document.getElementById('sessions-link').style.display = 'none';
@@ -763,6 +787,7 @@
                     return;
                 }
                 loadFolders();
+                startOnboarding(currentUserRole);
             })
             .catch(function(err) {
                 showError('Failed to check authentication: ' + err.message);
@@ -2235,6 +2260,106 @@
                 btn.textContent = 'Save';
             });
         }
+
+        // ── Onboarding Wizard ──
+        var onboardSteps = [
+            { title: 'Welcome to rustguac', minRole: 1, body:
+                'This is your remote access gateway. Browse connection entries organised by folder, then click <span class="onboard-hl">Connect</span> to launch a session in a new browser tab.' +
+                '<br><br>This quick tour covers the essentials &mdash; you can dismiss it at any time.'
+            },
+            { title: 'Navigation', minRole: 1, body:
+                'The nav bar at the top links to:' +
+                '<br>&bull; <span class="onboard-hl">Address Book</span> &mdash; your connection entries' +
+                '<br>&bull; <span class="onboard-hl">Sessions</span> &mdash; active and recent sessions' +
+                '<br>&bull; <span class="onboard-hl">Recordings</span> &mdash; session playback' +
+                '<br>&bull; <span class="onboard-hl">Docs</span> &mdash; built-in documentation' +
+                '<br><br>The <span class="onboard-hl">Settings</span> menu (top right) has theme selection, credential management, and this tour.'
+            },
+            { title: 'My Credentials', minRole: 2, body:
+                'Some entries use credential variables like <code>$domain_username</code>. Before connecting, set your personal credentials:' +
+                '<br><br>Click <span class="onboard-hl">Settings</span> &rarr; <span class="onboard-hl">My Credentials</span> to fill in your values. They are stored securely in Vault and applied automatically when you connect.'
+            },
+            { title: 'Connect vs Login', minRole: 2, body:
+                'Address book entries have two connection modes:' +
+                '<br><br>&bull; <span class="onboard-hl">Connect</span> &mdash; launches the session directly using the saved settings.' +
+                '<br>&bull; <span class="onboard-hl">Login</span> &mdash; runs an automated login script after connecting (e.g. filling in a web login form). If an entry shows Login, the admin has configured an auto-login workflow for it.'
+            },
+            { title: 'Clipboard', minRole: 2, body:
+                '<span class="onboard-key">Ctrl</span>+<span class="onboard-key">V</span> pastes from your browser clipboard into the remote session automatically.' +
+                '<br><br>For advanced use (copy from remote, send arbitrary text), press <span class="onboard-key">Ctrl</span>+<span class="onboard-key">Alt</span>+<span class="onboard-key">Shift</span> or click the <span class="onboard-hl">Clipboard</span> tab on the left edge of the session window.'
+            },
+            { title: 'File Transfer', minRole: 2, body:
+                'RDP sessions with drive redirection enabled show a <span class="onboard-hl">Files</span> tab on the right edge of the session window.' +
+                '<br><br>Use it to upload and download files via a shared virtual drive. SSH sessions support SFTP file transfer instead.' +
+                '<br><br>Toggle the file panel with <span class="onboard-key">Ctrl</span>+<span class="onboard-key">Alt</span>+<span class="onboard-key">F</span>.'
+            },
+            { title: 'Ad-hoc Sessions', minRole: 3, body:
+                'As a power user, you can create one-off sessions from the <span class="onboard-hl">Sessions</span> page &mdash; useful for quick connections that aren\'t in the address book.' +
+                '<br><br>Choose SSH, RDP, VNC, or Web and enter connection details directly.'
+            },
+            { title: 'Managing the Address Book', minRole: 4, body:
+                'As an admin, you can:' +
+                '<br>&bull; Create and edit <span class="onboard-hl">folders</span> with OIDC group permissions' +
+                '<br>&bull; Add, edit, clone, and delete <span class="onboard-hl">entries</span>' +
+                '<br>&bull; Configure credential variables, login scripts, and recording overrides per entry' +
+                '<br>&bull; Manage users and API tokens from the <span class="onboard-hl">Admin</span> page'
+            }
+        ];
+        var onboardCurrent = 0;
+        var onboardFiltered = [];
+
+        function startOnboarding(role) {
+            if (localStorage.getItem('rustguac_onboarding_dismissed')) return;
+            var level = roleLevel[role] || 1;
+            onboardFiltered = onboardSteps.filter(function(s) { return s.minRole <= level; });
+            if (onboardFiltered.length === 0) return;
+            onboardCurrent = 0;
+            renderOnboardStep();
+            document.getElementById('onboard-dismiss').checked = false;
+            document.getElementById('onboarding-modal').classList.add('active');
+        }
+
+        function renderOnboardStep() {
+            var step = onboardFiltered[onboardCurrent];
+            document.getElementById('onboard-title').textContent = step.title;
+            document.getElementById('onboard-body').innerHTML = step.body;
+            document.getElementById('onboard-step-indicator').textContent = (onboardCurrent + 1) + ' / ' + onboardFiltered.length;
+            document.getElementById('onboard-back').style.display = onboardCurrent === 0 ? 'none' : '';
+            var nextBtn = document.getElementById('onboard-next');
+            nextBtn.textContent = (onboardCurrent === onboardFiltered.length - 1) ? 'Done' : 'Next';
+        }
+
+        function closeOnboarding() {
+            document.getElementById('onboarding-modal').classList.remove('active');
+            if (document.getElementById('onboard-dismiss').checked) {
+                localStorage.setItem('rustguac_onboarding_dismissed', '1');
+            }
+        }
+
+        document.getElementById('onboard-next').addEventListener('click', function() {
+            if (onboardCurrent < onboardFiltered.length - 1) {
+                onboardCurrent++;
+                renderOnboardStep();
+            } else {
+                localStorage.setItem('rustguac_onboarding_dismissed', '1');
+                closeOnboarding();
+            }
+        });
+        document.getElementById('onboard-back').addEventListener('click', function() {
+            if (onboardCurrent > 0) {
+                onboardCurrent--;
+                renderOnboardStep();
+            }
+        });
+        document.getElementById('onboarding-modal').addEventListener('click', function(e) {
+            if (e.target === this) closeOnboarding();
+        });
+
+        document.getElementById('show-tour-item').addEventListener('click', function() {
+            document.getElementById('user-menu').style.display = 'none';
+            localStorage.removeItem('rustguac_onboarding_dismissed');
+            startOnboarding(currentUserRole);
+        });
 
         init();
     </script>

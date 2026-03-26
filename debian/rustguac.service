@@ -11,6 +11,7 @@ ExecStart=/opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml serve
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
+EnvironmentFile=-/opt/rustguac/env
 
 [Install]
 WantedBy=multi-user.target
