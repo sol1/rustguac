@@ -42,7 +42,7 @@ hmac = "0.12"
 sha1 = "0.10"
 
 # Database
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
