@@ -152,5 +152,29 @@ static/
   guac/            Guacamole JS client library
 docs/              This documentation
 patches/           guacd patches for FreeRDP 3.x
+contrib/           Target server setup scripts (xrdp, audio, Windows)
 scripts/           Utility scripts (drive-setup.sh)
 ```
+
+## Documentation
+
+### Getting started
+- [Deployment Guide](deployment-guide.md) -- step-by-step production setup (start here)
+- [Installation](installation.md) -- all install options (Debian, Docker, RPM, bare-metal, dev)
+- [Configuration](configuration.md) -- full config.toml reference
+
+### Features
+- [Roles and Access Control](roles-and-access-control.md) -- 4-tier role hierarchy, OIDC groups, user API tokens
+- [Web Browser Sessions](web-sessions.md) -- autofill, domain allowlisting, login scripts
+- [Credential Variables](credential-variables.md) -- shared credentials across entries
+- [Reports](reports.md) -- session analytics, history, CSV export
+- [RDP Video Performance](rdp-video-performance.md) -- H.264 passthrough, GFX pipeline, xrdp/Windows tuning
+
+### Integrations
+- [Integrations](integrations.md) -- OIDC, Vault, SSH tunnels, Kerberos, HAProxy, Knocknoc, drive/LUKS
+- [NetBox](netbox.md) -- address book sync via custom fields and webhooks
+- [Migration from Apache Guacamole](migration.md) -- MySQL/MariaDB to Vault
+
+### Reference
+- [Security](security.md) -- TLS, network allowlists, headers, audit logging, hardening
+- [API Reference](api.md) -- complete REST API documentation
