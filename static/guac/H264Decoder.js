@@ -116,8 +116,8 @@ Guacamole.H264Decoder = function H264Decoder(display) {
             }
         });
 
-        // Configure for H.264 Constrained Baseline (most compatible)
-        // The actual profile/level will be negotiated by the RDP server
+        // Configure for H.264 Constrained Baseline
+        // Let the decoder auto-detect level from the SPS NAL in the stream
         decoder.configure({
             codec: 'avc1.42001f', // Baseline profile, level 3.1
             optimizeForLatency: true

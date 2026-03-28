@@ -68,6 +68,28 @@ Three new connection parameters:
 | `src/protocols/rdp/channels/rdpgfx.c` | Add `#include "config.h"` |
 | `src/protocols/rdp/input.c` | Add `#include "config.h"`, add NULL guard in `guac_rdp_user_size_handler()` |
 
+## 004-h264-display-worker.patch
+
+**Feature:** H.264 passthrough via guac_display worker integration. When the RDP server sends AVC420/AVC444 encoded frames (H.264), the raw NAL units are passed through to the browser's WebCodecs VideoDecoder instead of being decoded server-side and re-encoded as JPEG/PNG/WebP.
+
+**Architecture:** The SurfaceCommand callback intercepts H.264 data and stores it on the display layer. During the normal frame flush cycle (`guac_display_plan_apply`), the H.264 data is sent to clients as a custom `h264` instruction before worker threads start encoding. All IMG operations for the H.264 layer are skipped, eliminating the decode→re-encode overhead.
+
+This approach avoids the socket contention issue that occurred when H.264 was sent directly from FreeRDP's SurfaceCommand callback thread, which raced with guac_display's worker threads writing to the same socket.
+
+**Files patched:**
+
+| File | Fix |
+|------|-----|
+| `src/libguac/display-priv.h` | Add H.264 buffer fields to `guac_display_layer` (data, length, keyframe, rect) |
+| `src/libguac/guacamole/display.h` | Add `guac_display_layer_set_h264()` public API |
+| `src/libguac/display-layer.c` | Implement `guac_display_layer_set_h264()` with lock management |
+| `src/libguac/display-layer-list.c` | Free H.264 data in layer cleanup |
+| `src/libguac/display-plan.c` | Send H.264 data during plan apply, skip IMG ops for H.264 layers |
+| `src/protocols/rdp/channels/rdpgfx.c` | Wrap SurfaceCommand to store H.264 on display layer after GDI decode |
+| `src/protocols/rdp/settings.c` | Enable GfxH264 and GfxAVC444 in FreeRDP settings |
+
+**Requires:** RDP server with H.264 support (xrdp with x264, or Windows with AVC hardware encoder). Browser must support WebCodecs VideoDecoder (Chrome/Edge 94+, Firefox 130+).
+
 ## Applying patches
 
 Patches are applied automatically by all build scripts (`build-deb.sh`, `build-rpm.sh`, `install.sh`, `dev.sh`, `Dockerfile`). To apply manually:

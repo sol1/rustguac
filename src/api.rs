@@ -1688,6 +1688,7 @@ pub async fn ab_connect_entry(
         enable_gfx: ab_entry.enable_gfx,
         enable_desktop_composition: ab_entry.enable_desktop_composition,
         force_lossless: ab_entry.force_lossless,
+        enable_h264: ab_entry.enable_h264,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -3060,6 +3061,7 @@ pub async fn quick_connect(
             enable_gfx: ab_entry.enable_gfx,
             enable_desktop_composition: ab_entry.enable_desktop_composition,
             force_lossless: ab_entry.force_lossless,
+            enable_h264: ab_entry.enable_h264,
         };
 
         tracing::info!(
@@ -3151,6 +3153,7 @@ pub async fn quick_connect(
         enable_gfx: None,
         enable_desktop_composition: None,
         force_lossless: None,
+        enable_h264: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

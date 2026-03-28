@@ -108,6 +108,7 @@ pub async fn cmd_import_guacamole(
             enable_gfx: None,
             enable_desktop_composition: None,
             force_lossless: None,
+            enable_h264: None,
         };
 
         // Build entry name: group prefix + sanitized connection name
@@ -644,6 +645,7 @@ mod tests {
             enable_gfx: None,
             enable_desktop_composition: None,
             force_lossless: None,
+            enable_h264: None,
         };
         let mut entries = vec![
             ("web".into(), entry()),

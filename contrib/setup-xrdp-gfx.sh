@@ -1,13 +1,22 @@
 #!/bin/bash
 # Setup GFX pipeline with H.264 encoding for xrdp on Debian 13 (trixie).
 #
-# Configures xrdp to use the Xorg backend with the GFX graphics pipeline
-# and H.264 encoding via x264 for better video performance.
+# This script rebuilds xrdp from the Debian sid source package with x264
+# support enabled, installs matching xorgxrdp, configures the Xorg backend
+# and GFX pipeline with H.264 encoding.
+#
+# The stock Debian 13 xrdp package does NOT include x264 support.
+# This script adds the Debian sid (unstable) repo, rebuilds xrdp with
+# --enable-x264, and pins trixie as the default to prevent accidental
+# upgrades from sid.
 #
 # Run as root on the xrdp target machine (not the rustguac server).
-# Requires: xrdp >= 0.10, xorgxrdp, libx264
+# Requires: Debian 13 (trixie), ~10 minutes for the rebuild.
 #
 # Usage: sudo bash setup-xrdp-gfx.sh
+#
+# After running, also run setup-xrdp-audio.sh for audio redirection.
+
 set -e
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -15,49 +24,152 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-echo "=== Checking prerequisites ==="
-if ! dpkg -l xrdp >/dev/null 2>&1; then
-    echo "Error: xrdp is not installed"
-    exit 1
-fi
-
-XRDP_VERSION=$(dpkg -l xrdp | awk '/^ii/{print $3}')
-echo "  xrdp version: $XRDP_VERSION"
-
-if ! dpkg -l xorgxrdp >/dev/null 2>&1; then
-    echo "Error: xorgxrdp is not installed. Install with: apt install xorgxrdp"
-    exit 1
-fi
-echo "  xorgxrdp: installed"
-
-# Install x264 if not present
-if ! dpkg -l libx264-164 >/dev/null 2>&1; then
-    echo ""
-    echo "=== Installing libx264 ==="
-    apt-get update -qq
-    apt-get install -y libx264-164
-fi
-echo "  libx264: installed"
-
+echo "============================================"
+echo "  xrdp GFX + H.264 Setup for Debian 13"
+echo "============================================"
 echo ""
-echo "=== Configuring Xorg as default session ==="
-if grep -q "^autorun=$" /etc/xrdp/xrdp.ini; then
-    sed -i "s/^autorun=$/autorun=Xorg/" /etc/xrdp/xrdp.ini
-    echo "  Set autorun=Xorg"
-elif grep -q "^autorun=Xorg" /etc/xrdp/xrdp.ini; then
-    echo "  Already set to Xorg"
+
+# ---------- Step 1: Add sid repo with pinning ----------
+
+echo "=== Step 1: Configuring apt repos ==="
+SID_LIST="/etc/apt/sources.list.d/sid.list"
+PIN_FILE="/etc/apt/preferences.d/pin-trixie"
+
+if [ ! -f "$SID_LIST" ]; then
+    echo "deb http://deb.debian.org/debian sid main" > "$SID_LIST"
+    echo "  Added sid repo to $SID_LIST"
 else
-    CURRENT=$(grep "^autorun=" /etc/xrdp/xrdp.ini)
-    echo "  Warning: autorun is set to '$CURRENT' — not changing."
-    echo "  For GFX support, set autorun=Xorg in /etc/xrdp/xrdp.ini"
+    echo "  Sid repo already configured"
 fi
 
+if [ ! -f "$PIN_FILE" ]; then
+    cat > "$PIN_FILE" << 'PINEOF'
+Package: *
+Pin: release a=trixie
+Pin-Priority: 900
+
+Package: *
+Pin: release a=unstable
+Pin-Priority: 100
+PINEOF
+    echo "  Created apt pinning (trixie=900, sid=100)"
+else
+    echo "  Apt pinning already configured"
+fi
+
+apt-get update -qq
 echo ""
-echo "=== Creating GFX configuration ==="
+
+# ---------- Step 2: Install xorgxrdp from sid ----------
+
+echo "=== Step 2: Installing xorgxrdp from sid ==="
+apt-get install -y -t unstable xorgxrdp
+XORGXRDP_VER=$(dpkg -l xorgxrdp | awk '/^ii/{print $3}')
+echo "  xorgxrdp version: $XORGXRDP_VER"
+echo ""
+
+# ---------- Step 3: Rebuild xrdp with x264 ----------
+
+echo "=== Step 3: Rebuilding xrdp with x264 support ==="
+
+# Install build dependencies
+apt-get install -y libx264-dev build-essential devscripts
+apt-get build-dep -y xrdp 2>/dev/null || apt-get build-dep -y -t unstable xrdp
+
+# Get xrdp source from sid
+BUILD_DIR=$(mktemp -d /tmp/xrdp-build.XXXXXX)
+echo "  Build directory: $BUILD_DIR"
+cd "$BUILD_DIR"
+
+# Find the version in sid
+XRDP_SID_VER=$(apt-cache showsrc -t unstable xrdp 2>/dev/null | grep "^Version:" | head -1 | awk '{print $2}')
+if [ -z "$XRDP_SID_VER" ]; then
+    echo "Error: cannot find xrdp source in sid"
+    exit 1
+fi
+echo "  Building xrdp $XRDP_SID_VER from sid source"
+
+apt-get source "xrdp=$XRDP_SID_VER"
+XRDP_DIR=$(ls -d xrdp-* | head -1)
+cd "$XRDP_DIR"
+
+# Patch debian/rules to add --enable-x264
+if grep -q -- '--enable-x264' debian/rules; then
+    echo "  debian/rules already has --enable-x264"
+else
+    sed -i "s|--enable-opus|--enable-opus --enable-x264|" debian/rules
+    echo "  Patched debian/rules: added --enable-x264"
+fi
+
+# Ensure libx264-dev is in Build-Depends
+if grep -q 'libx264-dev' debian/control; then
+    echo "  debian/control already has libx264-dev"
+else
+    sed -i "s|^ autoconf,| libx264-dev,\n autoconf,|" debian/control
+    echo "  Patched debian/control: added libx264-dev"
+fi
+
+# Build
+echo "  Building (this takes a few minutes)..."
+dpkg-buildpackage -b -uc -us -j"$(nproc)" > /tmp/xrdp-build.log 2>&1
+if [ $? -ne 0 ]; then
+    echo "  Build failed! See /tmp/xrdp-build.log"
+    exit 1
+fi
+
+# Install
+DEB=$(ls "$BUILD_DIR"/xrdp_*.deb | head -1)
+echo "  Installing $DEB"
+dpkg -i "$DEB"
+
+# Verify x264 is linked
+if ldd /usr/sbin/xrdp 2>/dev/null | grep -q libx264; then
+    echo "  Verified: xrdp linked to libx264"
+else
+    echo "  WARNING: xrdp does not appear to be linked to libx264"
+fi
+
+# Cleanup
+rm -rf "$BUILD_DIR"
+echo ""
+
+# ---------- Step 4: Configure Xorg backend ----------
+
+echo "=== Step 4: Configuring Xorg backend ==="
+XRDP_INI="/etc/xrdp/xrdp.ini"
+
+if grep -q "^autorun=Xorg" "$XRDP_INI"; then
+    echo "  Already set to Xorg"
+elif grep -q "^autorun=" "$XRDP_INI"; then
+    sed -i "s/^autorun=.*/autorun=Xorg/" "$XRDP_INI"
+    echo "  Set autorun=Xorg"
+else
+    echo "autorun=Xorg" >> "$XRDP_INI"
+    echo "  Added autorun=Xorg"
+fi
+
+# Allow non-root to start Xorg
+XWRAPPER="/etc/X11/Xwrapper.config"
+if [ -f "$XWRAPPER" ]; then
+    if grep -q "allowed_users=anybody" "$XWRAPPER"; then
+        echo "  Xwrapper already allows anybody"
+    else
+        sed -i "s/^allowed_users=.*/allowed_users=anybody/" "$XWRAPPER"
+        echo "  Set Xwrapper allowed_users=anybody"
+    fi
+else
+    echo "allowed_users=anybody" > "$XWRAPPER"
+    echo "  Created Xwrapper with allowed_users=anybody"
+fi
+echo ""
+
+# ---------- Step 5: Configure GFX pipeline ----------
+
+echo "=== Step 5: Creating GFX configuration ==="
 GFX_CONF="/etc/xrdp/gfx.toml"
 if [ -f "$GFX_CONF" ]; then
     cp "$GFX_CONF" "${GFX_CONF}.bak"
-    echo "  Backed up existing $GFX_CONF to ${GFX_CONF}.bak"
+    echo "  Backed up existing $GFX_CONF"
 fi
 
 cat > "$GFX_CONF" << 'EOF'
@@ -71,7 +183,7 @@ cat > "$GFX_CONF" << 'EOF'
 order = ["H.264", "RFX"]
 h264_encoder = "x264"
 
-[x264]
+[x264.default]
 preset = "ultrafast"
 tune = "zerolatency"
 profile = "main"
@@ -79,37 +191,52 @@ vbv_max_bitrate = 0
 vbv_buffer_size = 0
 fps_num = 60
 fps_den = 1
-threads = 0
+threads = 1
 
-[x264.connection.lan]
-preset = "ultrafast"
-tune = "zerolatency"
-vbv_max_bitrate = 0
-fps_num = 60
-fps_den = 1
+[x264.lan]
+# inherits default — uncapped bitrate, 60fps
 
-[x264.connection.broadband_high]
-preset = "ultrafast"
-tune = "zerolatency"
-vbv_max_bitrate = 20000
-fps_num = 30
-fps_den = 1
+[x264.wan]
+vbv_max_bitrate = 15000
+vbv_buffer_size = 1500
+
+[x264.broadband_high]
+preset = "superfast"
+vbv_max_bitrate = 8000
+vbv_buffer_size = 800
+
+[x264.broadband_low]
+preset = "veryfast"
+vbv_max_bitrate = 1600
+vbv_buffer_size = 66
 EOF
 echo "  Created $GFX_CONF"
-
 echo ""
-echo "=== Restarting xrdp ==="
+
+# ---------- Step 6: Restart ----------
+
+echo "=== Step 6: Restarting xrdp ==="
 systemctl restart xrdp
 echo "  xrdp restarted"
 
 echo ""
-echo "=== Done ==="
+echo "============================================"
+echo "  Setup complete!"
+echo "============================================"
 echo ""
 echo "xrdp is now configured with:"
+echo "  - xrdp $(dpkg -l xrdp | awk '/^ii/{print $3}') rebuilt with x264 support"
+echo "  - xorgxrdp $XORGXRDP_VER (from sid)"
 echo "  - Xorg backend (required for GFX pipeline)"
-echo "  - H.264 encoding via x264 (60fps LAN, 30fps broadband)"
+echo "  - H.264 encoding via x264 (60fps LAN)"
 echo "  - RemoteFX as fallback codec"
+echo "  - Xwrapper allows non-root Xorg"
 echo ""
-echo "In rustguac, enable 'Graphics Pipeline (GFX)' and"
-echo "'Desktop Composition' on RDP address book entries"
-echo "for best video performance."
+echo "Next steps:"
+echo "  1. Run contrib/setup-xrdp-audio.sh for audio support"
+echo "  2. Install a desktop environment (e.g. apt install task-xfce-desktop)"
+echo "  3. In rustguac, enable 'Graphics Pipeline (GFX)' on RDP entries"
+echo ""
+echo "When connecting from rustguac with H.264 passthrough enabled,"
+echo "the browser's WebCodecs VideoDecoder will decode H.264 directly"
+echo "for low-latency, high-quality video."

@@ -79,6 +79,8 @@ pub struct RdpParams {
     pub enable_desktop_composition: bool,
     /// Force lossless encoding (PNG only). Better for text-heavy workloads.
     pub force_lossless: bool,
+    /// Enable H.264 passthrough. Raw H.264 NAL units sent to browser WebCodecs decoder.
+    pub enable_h264: bool,
 }
 
 /// Connection parameters — SSH, VNC, or RDP.
@@ -260,6 +262,7 @@ pub async fn connect_and_handshake(
                 "kerberos-cache" => p.kerberos_cache.clone().unwrap_or_default(),
                 "disable-gfx" => if p.enable_gfx { "false" } else { "true" }.into(),
                 "force-lossless" => if p.force_lossless { "true" } else { "false" }.into(),
+                "enable-h264" => if p.enable_h264 { "true" } else { "false" }.into(),
                 "remote-app" => p.remote_app.clone().unwrap_or_default(),
                 "remote-app-dir" => p.remote_app_dir.clone().unwrap_or_default(),
                 "remote-app-args" => p.remote_app_args.clone().unwrap_or_default(),
@@ -272,12 +275,12 @@ pub async fn connect_and_handshake(
         .collect();
 
     // Send handshake instructions: size, audio, video, image, timezone, connect
-    let (width, height, dpi) = match params {
-        ConnectionParams::Ssh(p) => (p.width, p.height, p.dpi),
-        ConnectionParams::Vnc(p) => (p.width, p.height, p.dpi),
-        ConnectionParams::Rdp(p) => (p.width, p.height, p.dpi),
+    let (width, height, dpi, h264) = match &params {
+        ConnectionParams::Ssh(p) => (p.width, p.height, p.dpi, false),
+        ConnectionParams::Vnc(p) => (p.width, p.height, p.dpi, false),
+        ConnectionParams::Rdp(p) => (p.width, p.height, p.dpi, p.enable_h264),
     };
-    send_handshake(&mut stream, width, height, dpi).await?;
+    send_handshake(&mut stream, width, height, dpi, h264).await?;
 
     let connect = Instruction::new("connect", arg_values);
     stream
@@ -367,8 +370,8 @@ pub async fn join_connection(
         })
         .collect();
 
-    // Send handshake instructions
-    send_handshake(&mut stream, width, height, dpi).await?;
+    // Send handshake instructions (joining user — h264 inherited from session)
+    send_handshake(&mut stream, width, height, dpi, false).await?;
 
     let connect = Instruction::new("connect", arg_values);
     stream
@@ -432,14 +435,21 @@ async fn send_handshake(
     width: u32,
     height: u32,
     dpi: u32,
+    enable_h264: bool,
 ) -> Result<(), GuacdError> {
+    let video_args = if enable_h264 {
+        vec!["video/h264".into()]
+    } else {
+        vec![]
+    };
+
     let instructions = [
         Instruction::new(
             "size",
             vec![width.to_string(), height.to_string(), dpi.to_string()],
         ),
         Instruction::new("audio", vec!["audio/L16".into(), "audio/L8".into()]),
-        Instruction::new("video", vec!["video/h264".into()]),
+        Instruction::new("video", video_args),
         Instruction::new(
             "image",
             vec!["image/png".into(), "image/jpeg".into(), "image/webp".into()],

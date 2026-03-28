@@ -147,6 +147,10 @@ pub struct AddressBookEntry {
     /// Force lossless encoding (PNG only). Better for text-heavy, low-bandwidth sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub force_lossless: Option<bool>,
+    /// Enable H.264 passthrough. Passes raw H.264 from xrdp to browser WebCodecs decoder.
+    /// Requires GFX enabled and xrdp with x264 on the target. Default: true when GFX enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_h264: Option<bool>,
 }
 
 impl AddressBookEntry {
@@ -248,6 +252,9 @@ pub struct EntryInfo {
     /// Force lossless encoding (PNG only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force_lossless: Option<bool>,
+    /// Enable H.264 passthrough.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_h264: Option<bool>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -295,6 +302,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             enable_gfx: e.enable_gfx,
             enable_desktop_composition: e.enable_desktop_composition,
             force_lossless: e.force_lossless,
+            enable_h264: e.enable_h264,
         }
     }
 }
@@ -1617,5 +1625,25 @@ mod tests {
         let resolved = resolve_credential_variables(&entry, &creds).unwrap();
         assert_eq!(resolved.username.as_deref(), Some("alice"));
         assert_eq!(resolved.password.as_deref(), Some("literal_pass"));
+    }
+
+    #[test]
+    fn test_enable_h264_serde_roundtrip() {
+        // With enable_h264 set
+        let json = r#"{"type":"rdp","hostname":"test","enable_gfx":true,"enable_h264":true}"#;
+        let entry: AddressBookEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.enable_h264, Some(true));
+        let out = serde_json::to_string(&entry).unwrap();
+        assert!(out.contains("\"enable_h264\":true"));
+
+        // Without enable_h264 (defaults to None)
+        let json2 = r#"{"type":"rdp","hostname":"test","enable_gfx":true}"#;
+        let entry2: AddressBookEntry = serde_json::from_str(json2).unwrap();
+        assert_eq!(entry2.enable_h264, None);
+
+        // Explicit false
+        let json3 = r#"{"type":"rdp","hostname":"test","enable_h264":false}"#;
+        let entry3: AddressBookEntry = serde_json::from_str(json3).unwrap();
+        assert_eq!(entry3.enable_h264, Some(false));
     }
 }

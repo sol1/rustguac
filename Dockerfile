@@ -58,7 +58,7 @@ RUN /build/guacamole-server/configure \
     && make -j"$(nproc)" \
     && make install \
     && mkdir -p /opt/rustguac/lib/freerdp3 \
-    && find /usr/lib -path "*/freerdp3/libguac*" -exec cp {} /opt/rustguac/lib/freerdp3/ \;
+    && find /usr/lib /opt/rustguac/lib -path "*/freerdp3/libguac*" -exec cp {} /opt/rustguac/lib/freerdp3/ \;
 
 # ---------------------------------------------------------------------------
 # Stage 2: Build rustguac

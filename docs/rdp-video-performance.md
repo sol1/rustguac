@@ -71,34 +71,87 @@ Check Windows Event Viewer at `Applications and Services Logs > Microsoft > Wind
 
 ## Linux xrdp Tuning (Debian 13)
 
-Debian 13 (trixie) ships xrdp 0.10.1 with GFX pipeline and H.264 support.
+Debian 13 (trixie) ships xrdp 0.10.x, but the stock package does **not** include x264 H.264 encoding support. The `contrib/setup-xrdp-gfx.sh` script rebuilds xrdp from the Debian sid source package with `--enable-x264` and configures the GFX pipeline.
 
 ### Quick Setup with Scripts
 
 Helper scripts are provided in the `contrib/` directory of the rustguac repository. Run these **on the xrdp target machine** (not the rustguac server):
 
 ```bash
-# 1. Install GFX pipeline with H.264 encoding
+# 1. Rebuild xrdp with x264 + configure GFX pipeline (~10 minutes)
 sudo bash contrib/setup-xrdp-gfx.sh
 
 # 2. Install audio redirection (builds PulseAudio module from source)
 sudo bash contrib/setup-xrdp-audio.sh
+
+# 3. Install a desktop environment
+sudo apt install task-xfce-desktop
 ```
+
+The GFX script:
+1. Adds Debian sid repo with pinning (trixie stays default)
+2. Installs matching `xorgxrdp` from sid
+3. Rebuilds `xrdp` from sid source with `--enable-x264`
+4. Configures Xorg backend (`autorun=Xorg`)
+5. Allows non-root Xorg via Xwrapper
+6. Creates `/etc/xrdp/gfx.toml` with H.264 + x264 encoder
 
 ### Manual Setup
 
 #### Prerequisites
 
 ```bash
-apt install xrdp xorgxrdp libx264-164 libavcodec61 pulseaudio
+# Add sid repo for newer xrdp source
+echo "deb http://deb.debian.org/debian sid main" > /etc/apt/sources.list.d/sid.list
+
+# Pin trixie as default (prevent accidental sid upgrades)
+cat > /etc/apt/preferences.d/pin-trixie << 'EOF'
+Package: *
+Pin: release a=trixie
+Pin-Priority: 900
+
+Package: *
+Pin: release a=unstable
+Pin-Priority: 100
+EOF
+
+apt-get update
+
+# Install xorgxrdp from sid (must match xrdp version)
+apt-get install -y -t unstable xorgxrdp
+
+# Install x264 and build dependencies
+apt-get install -y libx264-dev build-essential devscripts
+apt-get build-dep -y xrdp
 ```
+
+#### Rebuild xrdp with x264
+
+The stock Debian xrdp package is built without `--enable-x264`. Rebuild from sid source:
+
+```bash
+cd /tmp
+apt-get source xrdp=<sid-version>
+cd xrdp-*
+sed -i "s|--enable-opus|--enable-opus --enable-x264|" debian/rules
+sed -i "s|^ autoconf,| libx264-dev,\n autoconf,|" debian/control
+dpkg-buildpackage -b -uc -us -j$(nproc)
+dpkg -i ../xrdp_*.deb
+```
+
+Verify x264 is linked: `ldd /usr/sbin/xrdp | grep libx264`
 
 #### GFX Pipeline (Video)
 
-The GFX pipeline requires the Xorg backend (`libxup.so`), not Xvnc. Set in `/etc/xrdp/xrdp.ini`:
+The GFX pipeline requires the Xorg backend, not Xvnc. Set in `/etc/xrdp/xrdp.ini`:
 
 ```ini
 autorun=Xorg
+```
+
+Allow non-root Xorg in `/etc/X11/Xwrapper.config`:
+```
+allowed_users=anybody
 ```
 
 Create `/etc/xrdp/gfx.toml`:
@@ -108,7 +161,7 @@ Create `/etc/xrdp/gfx.toml`:
 order = ["H.264", "RFX"]
 h264_encoder = "x264"
 
-[x264]
+[x264.default]
 preset = "ultrafast"
 tune = "zerolatency"
 profile = "main"
@@ -116,21 +169,19 @@ vbv_max_bitrate = 0
 vbv_buffer_size = 0
 fps_num = 60
 fps_den = 1
-threads = 0
+threads = 1
 
-[x264.connection.lan]
-preset = "ultrafast"
-tune = "zerolatency"
-vbv_max_bitrate = 0
-fps_num = 60
-fps_den = 1
+[x264.lan]
+# inherits default — uncapped bitrate, 60fps
 
-[x264.connection.broadband_high]
-preset = "ultrafast"
-tune = "zerolatency"
-vbv_max_bitrate = 20000
-fps_num = 30
-fps_den = 1
+[x264.wan]
+vbv_max_bitrate = 15000
+vbv_buffer_size = 1500
+
+[x264.broadband_high]
+preset = "superfast"
+vbv_max_bitrate = 8000
+vbv_buffer_size = 800
 ```
 
 #### Audio Redirection
@@ -188,9 +239,9 @@ For video monitoring workloads, a minimum of 20 Mbps per session is recommended.
 
 ## How It Works
 
-The video pipeline through rustguac:
+### Standard Pipeline (non-H.264 servers)
 
-1. **RDP Server** encodes screen updates (H.264/AVC444 if enabled)
+1. **RDP Server** sends screen updates (Planar/RemoteFX codec)
 2. **FreeRDP** (inside guacd) decodes to bitmaps
 3. **guacd** re-encodes dirty regions as JPEG, WebP, or PNG based on content type and network conditions
 4. **rustguac** relays over WebSocket to the browser
@@ -201,4 +252,22 @@ guacd automatically adapts encoding quality based on network lag:
 - Medium lag (50ms): quality 70 (balanced)
 - High lag (80ms): quality 30 (aggressive compression)
 
-The GFX pipeline enables RemoteFX codec between the RDP server and FreeRDP, which provides better compression than legacy bitmap updates.
+### H.264 Passthrough Pipeline (xrdp with x264)
+
+When the RDP server sends H.264 (AVC420/AVC444), guacd passes the raw H.264 NAL units directly to the browser, bypassing the server-side decode and re-encode:
+
+1. **xrdp** encodes the screen as H.264 via x264
+2. **FreeRDP** (inside guacd) receives the H.264 SurfaceCommand
+3. **guacd** copies the raw H.264 NAL data and also runs the normal GDI decode (for frame sync)
+4. During frame flush, guacd sends the raw H.264 data as a custom `h264` instruction
+5. **rustguac** relays over WebSocket to the browser
+6. **Browser** decodes H.264 using the [WebCodecs VideoDecoder API](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder) (hardware-accelerated)
+
+Benefits:
+- **Lower server CPU** — no decode + re-encode cycle on the server
+- **Lower latency** — one fewer encoding pass
+- **Consistent quality** — single lossy encoding pass (x264) instead of H.264 → bitmap → JPEG/WebP
+
+H.264 passthrough activates automatically when the RDP server sends AVC420/AVC444 codec data. Servers that don't support H.264 (stock Debian xrdp, Windows without GPU) use the standard pipeline automatically.
+
+Browser requirements: Chrome/Edge 94+, Firefox 130+ (WebCodecs support).
