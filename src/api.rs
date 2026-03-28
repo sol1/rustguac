@@ -196,7 +196,29 @@ pub async fn delete_session(
 }
 
 /// GET /api/login-scripts — List available login scripts. Requires operator+.
-pub async fn list_login_scripts(State(manager): State<AppState>) -> impl IntoResponse {
+pub async fn list_login_scripts(
+    State(manager): State<AppState>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> impl IntoResponse {
+    let id_inner = match identity {
+        Some(Extension(ref id_inner)) => id_inner,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "authentication required"})),
+            )
+                .into_response();
+        }
+    };
+
+    if !id_inner.has_role("operator") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "insufficient permissions — operator role required"})),
+        )
+            .into_response();
+    }
+
     let scripts_dir = std::path::Path::new(&manager.config().login_scripts_dir);
     let mut scripts: Vec<String> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(scripts_dir) {
@@ -216,7 +238,7 @@ pub async fn list_login_scripts(State(manager): State<AppState>) -> impl IntoRes
         }
     }
     scripts.sort();
-    Json(json!({ "scripts": scripts }))
+    Json(json!({ "scripts": scripts })).into_response()
 }
 
 /// GET /api/health — Health check.
@@ -803,7 +825,7 @@ fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path) -> bool {
     let full = recording_dir.join(name);
     match (full.canonicalize(), recording_dir.canonicalize()) {
         (Ok(resolved), Ok(base)) => resolved.starts_with(&base),
-        _ => true, // file may not exist yet; string checks above are sufficient
+        _ => false,
     }
 }
 
@@ -3346,14 +3368,15 @@ mod tests {
 
     #[test]
     fn test_safe_recording_name_valid() {
-        assert!(is_safe_recording_name(
-            "session-abc123.guac",
-            Path::new("/tmp")
-        ));
-        assert!(is_safe_recording_name(
-            "2024-01-01_recording.guac",
-            Path::new("/recordings")
-        ));
+        let dir = std::env::temp_dir().join("rustguac-test-recordings");
+        let _ = std::fs::create_dir_all(&dir);
+        let f1 = dir.join("session-abc123.guac");
+        let f2 = dir.join("2024-01-01_recording.guac");
+        std::fs::write(&f1, b"").unwrap();
+        std::fs::write(&f2, b"").unwrap();
+        assert!(is_safe_recording_name("session-abc123.guac", &dir));
+        assert!(is_safe_recording_name("2024-01-01_recording.guac", &dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -132,6 +132,12 @@ impl InstructionParser {
     /// Feed data into the parser and return any complete instructions.
     pub fn receive(&mut self, data: &str) -> Vec<Result<Instruction, ParseError>> {
         self.buffer.push_str(data);
+
+        if self.buffer.len() > 1_048_576 {
+            self.buffer.clear();
+            return vec![];
+        }
+
         let mut results = Vec::new();
 
         while let Some(semi_pos) = self.buffer.find(';') {

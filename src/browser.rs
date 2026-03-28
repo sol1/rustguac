@@ -144,6 +144,10 @@ impl BrowserManager {
             tracing::error!("{}", msg);
             return Err(BrowserError::ChromiumSpawn(msg));
         }
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o700));
+        }
 
         // Pre-populate Chromium autofill database if credentials are provided
         if let Some(creds) = autofill_credentials {
@@ -510,8 +514,6 @@ impl BrowserManager {
                     .env("DISPLAY", format!(":{}", display))
                     .env("RUSTGUAC_CDP_PORT", cdp_port.to_string())
                     .env("RUSTGUAC_URL", &url_owned)
-                    .env("RUSTGUAC_USERNAME", &username_owned)
-                    .env("RUSTGUAC_PASSWORD", &password_owned)
                     .env("RUSTGUAC_SESSION_ID", &session_id_owned)
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())

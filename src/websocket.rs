@@ -342,7 +342,11 @@ async fn guacd_to_ws(
         }
 
         // Forward to browser via WebSocket
-        let text = String::from_utf8_lossy(data).into_owned();
+        let text = std::str::from_utf8(data)
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                format!("invalid UTF-8 from guacd: {}", e).into()
+            })?
+            .to_owned();
 
         // Log filesystem and clipboard instructions from guacd
         if text.contains(".filesystem,") {
@@ -373,8 +377,8 @@ async fn ws_to_guacd(
                 }
                 guacd.write_all(text.as_bytes()).await?;
             }
-            Message::Binary(data) => {
-                guacd.write_all(&data).await?;
+            Message::Binary(_) => {
+                continue;
             }
             Message::Close(_) => break,
             _ => {}
