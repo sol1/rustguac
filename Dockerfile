@@ -58,7 +58,9 @@ RUN /build/guacamole-server/configure \
     && make -j"$(nproc)" \
     && make install \
     && mkdir -p /opt/rustguac/lib/freerdp3 \
-    && find /usr/lib /opt/rustguac/lib -path "*/freerdp3/libguac*" -exec cp {} /opt/rustguac/lib/freerdp3/ \;
+    && find / -name "libguac-common-svc-client.*" -not -path "*/guacamole-server/*" 2>/dev/null \
+       | xargs -I{} cp {} /opt/rustguac/lib/freerdp3/ 2>/dev/null; \
+       ls /opt/rustguac/lib/freerdp3/
 
 # ---------------------------------------------------------------------------
 # Stage 2: Build rustguac
@@ -108,14 +110,12 @@ COPY static/ /opt/rustguac/static/
 # Library path for guacd
 RUN echo "/opt/rustguac/lib" > /etc/ld.so.conf.d/rustguac.conf && ldconfig
 
-# Symlink FreeRDP plugins (RDPDR/drive, audio) into the system FreeRDP plugin dir.
-# guacamole-server builds these plugins but installs them relative to the system
-# FreeRDP path — we copy them under our prefix in the builder, then symlink here.
+# Install FreeRDP plugins (RDPDR/drive, audio) into the system FreeRDP plugin dir.
+# FreeRDP looks for plugins in its compiled-in path, so we must place them there.
 RUN FREERDP_DIR=$(find /usr/lib -name "freerdp3" -type d 2>/dev/null | head -1) && \
     if [ -n "$FREERDP_DIR" ] && [ -d /opt/rustguac/lib/freerdp3 ]; then \
-        for f in /opt/rustguac/lib/freerdp3/*.so*; do \
-            ln -sf "$f" "$FREERDP_DIR/$(basename "$f")"; \
-        done; \
+        cp /opt/rustguac/lib/freerdp3/*.so* "$FREERDP_DIR/" 2>/dev/null; \
+        ls "$FREERDP_DIR"/libguac* 2>/dev/null; \
     fi
 
 # Create writable runtime directories
