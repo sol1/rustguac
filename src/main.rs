@@ -767,6 +767,7 @@ async fn run_server(config: Config, database: Db) {
         )
         .route("/api/reports/top-users", get(api::report_top_users))
         .route("/api/reports/summary", get(api::report_summary))
+        .route("/api/system/status", get(api::system_status))
         .route("/api/users", get(api::list_users))
         .route("/api/users/{email}/role", put(api::set_user_role))
         .route(

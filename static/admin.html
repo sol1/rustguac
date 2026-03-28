@@ -79,6 +79,14 @@
         .token-reveal .warning { color: var(--primary); font-size: 0.85em; margin-top: 0.5em; }
         .audit-row { font-size: 0.9em; }
         .audit-row td { padding: 0.3em 0.8em; }
+        .status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.8em; margin-top: 0.5em; margin-bottom: 1.5em; }
+        .status-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.8em 1em; }
+        .status-card .label { color: var(--text-muted); font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.05em; }
+        .status-card .value { color: var(--accent); font-size: 1.3em; font-weight: bold; margin-top: 0.2em; }
+        .status-card .detail { color: var(--text-dim); font-size: 0.8em; margin-top: 0.2em; }
+        .feat-tag { display: inline-block; padding: 0.1em 0.5em; border-radius: 3px; font-size: 0.8em; margin-right: 0.4em; margin-bottom: 0.3em; }
+        .feat-on { background: var(--type-ssh-bg); color: var(--type-ssh-fg); }
+        .feat-off { background: var(--border); color: var(--text-dim); }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -94,6 +102,18 @@
         <a href="/admin.html" class="active">Admin</a>
         <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881;</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item um-logout" id="logout-item">Logout</div></div></span>
     </nav>
+
+    <h2>System Status</h2>
+    <div id="system-status" class="status-grid">
+        <div class="status-card"><div class="label">Version</div><div class="value" id="ss-version">—</div></div>
+        <div class="status-card"><div class="label">Active Sessions</div><div class="value" id="ss-active">—</div><div class="detail" id="ss-sessions-detail"></div></div>
+        <div class="status-card"><div class="label">Users</div><div class="value" id="ss-users">—</div></div>
+        <div class="status-card"><div class="label">Session History</div><div class="value" id="ss-history">—</div></div>
+        <div class="status-card"><div class="label">Recordings</div><div class="value" id="ss-recordings">—</div><div class="detail" id="ss-rec-detail"></div></div>
+        <div class="status-card"><div class="label">Disk Usage</div><div class="value" id="ss-disk">—</div></div>
+        <div class="status-card"><div class="label">Vault</div><div class="value" id="ss-vault">—</div></div>
+        <div class="status-card"><div class="label">Features</div><div class="value" id="ss-features" style="font-size:1em"></div></div>
+    </div>
 
     <h2>Users</h2>
     <table id="users-table">
@@ -206,10 +226,36 @@
                 loadMappings();
                 loadAllTokens();
                 loadAuditLog();
+                loadSystemStatus();
             })
             .catch(function() {});
         }
         checkAdmin();
+
+        function loadSystemStatus() {
+            fetch('/api/system/status', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(d) {
+                if (!d) return;
+                document.getElementById('ss-version').textContent = 'v' + d.version;
+                document.getElementById('ss-active').textContent = d.sessions.active;
+                document.getElementById('ss-sessions-detail').textContent = d.sessions.pending + ' pending, ' + d.sessions.total_current + ' total';
+                document.getElementById('ss-users').textContent = d.users.count;
+                document.getElementById('ss-history').textContent = d.history.total_sessions.toLocaleString();
+                document.getElementById('ss-recordings').textContent = d.recordings.count;
+                document.getElementById('ss-rec-detail').textContent = d.recordings.size_mb + ' MB';
+                document.getElementById('ss-disk').textContent = d.recordings.disk_usage_pct + '%';
+                var vault = d.vault.configured ? (d.vault.connected ? 'Connected' : 'Disconnected') : 'Not configured';
+                document.getElementById('ss-vault').textContent = vault;
+                document.getElementById('ss-vault').style.color = d.vault.connected ? 'var(--accent)' : (d.vault.configured ? 'var(--primary)' : 'var(--text-dim)');
+                var feat = '';
+                feat += '<span class="feat-tag ' + (d.features.oidc ? 'feat-on' : 'feat-off') + '">OIDC</span>';
+                feat += '<span class="feat-tag ' + (d.features.drive ? 'feat-on' : 'feat-off') + '">Drive</span>';
+                feat += '<span class="feat-tag ' + (d.features.tls ? 'feat-on' : 'feat-off') + '">TLS</span>';
+                feat += '<span class="feat-tag ' + (d.vault.configured ? 'feat-on' : 'feat-off') + '">Vault</span>';
+                document.getElementById('ss-features').innerHTML = feat;
+            });
+        }
 
         document.getElementById('logout-item').addEventListener('click', function() {
             sessionStorage.removeItem('rustguac_api_key');

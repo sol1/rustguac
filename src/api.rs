@@ -224,6 +224,120 @@ pub async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
 }
 
+/// GET /api/system/status — System info for admin panel. Admin only.
+pub async fn system_status(
+    State(manager): State<AppState>,
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Extension(vault_configured): Extension<VaultConfigured>,
+) -> impl IntoResponse {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "admin role required"})),
+        )
+            .into_response();
+    }
+
+    let version = env!("CARGO_PKG_VERSION");
+
+    // Recording disk usage
+    let rec_path = manager.recording_path().to_path_buf();
+    let (rec_disk_pct, rec_count, rec_size_mb) = tokio::task::spawn_blocking(move || {
+        let pct = crate::recording::disk_usage_percent(&rec_path).unwrap_or(0.0);
+        let mut count = 0u32;
+        let mut total_bytes = 0u64;
+        if let Ok(entries) = std::fs::read_dir(&rec_path) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("guac") {
+                    count += 1;
+                    total_bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                }
+            }
+        }
+        (pct, count, total_bytes as f64 / 1024.0 / 1024.0)
+    })
+    .await
+    .unwrap_or((0.0, 0, 0.0));
+
+    // Active sessions
+    let sessions = manager.list_sessions().await;
+    let active_sessions = sessions
+        .iter()
+        .filter(|s| s.status == crate::session::SessionStatus::Active)
+        .count();
+    let pending_sessions = sessions
+        .iter()
+        .filter(|s| s.status == crate::session::SessionStatus::Pending)
+        .count();
+
+    // Vault status
+    let vault_ok = if vault_configured.0 {
+        manager.config().vault.is_some()
+    } else {
+        false
+    };
+
+    // User count
+    let user_count = {
+        let conn = database.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get::<_, i64>(0))
+            .unwrap_or(0)
+    };
+
+    // Session history total
+    let history_total = {
+        let conn = database.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM session_history", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or(0)
+    };
+
+    // OIDC configured
+    let oidc_configured = manager.config().oidc.is_some();
+
+    // Drive configured
+    let drive_configured = manager.config().drive.is_some();
+
+    // TLS
+    let tls_configured = manager.config().tls.is_some();
+
+    Json(json!({
+        "version": version,
+        "sessions": {
+            "active": active_sessions,
+            "pending": pending_sessions,
+            "total_current": sessions.len(),
+        },
+        "recordings": {
+            "count": rec_count,
+            "size_mb": (rec_size_mb * 10.0).round() / 10.0,
+            "disk_usage_pct": (rec_disk_pct * 10.0).round() / 10.0,
+        },
+        "vault": {
+            "configured": vault_configured.0,
+            "connected": vault_ok,
+        },
+        "users": {
+            "count": user_count,
+        },
+        "history": {
+            "total_sessions": history_total,
+        },
+        "features": {
+            "oidc": oidc_configured,
+            "drive": drive_configured,
+            "tls": tls_configured,
+        },
+    }))
+    .into_response()
+}
+
 /// GET /api/auth/status — Returns whether OIDC is enabled. No auth required.
 pub async fn auth_status(
     Extension(oidc_enabled): Extension<OidcEnabled>,
