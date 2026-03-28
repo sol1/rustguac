@@ -1,4 +1,5 @@
-//! Authentication middleware — supports API key and OIDC session cookie.
+//! Authentication middleware — supports API key, OIDC session cookie, and
+//! single-use WebSocket tickets.
 
 use crate::db::{self, AuthError, Db};
 use axum::{
@@ -9,7 +10,57 @@ use axum::{
 };
 use ipnetwork::IpNetwork;
 use serde_json::json;
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+/// Single-use WebSocket ticket. Created via POST /api/ws-ticket, consumed on
+/// WebSocket connect. Prevents API keys from appearing in WebSocket URLs.
+struct WsTicket {
+    identity: AuthIdentity,
+    created: Instant,
+}
+
+/// Thread-safe store of pending WebSocket tickets.
+#[derive(Clone)]
+pub struct WsTicketStore(Arc<Mutex<HashMap<String, WsTicket>>>);
+
+const WS_TICKET_TTL_SECS: u64 = 30;
+
+impl WsTicketStore {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(HashMap::new())))
+    }
+
+    /// Create a ticket for the given identity. Returns the ticket string.
+    pub fn create(&self, identity: AuthIdentity) -> String {
+        let ticket = format!("wst_{}", uuid::Uuid::new_v4().as_simple());
+        let mut store = self.0.lock().unwrap();
+
+        // Prune expired tickets while we have the lock
+        let cutoff = Instant::now() - std::time::Duration::from_secs(WS_TICKET_TTL_SECS);
+        store.retain(|_, t| t.created > cutoff);
+
+        store.insert(ticket.clone(), WsTicket {
+            identity,
+            created: Instant::now(),
+        });
+        ticket
+    }
+
+    /// Consume a ticket, returning the identity if valid and not expired.
+    /// Single-use: the ticket is removed on consumption.
+    pub fn consume(&self, ticket: &str) -> Option<AuthIdentity> {
+        let mut store = self.0.lock().unwrap();
+        let entry = store.remove(ticket)?;
+        if entry.created.elapsed().as_secs() <= WS_TICKET_TTL_SECS {
+            Some(entry.identity)
+        } else {
+            None
+        }
+    }
+}
 
 /// Shared extension carrying the trusted proxy CIDRs from config.
 #[derive(Clone)]
@@ -292,7 +343,32 @@ pub async fn optional_auth(
         })
         .map(|k| k.to_string());
 
-    // Path 1b: API key from ?key= query parameter (fallback for WebSocket).
+    // Path 1b: Single-use WebSocket ticket from ?ticket= query parameter.
+    // Tickets are created via POST /api/ws-ticket and consumed here.
+    // This prevents API keys from appearing in WebSocket URLs.
+    if let Some(ticket_store) = request.extensions().get::<WsTicketStore>().cloned() {
+        let ticket_val = request.uri().query().and_then(|q| {
+            q.split('&').find_map(|pair| {
+                let (k, v) = pair.split_once('=')?;
+                if k == "ticket" {
+                    Some(v.split('?').next().unwrap_or(v).to_string())
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(ticket) = ticket_val {
+            if let Some(identity) = ticket_store.consume(&ticket) {
+                tracing::debug!("Optional auth: WebSocket ticket consumed");
+                let mut request = request;
+                request.extensions_mut().insert(identity);
+                return next.run(request).await;
+            }
+            // Invalid/expired ticket — fall through to other auth methods
+        }
+    }
+
+    // Path 1c: API key from ?key= query parameter (legacy fallback).
     // Guacamole.WebSocketTunnel appends "?" + connect_data to the URL, so
     // the raw query string may be "key=XXXX?GUAC_WIDTH=1024&...". Truncate
     // the value at the first '?' to strip the Guacamole suffix.

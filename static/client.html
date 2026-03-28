@@ -194,15 +194,45 @@
             .catch(function(err) { statusEl.textContent = 'Error: ' + err.message; });
         }
 
-        function startGuacamole() {
-            statusEl.textContent = 'Connecting to session ' + sessionId.substring(0, 8) + '...';
-
+        function connectWebSocket(ticketParam) {
             var wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
             var wsUrl = wsProtocol + '//' + window.location.host + '/ws/' + sessionId;
-            if (apiKey) wsUrl += '?key=' + encodeURIComponent(apiKey);
+            if (ticketParam) wsUrl += '?ticket=' + encodeURIComponent(ticketParam);
 
             var tunnel = new Guacamole.WebSocketTunnel(wsUrl);
             var client = new Guacamole.Client(tunnel);
+            setupClient(client, tunnel);
+        }
+
+        function startGuacamole() {
+            statusEl.textContent = 'Connecting to session ' + sessionId.substring(0, 8) + '...';
+
+            // API key users: exchange key for a single-use ticket before connecting.
+            // This keeps the API key out of the WebSocket URL (visible in logs).
+            if (apiKey) {
+                fetch('/api/ws-ticket', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + apiKey }
+                })
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    if (data.ticket) {
+                        connectWebSocket(data.ticket);
+                    } else {
+                        statusEl.textContent = 'Failed to obtain WebSocket ticket';
+                    }
+                })
+                .catch(function(err) {
+                    statusEl.textContent = 'Ticket error: ' + err.message;
+                });
+                return;
+            }
+
+            // OIDC users: connect directly (session cookie handles auth)
+            connectWebSocket(null);
+        }
+
+        function setupClient(client, tunnel) {
 
             // Wrap tunnel.oninstruction to log unique opcodes from guacd (diagnostic)
             var seenOpcodes = {};

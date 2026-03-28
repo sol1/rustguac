@@ -1,6 +1,6 @@
 //! REST API routes.
 
-use crate::auth::{client_ip, role_level, AuthIdentity, TrustedProxies};
+use crate::auth::{self, client_ip, role_level, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::session::{CreateSessionRequest, SessionManager, SessionType};
 use crate::vault::{AddressBookEntry, FolderConfig, VaultClient, VaultError};
@@ -222,6 +222,21 @@ pub async fn list_login_scripts(State(manager): State<AppState>) -> impl IntoRes
 /// GET /api/health — Health check.
 pub async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
+}
+
+/// POST /api/ws-ticket — Create a single-use WebSocket ticket.
+/// Returns a short-lived ticket that can be used in place of an API key
+/// in the WebSocket URL query parameter, preventing key exposure in logs.
+pub async fn create_ws_ticket(
+    Extension(ticket_store): Extension<auth::WsTicketStore>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> impl IntoResponse {
+    let identity = match identity {
+        Some(Extension(id)) => id,
+        None => return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))),
+    };
+    let ticket = ticket_store.create(identity);
+    (StatusCode::OK, Json(json!({"ticket": ticket})))
 }
 
 /// GET /api/system/status — System info for admin panel. Admin only.

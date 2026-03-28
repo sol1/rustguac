@@ -737,6 +737,9 @@ async fn run_server(config: Config, database: Db) {
         tracing::info!("API rate limiting enabled");
     }
 
+    // WebSocket ticket store (single-use tokens to keep API keys out of WS URLs)
+    let ws_ticket_store = auth::WsTicketStore::new();
+
     // Session creation route (rate-limited only when enabled)
     let mut session_create_route = Router::new()
         .route("/api/sessions", post(api::create_session))
@@ -809,6 +812,7 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/admin/token-audit", get(api::admin_token_audit))
         // Login scripts listing
         .route("/api/login-scripts", get(api::list_login_scripts))
+        .route("/api/ws-ticket", post(api::create_ws_ticket))
         // Address book routes
         .route("/api/addressbook", get(api::ab_list_all))
         .route("/api/addressbook/folders", get(api::ab_list_folders))
@@ -854,6 +858,7 @@ async fn run_server(config: Config, database: Db) {
     }
     let api_routes = api_routes
         .layer(middleware::from_fn(auth::require_auth))
+        .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(database.clone()));
@@ -873,6 +878,7 @@ async fn run_server(config: Config, database: Db) {
     }
     let ws_route = ws_route
         .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));
 
     // Quick-connect route with optional auth (handles its own redirect-to-login)
