@@ -255,7 +255,12 @@ pub async fn create_ws_ticket(
 ) -> impl IntoResponse {
     let identity = match identity {
         Some(Extension(id)) => id,
-        None => return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))),
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "unauthorized"})),
+            )
+        }
     };
     let ticket = ticket_store.create(identity);
     (StatusCode::OK, Json(json!({"ticket": ticket})))

@@ -42,10 +42,13 @@ impl WsTicketStore {
         let cutoff = Instant::now() - std::time::Duration::from_secs(WS_TICKET_TTL_SECS);
         store.retain(|_, t| t.created > cutoff);
 
-        store.insert(ticket.clone(), WsTicket {
-            identity,
-            created: Instant::now(),
-        });
+        store.insert(
+            ticket.clone(),
+            WsTicket {
+                identity,
+                created: Instant::now(),
+            },
+        );
         ticket
     }
 

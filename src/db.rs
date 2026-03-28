@@ -181,7 +181,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
                  user_id       INTEGER NOT NULL REFERENCES users(id),
                  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
                  expires_at    TEXT NOT NULL
-             );"
+             );",
         )?;
     }
 
@@ -508,7 +508,10 @@ pub fn validate_auth_session(db: &Db, token: &str) -> Result<User, AuthError> {
 pub fn delete_auth_session(db: &Db, token: &str) -> rusqlite::Result<bool> {
     let token_hash = hash_key(token);
     let conn = db.lock().unwrap();
-    let changed = conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?1", params![token_hash])?;
+    let changed = conn.execute(
+        "DELETE FROM auth_sessions WHERE token_hash = ?1",
+        params![token_hash],
+    )?;
     Ok(changed > 0)
 }
 
