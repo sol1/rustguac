@@ -115,75 +115,6 @@ jobs:
           path: rustguac-*-linux-amd64.tar.gz
           if-no-files-found: error
 
-  # ---------------------------------------------------------------------------
-  # Build .rpm package (Rocky Linux 9)
-  # ---------------------------------------------------------------------------
-  build-rpm:
-    name: Build .rpm
-    runs-on: ubuntu-latest
-    container: rockylinux:9
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install build dependencies
-        run: |
-          dnf install -y epel-release
-          dnf config-manager --set-enabled crb
-          dnf install -y --allowerasing \
-            gcc gcc-c++ make git curl pkgconfig \
-            autoconf automake libtool \
-            cairo-devel libjpeg-turbo-devel libpng-devel libwebp-devel \
-            libssh2-devel openssl-devel libvncserver-devel \
-            pango-devel pulseaudio-libs-devel \
-            ffmpeg-free-devel libtelnet-devel libwebsockets-devel \
-            libuuid-devel freerdp-devel \
-            rpm-build systemd-rpm-macros
-
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: Clone and build guacd
-        run: |
-          git clone --depth 1 $GUACD_REPO /tmp/guacamole-server
-          for patch in patches/*.patch; do
-            [ -f "$patch" ] || continue
-            echo "Applying: $patch"
-            git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch" || true
-          done
-          cd /tmp/guacamole-server && autoreconf -fi
-          mkdir /tmp/guacd-build && cd /tmp/guacd-build
-          /tmp/guacamole-server/configure \
-            --prefix=/opt/rustguac \
-            --with-ssh --with-vnc --with-rdp \
-            --without-telnet --without-kubernetes \
-            --disable-guacenc --disable-guaclog --disable-static
-          make -j"$(nproc)"
-          make DESTDIR="$GITHUB_WORKSPACE/rpm/staging" install
-
-      - name: Build rustguac
-        run: $HOME/.cargo/bin/cargo build --release
-
-      - name: Build .rpm package
-        run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          RPMBUILD_DIR="$HOME/rpmbuild"
-          mkdir -p "$RPMBUILD_DIR/BUILD" "$RPMBUILD_DIR/RPMS" "$RPMBUILD_DIR/SOURCES" "$RPMBUILD_DIR/SPECS" "$RPMBUILD_DIR/SRPMS"
-          rpmbuild -bb \
-            --define "_topdir $RPMBUILD_DIR" \
-            --define "_builddir $(pwd)" \
-            --define "_version $VERSION" \
-            ./rustguac.spec
-          cp "$RPMBUILD_DIR"/RPMS/*/*.rpm .
-
-      - name: Upload .rpm artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: rpm-package
-          path: "*.rpm"
-          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # Build .deb + tarball (ARM64 / Debian 13)
@@ -329,7 +260,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Create Release
-    needs: [build-deb, build-deb-arm64, build-rpm, build-docker]
+    needs: [build-deb, build-deb-arm64, build-docker]
     runs-on: ubuntu-latest
 
     steps:
@@ -340,12 +271,6 @@ jobs:
         with:
           name: deb-package
           path: artifacts/deb-package
-
-      - name: Download rpm artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: rpm-package
-          path: artifacts/rpm-package
 
       - name: Download tarball artifact
         uses: actions/download-artifact@v8
@@ -372,6 +297,5 @@ jobs:
           files: |
             artifacts/deb-package/*.deb
             artifacts/deb-package-arm64/*.deb
-            artifacts/rpm-package/*.rpm
             artifacts/tarball/*.tar.gz
             artifacts/tarball-arm64/*.tar.gz
