@@ -33,7 +33,7 @@ toml = "1"
 # Crypto/random
 rand = "0.9"
 hex = "0.4"
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2"
 aes = "0.8"
 cbc = "0.1"
