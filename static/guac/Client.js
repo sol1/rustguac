@@ -1431,6 +1431,63 @@ Guacamole.Client = function(tunnel) {
 
         },
 
+        "h264": function(parameters) {
+
+            var stream_index = parseInt(parameters[0]);
+            var layer = getLayer(parseInt(parameters[1]));
+            var isKeyFrame = parseInt(parameters[2]) !== 0;
+            var x = parseInt(parameters[3]);
+            var y = parseInt(parameters[4]);
+            var width = parseInt(parameters[5]);
+            var height = parseInt(parameters[6]);
+
+            // Create stream to receive H.264 NAL unit data
+            var stream = streams[stream_index] = new Guacamole.InputStream(guac_client, stream_index);
+
+            // Check for WebCodecs support
+            if (!Guacamole.H264Decoder.isSupported()) {
+                // No WebCodecs: acknowledge stream but discard data
+                stream.onblob = function() {};
+                stream.onend = function() {};
+                guac_client.sendAck(stream_index, "OK", 0x0000);
+                return;
+            }
+
+            // Create or reuse H.264 decoder for this display
+            if (!guac_client._h264Decoder) {
+                guac_client._h264Decoder = new Guacamole.H264Decoder(display);
+            }
+
+            // Collect base64 blob data
+            var base64Data = '';
+            stream.onblob = function(data) {
+                base64Data += data;
+            };
+
+            stream.onend = function() {
+                if (!base64Data) return;
+
+                // Decode base64 to ArrayBuffer
+                try {
+                    var binaryString = atob(base64Data);
+                    var bytes = new Uint8Array(binaryString.length);
+                    for (var i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+
+                    // Feed to H.264 decoder
+                    guac_client._h264Decoder.decode(
+                        layer, x, y, width, height,
+                        bytes.buffer, isKeyFrame
+                    );
+                } catch (e) {
+                    if (typeof console !== 'undefined')
+                        console.error('[rustguac] H.264 base64 decode error:', e);
+                }
+            };
+
+        },
+
         "jpeg": function(parameters) {
 
             var channelMask = parseInt(parameters[0]);

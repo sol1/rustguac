@@ -439,7 +439,7 @@ async fn send_handshake(
             vec![width.to_string(), height.to_string(), dpi.to_string()],
         ),
         Instruction::new("audio", vec!["audio/L16".into(), "audio/L8".into()]),
-        Instruction::new("video", vec![]),
+        Instruction::new("video", vec!["video/h264".into()]),
         Instruction::new(
             "image",
             vec!["image/png".into(), "image/jpeg".into(), "image/webp".into()],
