@@ -102,7 +102,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );
 
         CREATE TABLE IF NOT EXISTS auth_sessions (
-            token         TEXT PRIMARY KEY,
+            token_hash    TEXT PRIMARY KEY,
             user_id       INTEGER NOT NULL REFERENCES users(id),
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
             expires_at    TEXT NOT NULL
@@ -167,6 +167,22 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         .is_ok();
     if !has_oidc_groups {
         conn.execute_batch("ALTER TABLE users ADD COLUMN oidc_groups TEXT NOT NULL DEFAULT ''")?;
+    }
+
+    // Migration: auth_sessions token → token_hash (v1.0.0 security hardening)
+    let has_old_token_col: bool = conn
+        .prepare("SELECT token FROM auth_sessions LIMIT 0")
+        .is_ok();
+    if has_old_token_col {
+        conn.execute_batch(
+            "DROP TABLE auth_sessions;
+             CREATE TABLE auth_sessions (
+                 token_hash    TEXT PRIMARY KEY,
+                 user_id       INTEGER NOT NULL REFERENCES users(id),
+                 created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                 expires_at    TEXT NOT NULL
+             );"
+        )?;
     }
 
     Ok(Arc::new(Mutex::new(conn)))
@@ -406,16 +422,17 @@ pub fn upsert_user(
     )
 }
 
-/// Create an auth session for a user. Returns the session token (256-bit hex).
-/// `ttl_secs` controls how long the session is valid.
+/// Create an auth session for a user. Returns the plaintext session token
+/// (256-bit hex). Only the SHA-256 hash is stored in the database.
 pub fn create_auth_session(db: &Db, user_id: i64, ttl_secs: u64) -> rusqlite::Result<String> {
     let token = generate_key();
+    let token_hash = hash_key(&token);
     let conn = db.lock().unwrap();
     let ttl_modifier = format!("+{} seconds", ttl_secs);
     conn.execute(
-        "INSERT INTO auth_sessions (token, user_id, expires_at)
+        "INSERT INTO auth_sessions (token_hash, user_id, expires_at)
          VALUES (?1, ?2, datetime('now', ?3))",
-        params![token, user_id, ttl_modifier],
+        params![token_hash, user_id, ttl_modifier],
     )?;
     Ok(token)
 }
@@ -453,14 +470,16 @@ pub fn get_user_by_email(db: &Db, email: &str) -> rusqlite::Result<User> {
 }
 
 /// Validate an auth session token. Returns the user if valid and not expired/disabled.
+/// The token is hashed before lookup — only hashes are stored in the database.
 pub fn validate_auth_session(db: &Db, token: &str) -> Result<User, AuthError> {
+    let token_hash = hash_key(token);
     let conn = db.lock().unwrap();
     conn.query_row(
         "SELECT u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups
          FROM auth_sessions s
          JOIN users u ON u.id = s.user_id
-         WHERE s.token = ?1 AND s.expires_at > datetime('now')",
-        params![token],
+         WHERE s.token_hash = ?1 AND s.expires_at > datetime('now')",
+        params![token_hash],
         |row| {
             Ok(User {
                 id: row.get(0)?,
@@ -485,10 +504,11 @@ pub fn validate_auth_session(db: &Db, token: &str) -> Result<User, AuthError> {
     })
 }
 
-/// Delete an auth session (logout).
+/// Delete an auth session (logout). Token is hashed before lookup.
 pub fn delete_auth_session(db: &Db, token: &str) -> rusqlite::Result<bool> {
+    let token_hash = hash_key(token);
     let conn = db.lock().unwrap();
-    let changed = conn.execute("DELETE FROM auth_sessions WHERE token = ?1", params![token])?;
+    let changed = conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?1", params![token_hash])?;
     Ok(changed > 0)
 }
 
