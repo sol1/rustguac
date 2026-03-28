@@ -1,5 +1,5 @@
 diff --git a/src/protocols/rdp/channels/common-svc.c b/src/protocols/rdp/channels/common-svc.c
-index 774316f4..d4e70243 100644
+index 774316f..d4e7024 100644
 --- a/src/protocols/rdp/channels/common-svc.c
 +++ b/src/protocols/rdp/channels/common-svc.c
 @@ -17,6 +17,7 @@
@@ -11,30 +11,22 @@ index 774316f4..d4e70243 100644
  #include "plugins/channels.h"
  #include "rdp.h"
 diff --git a/src/protocols/rdp/channels/disp.c b/src/protocols/rdp/channels/disp.c
-index 0293843c..616b77d7 100644
+index 7a0e188..3e2b318 100644
 --- a/src/protocols/rdp/channels/disp.c
 +++ b/src/protocols/rdp/channels/disp.c
-@@ -17,6 +17,7 @@
-  * under the License.
-  */
- 
-+#include "config.h"
- #include "channels/disp.h"
- #include "plugins/channels.h"
- #include "fs.h"
-@@ -161,6 +162,10 @@ void guac_rdp_disp_load_plugin(rdpContext* context) {
+@@ -163,6 +163,10 @@ void guac_rdp_disp_load_plugin(rdpContext* context) {
  void guac_rdp_disp_set_size(guac_rdp_disp* disp, guac_rdp_settings* settings,
          freerdp* rdp_inst, int width, int height) {
  
-+    /* Abort if display module or settings are not yet initialized */
-+    if (disp == NULL || settings == NULL)
++    /* Guard against NULL disp — can be called before channel is initialized */
++    if (disp == NULL)
 +        return;
 +
      guac_rect resize = {
          .left = 0,
          .top = 0,
 diff --git a/src/protocols/rdp/channels/pipe-svc.c b/src/protocols/rdp/channels/pipe-svc.c
-index 68d43488..4a5a3e9e 100644
+index 68d4348..4a5a3e9 100644
 --- a/src/protocols/rdp/channels/pipe-svc.c
 +++ b/src/protocols/rdp/channels/pipe-svc.c
 @@ -17,6 +17,7 @@
@@ -46,7 +38,7 @@ index 68d43488..4a5a3e9e 100644
  #include "channels/pipe-svc.h"
  #include "common/list.h"
 diff --git a/src/protocols/rdp/channels/rdpei.c b/src/protocols/rdp/channels/rdpei.c
-index a94faa9f..317e39dd 100644
+index a94faa9..317e39d 100644
 --- a/src/protocols/rdp/channels/rdpei.c
 +++ b/src/protocols/rdp/channels/rdpei.c
 @@ -17,6 +17,7 @@
@@ -58,7 +50,7 @@ index a94faa9f..317e39dd 100644
  #include "plugins/channels.h"
  #include "rdp.h"
 diff --git a/src/protocols/rdp/channels/rdpgfx.c b/src/protocols/rdp/channels/rdpgfx.c
-index 0fae972f..327e7c2b 100644
+index 0fae972..327e7c2 100644
 --- a/src/protocols/rdp/channels/rdpgfx.c
 +++ b/src/protocols/rdp/channels/rdpgfx.c
 @@ -17,6 +17,7 @@
@@ -70,26 +62,18 @@ index 0fae972f..327e7c2b 100644
  #include "plugins/channels.h"
  #include "rdp.h"
 diff --git a/src/protocols/rdp/input.c b/src/protocols/rdp/input.c
-index 34f9e7c4..5d4d5edf 100644
+index 63c0be2..c0d955e 100644
 --- a/src/protocols/rdp/input.c
 +++ b/src/protocols/rdp/input.c
-@@ -17,6 +17,7 @@
-  * under the License.
-  */
+@@ -105,6 +105,11 @@ int guac_rdp_user_size_handler(guac_user* user, int width, int height) {
  
-+#include "config.h"
- #include "channels/disp.h"
- #include "channels/rdpei.h"
- #include "input.h"
-@@ -106,6 +107,11 @@ int guac_rdp_user_size_handler(guac_user* user, int width, int height) {
+     guac_client* client = user->client;
+     guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
++
++    /* Guard against early size messages before RDP is fully connected */
++    if (rdp_client == NULL || rdp_client->settings == NULL)
++        return 0;
++
      guac_rdp_settings* settings = rdp_client->settings;
      freerdp* rdp_inst = rdp_client->rdp_inst;
  
-+    /* Abort if not yet fully initialized (browser may send size instruction
-+     * before the RDP connection is fully established) */
-+    if (settings == NULL || rdp_client->disp == NULL)
-+        return 0;
-+
-     /* Convert client pixels to remote pixels */
-     width  = width  * settings->resolution / user->info.optimal_resolution;
-     height = height * settings->resolution / user->info.optimal_resolution;
