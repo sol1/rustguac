@@ -102,24 +102,29 @@ BUILD_DIR=$(mktemp -d /tmp/xrdp-build.XXXXXX)
 echo "  Build directory: $BUILD_DIR"
 cd "$BUILD_DIR"
 
-# Find the version in sid
-XRDP_SID_VER=$(apt-cache showsrc -t unstable xrdp 2>/dev/null | grep "^Version:" | head -1 | awk '{print $2}')
+# Find the latest version in sid (sort -V to get highest version)
+XRDP_SID_VER=$(apt-cache showsrc -t unstable xrdp 2>/dev/null | grep "^Version:" | awk '{print $2}' | sort -V | tail -1)
 if [ -z "$XRDP_SID_VER" ]; then
     echo "Error: cannot find xrdp source in sid"
     exit 1
 fi
 echo "  Building xrdp $XRDP_SID_VER from sid source"
 
-apt-get source "xrdp=$XRDP_SID_VER"
+# Explicitly use -t unstable to ensure we get the sid source
+apt-get source -t unstable "xrdp=$XRDP_SID_VER"
 XRDP_DIR=$(ls -d xrdp-* | head -1)
 cd "$XRDP_DIR"
 
 # Patch debian/rules to add --enable-x264
 if grep -q -- '--enable-x264' debian/rules; then
     echo "  debian/rules already has --enable-x264"
-else
+elif grep -q -- '--enable-opus' debian/rules; then
     sed -i "s|--enable-opus|--enable-opus --enable-x264|" debian/rules
-    echo "  Patched debian/rules: added --enable-x264"
+    echo "  Patched debian/rules: added --enable-x264 (after --enable-opus)"
+else
+    # Fallback: append to the first configure line that has --with or --enable
+    sed -i '0,/--\(enable\|with\)-/{s|$| --enable-x264|}' debian/rules
+    echo "  Patched debian/rules: appended --enable-x264"
 fi
 
 # Ensure libx264-dev is in Build-Depends
