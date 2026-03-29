@@ -36,10 +36,15 @@ SID_LIST="/etc/apt/sources.list.d/sid.list"
 PIN_FILE="/etc/apt/preferences.d/pin-trixie"
 
 if [ ! -f "$SID_LIST" ]; then
-    echo "deb http://deb.debian.org/debian sid main" > "$SID_LIST"
-    echo "  Added sid repo to $SID_LIST"
+    printf "deb http://deb.debian.org/debian sid main\ndeb-src http://deb.debian.org/debian sid main\n" > "$SID_LIST"
+    echo "  Added sid repo (deb + deb-src) to $SID_LIST"
 else
-    echo "  Sid repo already configured"
+    # Ensure deb-src line exists (needed for apt-get source)
+    if ! grep -q "^deb-src.*sid" "$SID_LIST"; then
+        echo "deb-src http://deb.debian.org/debian sid main" >> "$SID_LIST"
+        echo "  Added deb-src line to $SID_LIST"
+    fi
+    echo "  Sid repo configured"
 fi
 
 if [ ! -f "$PIN_FILE" ]; then
