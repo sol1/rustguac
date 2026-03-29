@@ -159,15 +159,15 @@ echo ""
 echo "=== Step 4: Installing desktop environment ($DESKTOP) ==="
 case "$DESKTOP" in
     xfce)
-        apt-get install -y task-xfce-desktop
+        DEBIAN_FRONTEND=noninteractive apt-get install -y task-xfce-desktop
         STARTWM_CMD="exec startxfce4"
         ;;
     kde)
-        apt-get install -y task-kde-desktop
+        DEBIAN_FRONTEND=noninteractive apt-get install -y task-kde-desktop
         STARTWM_CMD="exec startplasma-x11"
         ;;
     gnome)
-        apt-get install -y task-gnome-desktop
+        DEBIAN_FRONTEND=noninteractive apt-get install -y task-gnome-desktop
         STARTWM_CMD="exec gnome-session"
         ;;
     none)
