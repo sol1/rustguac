@@ -13,7 +13,7 @@
 # Run as root on the xrdp target machine (not the rustguac server).
 # Requires: Debian 13 (trixie), ~10 minutes for the rebuild.
 #
-# Usage: sudo bash setup-xrdp-gfx.sh
+# Usage: sudo bash setup-xrdp-gfx.sh [--desktop xfce|kde|gnome|none]
 #
 # After running, also run setup-xrdp-audio.sh for audio redirection.
 
@@ -24,8 +24,24 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# Parse --desktop flag (default: xfce)
+DESKTOP="xfce"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --desktop) DESKTOP="$2"; shift 2 ;;
+        --desktop=*) DESKTOP="${1#*=}"; shift ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
+    esac
+done
+
+case "$DESKTOP" in
+    xfce|kde|gnome|none) ;;
+    *) echo "Error: --desktop must be xfce, kde, gnome, or none"; exit 1 ;;
+esac
+
 echo "============================================"
 echo "  xrdp GFX + H.264 Setup for Debian 13"
+echo "  Desktop: $DESKTOP"
 echo "============================================"
 echo ""
 
@@ -138,9 +154,47 @@ fi
 rm -rf "$BUILD_DIR"
 echo ""
 
-# ---------- Step 4: Configure Xorg backend ----------
+# ---------- Step 4: Install desktop environment ----------
 
-echo "=== Step 4: Configuring Xorg backend ==="
+echo "=== Step 4: Installing desktop environment ($DESKTOP) ==="
+case "$DESKTOP" in
+    xfce)
+        apt-get install -y task-xfce-desktop
+        STARTWM_CMD="exec startxfce4"
+        ;;
+    kde)
+        apt-get install -y task-kde-desktop
+        STARTWM_CMD="exec startplasma-x11"
+        ;;
+    gnome)
+        apt-get install -y task-gnome-desktop
+        STARTWM_CMD="exec gnome-session"
+        ;;
+    none)
+        echo "  Skipping desktop install"
+        STARTWM_CMD=""
+        ;;
+esac
+
+if [ -n "$STARTWM_CMD" ]; then
+    cat > /etc/xrdp/startwm.sh << WMEOF
+#!/bin/sh
+if test -r /etc/profile; then
+    . /etc/profile
+fi
+if test -r ~/.profile; then
+    . ~/.profile
+fi
+$STARTWM_CMD
+WMEOF
+    chmod 755 /etc/xrdp/startwm.sh
+    echo "  Set startwm.sh to: $STARTWM_CMD"
+fi
+echo ""
+
+# ---------- Step 5: Configure Xorg backend ----------
+
+echo "=== Step 5: Configuring Xorg backend ==="
 XRDP_INI="/etc/xrdp/xrdp.ini"
 
 if grep -q "^autorun=Xorg" "$XRDP_INI"; then
@@ -168,9 +222,9 @@ else
 fi
 echo ""
 
-# ---------- Step 5: Configure GFX pipeline ----------
+# ---------- Step 6: Configure GFX pipeline ----------
 
-echo "=== Step 5: Creating GFX configuration ==="
+echo "=== Step 6: Creating GFX configuration ==="
 GFX_CONF="/etc/xrdp/gfx.toml"
 if [ -f "$GFX_CONF" ]; then
     cp "$GFX_CONF" "${GFX_CONF}.bak"
@@ -218,9 +272,9 @@ EOF
 echo "  Created $GFX_CONF"
 echo ""
 
-# ---------- Step 6: Restart ----------
+# ---------- Step 7: Restart ----------
 
-echo "=== Step 6: Restarting xrdp ==="
+echo "=== Step 7: Restarting xrdp ==="
 systemctl restart xrdp
 echo "  xrdp restarted"
 
@@ -239,8 +293,7 @@ echo "  - Xwrapper allows non-root Xorg"
 echo ""
 echo "Next steps:"
 echo "  1. Run contrib/setup-xrdp-audio.sh for audio support"
-echo "  2. Install a desktop environment (e.g. apt install task-xfce-desktop)"
-echo "  3. In rustguac, enable 'Graphics Pipeline (GFX)' on RDP entries"
+echo "  2. In rustguac, enable 'Graphics Pipeline (GFX)' on RDP entries"
 echo ""
 echo "When connecting from rustguac with H.264 passthrough enabled,"
 echo "the browser's WebCodecs VideoDecoder will decode H.264 directly"
