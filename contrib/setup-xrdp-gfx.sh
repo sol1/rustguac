@@ -29,7 +29,8 @@ run_diagnose() {
     echo ""
 
     echo "── System ──"
-    echo "  OS: $(lsb_release -ds 2>/dev/null || cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2)"
+    echo "  OS:   $(lsb_release -ds 2>/dev/null || grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2)"
+    echo "  User: $(whoami) (uid $(id -u))"
     echo ""
 
     echo "── Packages ──"
@@ -45,63 +46,87 @@ run_diagnose() {
 
     echo "── Config ──"
     echo "  autorun:   $(grep '^autorun=' /etc/xrdp/xrdp.ini 2>/dev/null || echo 'NOT SET')"
-    echo "  Xwrapper:  $(grep 'allowed_users' /etc/X11/Xwrapper.config 2>/dev/null || echo 'NOT SET')"
+    echo "  Xwrapper:  $(cat /etc/X11/Xwrapper.config 2>/dev/null | grep allowed_users || echo 'NOT SET')"
     echo "  startwm:   $(grep '^exec ' /etc/xrdp/startwm.sh 2>/dev/null || echo 'NOT SET')"
-    echo "  gfx.toml:  $(head -1 /etc/xrdp/gfx.toml 2>/dev/null && echo 'exists' || echo 'MISSING')"
+    echo "  gfx.toml:  $([ -f /etc/xrdp/gfx.toml ] && echo 'exists' || echo 'MISSING')"
     CODEC=$(grep 'order' /etc/xrdp/gfx.toml 2>/dev/null)
     [ -n "$CODEC" ] && echo "  codecs:    $CODEC"
     echo ""
 
-    echo "── Audio ──"
+    echo "── Audio modules ──"
     SINK_SO=$(find /usr/lib -name "module-xrdp-sink.so" 2>/dev/null | head -1)
     echo "  module-xrdp-sink.so:   ${SINK_SO:-NOT FOUND}"
-    echo "  module-xrdp-source.so: $(find /usr/lib -name 'module-xrdp-source.so' 2>/dev/null | head -1 || echo 'NOT FOUND')"
-    echo "  autostart:             $(ls /etc/xdg/autostart/pulseaudio-xrdp.desktop 2>/dev/null || echo 'MISSING')"
-
-    # Check PipeWire vs PulseAudio
-    PW_MASKED=$(systemctl --global is-enabled pipewire-pulse.socket 2>/dev/null || echo "unknown")
-    PA_ENABLED=$(systemctl --global is-enabled pulseaudio.socket 2>/dev/null || echo "unknown")
-    echo "  pipewire-pulse.socket: $PW_MASKED (should be masked)"
-    echo "  pulseaudio.socket:     $PA_ENABLED (should be enabled)"
-
-    # Check running audio for active sessions
+    echo "  module-xrdp-source.so: $(find /usr/lib -name 'module-xrdp-source.so' 2>/dev/null | head -1)"
+    echo "  autostart:             $([ -f /etc/xdg/autostart/pulseaudio-xrdp.desktop ] && echo 'exists' || echo 'MISSING')"
     echo ""
-    echo "── Active sessions ──"
-    SESSIONS=$(ps aux | grep xrdp-sesexec | grep -v grep)
-    if [ -n "$SESSIONS" ]; then
-        echo "$SESSIONS" | while read -r line; do
-            PID=$(echo "$line" | awk '{print $2}')
-            echo "  sesexec pid $PID"
-        done
-        # Check each logged-in user's audio
-        for USER_HOME in /home/*/; do
-            USER=$(basename "$USER_HOME")
-            USER_ID=$(id -u "$USER" 2>/dev/null) || continue
-            if ps -u "$USER" | grep -q Xorg; then
-                PA_RUNNING=$(sudo -u "$USER" XDG_RUNTIME_DIR="/run/user/$USER_ID" pactl info 2>/dev/null | grep "Server Name" || echo "  not reachable")
-                echo "  $USER audio: $PA_RUNNING"
-                SINKS=$(sudo -u "$USER" XDG_RUNTIME_DIR="/run/user/$USER_ID" pactl list sinks short 2>/dev/null)
-                if [ -n "$SINKS" ]; then
-                    echo "$SINKS" | sed 's/^/    /'
-                else
-                    echo "    no sinks"
-                fi
-            fi
-        done
+
+    echo "── Audio processes (this user) ──"
+    PA_PID=$(ps -u "$(whoami)" -o pid,comm 2>/dev/null | grep pulseaudio | awk '{print $1}' | head -1)
+    PW_PID=$(ps -u "$(whoami)" -o pid,comm 2>/dev/null | grep pipewire-pulse | awk '{print $1}' | head -1)
+    [ -n "$PA_PID" ] && echo "  pulseaudio:     running (pid $PA_PID)" || echo "  pulseaudio:     NOT RUNNING"
+    [ -n "$PW_PID" ] && echo "  pipewire-pulse: running (pid $PW_PID) ← PROBLEM: blocks xrdp audio" || echo "  pipewire-pulse: not running (good)"
+    echo ""
+
+    echo "── Audio sinks (this user) ──"
+    SINKS=$(pactl list sinks short 2>/dev/null)
+    if [ -n "$SINKS" ]; then
+        echo "$SINKS" | sed 's/^/  /'
+        if echo "$SINKS" | grep -q xrdp; then
+            echo "  ✓ xrdp-sink present"
+        else
+            echo "  ✗ xrdp-sink MISSING — try: pactl load-module module-xrdp-sink"
+        fi
     else
-        echo "  No active xrdp sessions"
+        echo "  No sinks (pactl not reachable)"
     fi
     echo ""
 
-    echo "── Recent xrdp errors ──"
-    grep -i "error\|warn\|fail" /var/log/xrdp-sesman.log 2>/dev/null | tail -5
+    echo "── Audio server info ──"
+    pactl info 2>/dev/null | grep -E "Server Name|Default Sink" | sed 's/^/  /' || echo "  pactl not reachable"
     echo ""
 
-    echo "── Sid repo (should be removed) ──"
-    if [ -f /etc/apt/sources.list.d/sid.list ]; then
-        echo "  WARNING: sid.list still exists — run: rm /etc/apt/sources.list.d/sid.list"
+    echo "── PipeWire vs PulseAudio (systemd global) ──"
+    echo "  pipewire-pulse.socket: $(systemctl --global is-enabled pipewire-pulse.socket 2>/dev/null || echo 'unknown') (should be masked)"
+    echo "  pulseaudio.socket:     $(systemctl --global is-enabled pulseaudio.socket 2>/dev/null || echo 'unknown') (should be enabled)"
+    echo ""
+
+    echo "── User systemd audio units ──"
+    echo "  pipewire-pulse: $(systemctl --user is-active pipewire-pulse.service 2>/dev/null || echo 'unknown')"
+    echo "  pulseaudio:     $(systemctl --user is-active pulseaudio.service 2>/dev/null || echo 'unknown')"
+    echo ""
+
+    # Privileged checks (only if root)
+    if [ "$(id -u)" -eq 0 ]; then
+        echo "── Active xrdp sessions ──"
+        SESSIONS=$(ps aux | grep xrdp-sesexec | grep -v grep)
+        if [ -n "$SESSIONS" ]; then
+            echo "$SESSIONS" | awk '{print "  pid " $2}'
+            for USER_HOME in /home/*/; do
+                USER=$(basename "$USER_HOME")
+                USER_ID=$(id -u "$USER" 2>/dev/null) || continue
+                if ps -u "$USER" 2>/dev/null | grep -q Xorg; then
+                    echo "  $USER:"
+                    sudo -u "$USER" XDG_RUNTIME_DIR="/run/user/$USER_ID" pactl list sinks short 2>/dev/null | sed 's/^/    /' || echo "    pactl not reachable"
+                fi
+            done
+        else
+            echo "  No active sessions"
+        fi
+        echo ""
+
+        echo "── Recent xrdp log (errors/warnings) ──"
+        grep -iE "error|warn|fail" /var/log/xrdp-sesman.log 2>/dev/null | tail -5 | sed 's/^/  /'
+        echo ""
+
+        echo "── Sid repo (should be removed) ──"
+        if [ -f /etc/apt/sources.list.d/sid.list ]; then
+            echo "  WARNING: sid.list still exists — run: rm /etc/apt/sources.list.d/sid.list"
+        else
+            echo "  Clean (no sid repo)"
+        fi
     else
-        echo "  Clean (no sid repo)"
+        echo "── Run as root for additional checks ──"
+        echo "  sudo bash $0 --diagnose"
     fi
 
     exit 0
