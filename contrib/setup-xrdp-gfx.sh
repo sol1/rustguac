@@ -94,6 +94,15 @@ else
     echo "  WARNING: module-xrdp-sink.so not found after install"
 fi
 rm -rf "$AUDIO_BUILD_DIR"
+
+# Debian 13 defaults to PipeWire-pulse, but xrdp audio modules require
+# real PulseAudio. Disable PipeWire-pulse and enable PulseAudio globally.
+if systemctl --global is-enabled pipewire-pulse.socket >/dev/null 2>&1; then
+    echo "  Switching from PipeWire-pulse to PulseAudio (required for xrdp audio)"
+    systemctl --global disable pipewire-pulse.socket pipewire-pulse.service 2>/dev/null || true
+    systemctl --global mask pipewire-pulse.socket pipewire-pulse.service 2>/dev/null || true
+    systemctl --global enable pulseaudio.service pulseaudio.socket 2>/dev/null || true
+fi
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════
