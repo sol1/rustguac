@@ -183,8 +183,8 @@ Run `bash setup-xrdp-gfx.sh --help` for all options, or `bash setup-xrdp-gfx.sh 
 
 In the rustguac address book, enable these settings on the RDP entry:
 - **Enable Graphics Pipeline (GFX)** -- checked
-- **Enable Desktop Composition** -- checked
 - **H.264 Passthrough** -- checked
+- **Enable Desktop Composition** -- not needed for Linux (Windows-only DWM setting)
 
 See [rdp-video-performance.md](rdp-video-performance.md) for manual setup and tuning.
 
