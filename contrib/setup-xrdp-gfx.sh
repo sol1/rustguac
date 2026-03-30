@@ -234,6 +234,11 @@ case "$DESKTOP" in
         STARTWM_CMD=""
         ;;
 esac
+
+# Install common desktop applications
+if [ "$DESKTOP" != "none" ]; then
+    apt-get install -y firefox-esr chromium
+fi
 echo ""
 
 echo "=== Step 2: Installing build tools ==="
