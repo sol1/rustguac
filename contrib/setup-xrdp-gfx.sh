@@ -45,9 +45,16 @@ echo "  Desktop: $DESKTOP"
 echo "============================================"
 echo ""
 
-# ---------- Step 1: Add sid repo with pinning ----------
+# ---------- Step 1: Install build tools from trixie (before sid) ----------
 
-echo "=== Step 1: Configuring apt repos ==="
+echo "=== Step 1: Installing build tools ==="
+apt-get update -qq
+apt-get install -y build-essential devscripts libx264-dev
+echo ""
+
+# ---------- Step 2: Add sid repo with pinning ----------
+
+echo "=== Step 2: Configuring apt repos ==="
 SID_LIST="/etc/apt/sources.list.d/sid.list"
 PIN_FILE="/etc/apt/preferences.d/pin-trixie"
 
@@ -81,20 +88,19 @@ fi
 apt-get update -qq
 echo ""
 
-# ---------- Step 2: Install xorgxrdp from sid ----------
+# ---------- Step 3: Install xorgxrdp from sid ----------
 
-echo "=== Step 2: Installing xorgxrdp from sid ==="
+echo "=== Step 3: Installing xorgxrdp from sid ==="
 apt-get install -y -t unstable xorgxrdp
 XORGXRDP_VER=$(dpkg -l xorgxrdp | awk '/^ii/{print $3}')
 echo "  xorgxrdp version: $XORGXRDP_VER"
 echo ""
 
-# ---------- Step 3: Rebuild xrdp with x264 ----------
+# ---------- Step 4: Rebuild xrdp with x264 ----------
 
-echo "=== Step 3: Rebuilding xrdp with x264 support ==="
+echo "=== Step 4: Rebuilding xrdp with x264 support ==="
 
-# Install build dependencies
-apt-get install -y libx264-dev build-essential devscripts
+# Install xrdp build dependencies
 apt-get build-dep -y xrdp 2>/dev/null || apt-get build-dep -y -t unstable xrdp
 
 # Get xrdp source from sid
@@ -159,9 +165,9 @@ fi
 rm -rf "$BUILD_DIR"
 echo ""
 
-# ---------- Step 4: Install desktop environment ----------
+# ---------- Step 5: Install desktop environment ----------
 
-echo "=== Step 4: Installing desktop environment ($DESKTOP) ==="
+echo "=== Step 5: Installing desktop environment ($DESKTOP) ==="
 case "$DESKTOP" in
     xfce)
         DEBIAN_FRONTEND=noninteractive apt-get install -y task-xfce-desktop
@@ -197,9 +203,9 @@ WMEOF
 fi
 echo ""
 
-# ---------- Step 5: Configure Xorg backend ----------
+# ---------- Step 6: Configure Xorg backend ----------
 
-echo "=== Step 5: Configuring Xorg backend ==="
+echo "=== Step 6: Configuring Xorg backend ==="
 XRDP_INI="/etc/xrdp/xrdp.ini"
 
 if grep -q "^autorun=Xorg" "$XRDP_INI"; then
@@ -227,9 +233,9 @@ else
 fi
 echo ""
 
-# ---------- Step 6: Configure GFX pipeline ----------
+# ---------- Step 7: Configure GFX pipeline ----------
 
-echo "=== Step 6: Creating GFX configuration ==="
+echo "=== Step 7: Creating GFX configuration ==="
 GFX_CONF="/etc/xrdp/gfx.toml"
 if [ -f "$GFX_CONF" ]; then
     cp "$GFX_CONF" "${GFX_CONF}.bak"
@@ -277,9 +283,9 @@ EOF
 echo "  Created $GFX_CONF"
 echo ""
 
-# ---------- Step 7: Restart ----------
+# ---------- Step 8: Restart ----------
 
-echo "=== Step 7: Restarting xrdp ==="
+echo "=== Step 8: Restarting xrdp ==="
 systemctl restart xrdp
 echo "  xrdp restarted"
 
