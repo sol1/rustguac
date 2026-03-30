@@ -58,9 +58,13 @@ RUN /build/guacamole-server/configure \
     && make -j"$(nproc)" \
     && make install \
     && mkdir -p /opt/rustguac/lib/freerdp3 \
-    && find / -name "libguac-common-svc-client.*" -not -path "*/guacamole-server/*" 2>/dev/null \
-       | xargs -I{} cp {} /opt/rustguac/lib/freerdp3/ 2>/dev/null; \
-       ls /opt/rustguac/lib/freerdp3/
+    && echo "=== Searching for FreeRDP plugins ===" \
+    && find / -name "libguac*.so*" -not -path "*/guacamole-server/*" -not -path "/proc/*" 2>/dev/null | tee /tmp/guac-plugins.txt \
+    && if [ -s /tmp/guac-plugins.txt ]; then \
+         cp $(cat /tmp/guac-plugins.txt) /opt/rustguac/lib/freerdp3/ 2>/dev/null || true; \
+       fi \
+    && echo "=== Plugins in /opt/rustguac/lib/freerdp3/ ===" \
+    && ls -la /opt/rustguac/lib/freerdp3/ || true
 
 # ---------------------------------------------------------------------------
 # Stage 2: Build rustguac
