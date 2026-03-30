@@ -149,10 +149,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Install
+# Install (apt -f resolves any missing dependencies like ssl-cert)
 DEB=$(ls "$BUILD_DIR"/xrdp_*.deb | head -1)
 echo "  Installing $DEB"
-dpkg -i "$DEB"
+dpkg -i "$DEB" || true
+apt-get install -f -y
 
 # Verify x264 is linked
 if ldd /usr/sbin/xrdp 2>/dev/null | grep -q libx264; then
