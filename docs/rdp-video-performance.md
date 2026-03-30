@@ -73,28 +73,23 @@ Check Windows Event Viewer at `Applications and Services Logs > Microsoft > Wind
 
 Debian 13 (trixie) ships xrdp 0.10.x, but the stock package does **not** include x264 H.264 encoding support. The `contrib/setup-xrdp-gfx.sh` script rebuilds xrdp from the Debian sid source package with `--enable-x264` and configures the GFX pipeline.
 
-### Quick Setup with Scripts
+### Quick Setup
 
-Helper scripts are provided in the `contrib/` directory of the rustguac repository. Run these **on the xrdp target machine** (not the rustguac server):
+A single setup script handles everything — desktop, audio, xrdp rebuild, and configuration. Run **on the xrdp target machine** (not the rustguac server):
 
 ```bash
-# 1. Rebuild xrdp with x264 + configure GFX pipeline (~10 minutes)
-sudo bash contrib/setup-xrdp-gfx.sh
-
-# 2. Install audio redirection (builds PulseAudio module from source)
-sudo bash contrib/setup-xrdp-audio.sh
-
-# 3. Install a desktop environment
-sudo apt install task-xfce-desktop
+wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/sol1/rustguac/main/contrib/setup-xrdp-gfx.sh
+sudo bash setup-xrdp-gfx.sh --desktop mate
 ```
 
-The GFX script:
-1. Adds Debian sid repo with pinning (trixie stays default)
-2. Installs matching `xorgxrdp` from sid
-3. Rebuilds `xrdp` from sid source with `--enable-x264`
-4. Configures Xorg backend (`autorun=Xorg`)
-5. Allows non-root Xorg via Xwrapper
-6. Creates `/etc/xrdp/gfx.toml` with H.264 + x264 encoder
+Desktop options: `mate` (default, recommended), `xfce`, `kde`, `gnome`, `none`. MATE is lightweight and works reliably over xrdp without GPU.
+
+The script runs in three phases:
+1. **Phase 1 (pure trixie):** Desktop + Firefox + Chromium, build tools, PulseAudio xrdp audio module, PipeWire→PulseAudio switch
+2. **Phase 2 (temporary sid):** Adds sid repo, installs matching xorgxrdp, rebuilds xrdp with `--enable-x264`, removes sid
+3. **Phase 3 (configure):** Xorg backend, Xwrapper, startwm.sh, gfx.toml with H.264 + x264
+
+After setup, use `bash setup-xrdp-gfx.sh --diagnose` to troubleshoot, or `--help` for all options.
 
 ### Manual Setup
 

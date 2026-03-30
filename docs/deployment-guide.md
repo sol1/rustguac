@@ -164,22 +164,22 @@ sudo systemctl restart haproxy
 
 ### Linux (xrdp with H.264)
 
-For the best video experience with Linux desktops, use xrdp with x264 H.264 encoding. The stock Debian 13 xrdp package does not include x264 — our setup script rebuilds it:
+For the best video experience with Linux desktops, use xrdp with x264 H.264 encoding. A single setup script handles everything — desktop environment, audio, xrdp rebuild with x264, and GFX configuration:
 
 ```bash
 # On the RDP target machine (not the rustguac server):
-
-# 1. GFX pipeline + H.264 (rebuilds xrdp with x264, ~10 min)
-sudo bash contrib/setup-xrdp-gfx.sh
-
-# 2. Audio redirection (builds PulseAudio module from source)
-sudo bash contrib/setup-xrdp-audio.sh
-
-# 3. Desktop environment
-sudo apt install task-xfce-desktop
+wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/sol1/rustguac/main/contrib/setup-xrdp-gfx.sh
+sudo bash setup-xrdp-gfx.sh --desktop mate
 ```
 
-The script handles: sid repo + pinning, xrdp rebuild with `--enable-x264`, matching xorgxrdp, Xorg backend, gfx.toml, and Xwrapper config.
+The `--desktop` flag installs a desktop environment (default: `mate`). Options: `mate`, `xfce`, `kde`, `gnome`, `none`. MATE is recommended — it's lightweight, Windows-like, and works reliably over xrdp without GPU.
+
+The script runs in three phases:
+1. **Phase 1 (pure trixie):** Installs desktop, Firefox, Chromium, build tools, PulseAudio xrdp audio module, switches from PipeWire to real PulseAudio
+2. **Phase 2 (temporary sid):** Adds Debian sid repo, installs matching xorgxrdp, rebuilds xrdp with `--enable-x264`, removes sid
+3. **Phase 3 (configure):** Xorg backend, startwm.sh, gfx.toml with H.264 + x264 encoder
+
+Run `bash setup-xrdp-gfx.sh --help` for all options, or `bash setup-xrdp-gfx.sh --diagnose` to troubleshoot after setup.
 
 In the rustguac address book, enable these settings on the RDP entry:
 - **Enable Graphics Pipeline (GFX)** -- checked
