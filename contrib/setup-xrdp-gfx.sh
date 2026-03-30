@@ -132,6 +132,57 @@ run_diagnose() {
     exit 0
 }
 
+# ── Help ─────────────────────────────────────────────────────────────
+show_help() {
+    cat << 'HELPEOF'
+Usage: sudo bash setup-xrdp-gfx.sh [OPTIONS]
+
+Set up xrdp with H.264 encoding, GFX pipeline, desktop environment,
+and audio redirection on Debian 13 (trixie).
+
+Options:
+  --desktop DESKTOP  Desktop environment to install (default: mate)
+                     mate   - MATE desktop (recommended, Windows-like, no GPU needed)
+                     xfce   - XFCE (lightweight, reliable)
+                     kde    - KDE Plasma (requires GPU or software rendering)
+                     gnome  - GNOME (may need GPU for Wayland)
+                     none   - skip desktop install (bring your own)
+
+  --diagnose         Run diagnostic checks and exit. Shows package versions,
+                     service status, audio config, and active session state.
+                     Can be run as regular user or root (root shows more).
+
+  --help             Show this help and exit.
+
+What this script does:
+  Phase 1 (pure trixie):
+    1. Install desktop environment
+    2. Install build tools (build-essential, libx264-dev, etc.)
+    3. Build PulseAudio xrdp audio module from source
+    4. Switch from PipeWire-pulse to real PulseAudio
+
+  Phase 2 (temporary sid):
+    5. Add Debian sid repo with pinning
+    6. Install xorgxrdp from sid
+    7. Rebuild xrdp from sid source with --enable-x264
+    8. Remove sid repo
+
+  Phase 3 (configure):
+    9. Set Xorg backend, Xwrapper, startwm.sh
+   10. Create gfx.toml (H.264 + x264 encoder)
+   11. Restart xrdp
+
+Examples:
+  sudo bash setup-xrdp-gfx.sh                    # MATE desktop (default)
+  sudo bash setup-xrdp-gfx.sh --desktop kde      # KDE Plasma
+  sudo bash setup-xrdp-gfx.sh --desktop none     # No desktop (headless)
+  bash setup-xrdp-gfx.sh --diagnose              # Troubleshoot (no root needed)
+
+For use with rustguac: https://github.com/sol1/rustguac
+HELPEOF
+    exit 0
+}
+
 # Parse arguments
 DESKTOP="mate"
 while [ $# -gt 0 ]; do
@@ -139,7 +190,8 @@ while [ $# -gt 0 ]; do
         --desktop) DESKTOP="$2"; shift 2 ;;
         --desktop=*) DESKTOP="${1#*=}"; shift ;;
         --diagnose|--diag) run_diagnose ;;
-        *) echo "Unknown option: $1"; exit 1 ;;
+        --help|-h) show_help ;;
+        *) echo "Unknown option: $1. Try --help"; exit 1 ;;
     esac
 done
 
