@@ -257,6 +257,23 @@ if [ -n "$SINK_SO" ]; then
 else
     echo "  WARNING: module-xrdp-sink.so not found after install"
 fi
+AUTOSTART="/etc/xdg/autostart/pulseaudio-xrdp.desktop"
+if [ -f "$AUTOSTART" ]; then
+    echo "  Autostart: $AUTOSTART"
+else
+    echo "  WARNING: autostart file not created by make install"
+    echo "  Creating manually..."
+    mkdir -p /etc/xdg/autostart
+    cat > "$AUTOSTART" << 'ASEOF'
+[Desktop Entry]
+Type=Application
+Name=PulseAudio xrdp modules
+Exec=/usr/bin/pactl load-module module-xrdp-sink
+NoDisplay=true
+OnlyShowIn=XRDP;
+ASEOF
+    echo "  Created $AUTOSTART"
+fi
 rm -rf "$AUDIO_BUILD_DIR"
 
 # Debian 13 defaults to PipeWire-pulse, but xrdp audio modules require
