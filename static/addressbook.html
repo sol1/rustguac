@@ -1863,10 +1863,10 @@
                 // Populate video performance settings (RDP only)
                 if (type === 'rdp') {
                     document.getElementById('em-enable-gfx').checked = !!entryData.enable_gfx;
-                    document.getElementById('em-enable-desktop-comp').checked = !!entryData.enable_desktop_comp;
+                    document.getElementById('em-enable-desktop-comp').checked = !!entryData.enable_desktop_composition;
                     document.getElementById('em-force-lossless').checked = !!entryData.force_lossless;
                     document.getElementById('em-enable-h264').checked = !!entryData.enable_h264;
-                    if (entryData.enable_gfx || entryData.enable_desktop_comp || entryData.force_lossless || entryData.enable_h264) {
+                    if (entryData.enable_gfx || entryData.enable_desktop_composition || entryData.force_lossless || entryData.enable_h264) {
                         document.getElementById('em-video-perf-fields').style.display = '';
                         document.getElementById('em-video-perf-arrow').innerHTML = '&#9660;';
                     }
@@ -1997,7 +1997,7 @@
             // Video performance settings (RDP only)
             if (type === 'rdp') {
                 if (document.getElementById('em-enable-gfx').checked) entry.enable_gfx = true;
-                if (document.getElementById('em-enable-desktop-comp').checked) entry.enable_desktop_comp = true;
+                if (document.getElementById('em-enable-desktop-comp').checked) entry.enable_desktop_composition = true;
                 if (document.getElementById('em-force-lossless').checked) entry.force_lossless = true;
                 if (document.getElementById('em-enable-h264').checked) entry.enable_h264 = true;
             }
