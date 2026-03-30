@@ -12,7 +12,7 @@
 #
 # Usage: sudo bash setup-xrdp-gfx.sh [--desktop mate|xfce|kde|gnome|none]
 #
-# After running, also run setup-xrdp-audio.sh for audio redirection.
+# Includes PulseAudio xrdp audio module (no separate audio script needed).
 
 set -e
 
@@ -73,14 +73,34 @@ esac
 echo ""
 
 echo "=== Step 2: Installing build tools ==="
-apt-get install -y build-essential devscripts libx264-dev
+apt-get install -y build-essential devscripts libx264-dev libpulse-dev \
+    git autoconf libtool m4 dpkg-dev pulseaudio
+echo ""
+
+echo "=== Step 3: Building PulseAudio xrdp audio module ==="
+AUDIO_BUILD_DIR=$(mktemp -d /tmp/xrdp-audio-build.XXXXXX)
+cd "$AUDIO_BUILD_DIR"
+git clone --depth 1 https://github.com/neutrinolabs/pulseaudio-module-xrdp.git
+cd pulseaudio-module-xrdp
+scripts/install_pulseaudio_sources_apt.sh
+./bootstrap
+./configure PULSE_DIR=/root/pulseaudio.src
+make
+make install
+SINK_SO=$(find /usr/lib -name "module-xrdp-sink.so" 2>/dev/null | head -1)
+if [ -n "$SINK_SO" ]; then
+    echo "  Audio module installed: $SINK_SO"
+else
+    echo "  WARNING: module-xrdp-sink.so not found after install"
+fi
+rm -rf "$AUDIO_BUILD_DIR"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════
 # Phase 2: Temporarily add sid, rebuild xrdp with x264, then remove sid
 # ══════════════════════════════════════════════════════════════════════
 
-echo "=== Step 3: Adding sid repo (temporary) ==="
+echo "=== Step 4: Adding sid repo (temporary) ==="
 SID_LIST="/etc/apt/sources.list.d/sid.list"
 PIN_FILE="/etc/apt/preferences.d/pin-trixie"
 
@@ -101,13 +121,13 @@ fi
 apt-get update -qq
 echo ""
 
-echo "=== Step 4: Installing xorgxrdp from sid ==="
+echo "=== Step 5: Installing xorgxrdp from sid ==="
 apt-get install -y -t unstable xorgxrdp
 XORGXRDP_VER=$(dpkg -l xorgxrdp | awk '/^ii/{print $3}')
 echo "  xorgxrdp version: $XORGXRDP_VER"
 echo ""
 
-echo "=== Step 5: Rebuilding xrdp with x264 support ==="
+echo "=== Step 6: Rebuilding xrdp with x264 support ==="
 
 # Install xrdp build dependencies
 apt-get build-dep -y -t unstable xrdp
@@ -182,7 +202,7 @@ echo ""
 # Phase 3: Configure xrdp
 # ══════════════════════════════════════════════════════════════════════
 
-echo "=== Step 6: Configuring Xorg backend ==="
+echo "=== Step 7: Configuring Xorg backend ==="
 XRDP_INI="/etc/xrdp/xrdp.ini"
 
 if grep -q "^autorun=Xorg" "$XRDP_INI"; then
@@ -226,7 +246,7 @@ WMEOF
 fi
 echo ""
 
-echo "=== Step 7: Creating GFX configuration ==="
+echo "=== Step 8: Creating GFX configuration ==="
 GFX_CONF="/etc/xrdp/gfx.toml"
 if [ -f "$GFX_CONF" ]; then
     cp "$GFX_CONF" "${GFX_CONF}.bak"
@@ -271,7 +291,7 @@ EOF
 echo "  Created $GFX_CONF"
 echo ""
 
-echo "=== Step 8: Restarting xrdp ==="
+echo "=== Step 9: Restarting xrdp ==="
 systemctl restart xrdp
 echo "  xrdp restarted"
 
@@ -286,8 +306,8 @@ echo "  - xorgxrdp $XORGXRDP_VER"
 echo "  - Desktop: $DESKTOP"
 echo "  - Xorg backend (required for GFX pipeline)"
 echo "  - H.264 encoding via x264 (60fps LAN)"
+echo "  - PulseAudio xrdp audio module installed"
 echo "  - Sid repo removed (clean trixie state)"
 echo ""
 echo "Next steps:"
-echo "  1. Run contrib/setup-xrdp-audio.sh for audio support"
-echo "  2. In rustguac, enable GFX + H.264 Passthrough on RDP entries"
+echo "  In rustguac, enable GFX + H.264 Passthrough on RDP entries"
