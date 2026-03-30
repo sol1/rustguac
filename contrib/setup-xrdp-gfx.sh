@@ -21,12 +21,99 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Parse --desktop flag (default: mate)
+# ── Diagnostic function ──────────────────────────────────────────────
+run_diagnose() {
+    echo "============================================"
+    echo "  xrdp Diagnostic Report"
+    echo "============================================"
+    echo ""
+
+    echo "── System ──"
+    echo "  OS: $(lsb_release -ds 2>/dev/null || cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2)"
+    echo ""
+
+    echo "── Packages ──"
+    echo "  xrdp:      $(dpkg -l xrdp 2>/dev/null | awk '/^ii/{print $3}' || echo 'NOT INSTALLED')"
+    echo "  xorgxrdp:  $(dpkg -l xorgxrdp 2>/dev/null | awk '/^ii/{print $3}' || echo 'NOT INSTALLED')"
+    echo "  x264 link: $(ldd /usr/sbin/xrdp 2>/dev/null | grep -o 'libx264.*' || echo 'NOT LINKED')"
+    echo ""
+
+    echo "── Services ──"
+    echo "  xrdp:         $(systemctl is-active xrdp 2>/dev/null)"
+    echo "  xrdp-sesman:  $(systemctl is-active xrdp-sesman 2>/dev/null)"
+    echo ""
+
+    echo "── Config ──"
+    echo "  autorun:   $(grep '^autorun=' /etc/xrdp/xrdp.ini 2>/dev/null || echo 'NOT SET')"
+    echo "  Xwrapper:  $(grep 'allowed_users' /etc/X11/Xwrapper.config 2>/dev/null || echo 'NOT SET')"
+    echo "  startwm:   $(grep '^exec ' /etc/xrdp/startwm.sh 2>/dev/null || echo 'NOT SET')"
+    echo "  gfx.toml:  $(head -1 /etc/xrdp/gfx.toml 2>/dev/null && echo 'exists' || echo 'MISSING')"
+    CODEC=$(grep 'order' /etc/xrdp/gfx.toml 2>/dev/null)
+    [ -n "$CODEC" ] && echo "  codecs:    $CODEC"
+    echo ""
+
+    echo "── Audio ──"
+    SINK_SO=$(find /usr/lib -name "module-xrdp-sink.so" 2>/dev/null | head -1)
+    echo "  module-xrdp-sink.so:   ${SINK_SO:-NOT FOUND}"
+    echo "  module-xrdp-source.so: $(find /usr/lib -name 'module-xrdp-source.so' 2>/dev/null | head -1 || echo 'NOT FOUND')"
+    echo "  autostart:             $(ls /etc/xdg/autostart/pulseaudio-xrdp.desktop 2>/dev/null || echo 'MISSING')"
+
+    # Check PipeWire vs PulseAudio
+    PW_MASKED=$(systemctl --global is-enabled pipewire-pulse.socket 2>/dev/null || echo "unknown")
+    PA_ENABLED=$(systemctl --global is-enabled pulseaudio.socket 2>/dev/null || echo "unknown")
+    echo "  pipewire-pulse.socket: $PW_MASKED (should be masked)"
+    echo "  pulseaudio.socket:     $PA_ENABLED (should be enabled)"
+
+    # Check running audio for active sessions
+    echo ""
+    echo "── Active sessions ──"
+    SESSIONS=$(ps aux | grep xrdp-sesexec | grep -v grep)
+    if [ -n "$SESSIONS" ]; then
+        echo "$SESSIONS" | while read -r line; do
+            PID=$(echo "$line" | awk '{print $2}')
+            echo "  sesexec pid $PID"
+        done
+        # Check each logged-in user's audio
+        for USER_HOME in /home/*/; do
+            USER=$(basename "$USER_HOME")
+            USER_ID=$(id -u "$USER" 2>/dev/null) || continue
+            if ps -u "$USER" | grep -q Xorg; then
+                PA_RUNNING=$(sudo -u "$USER" XDG_RUNTIME_DIR="/run/user/$USER_ID" pactl info 2>/dev/null | grep "Server Name" || echo "  not reachable")
+                echo "  $USER audio: $PA_RUNNING"
+                SINKS=$(sudo -u "$USER" XDG_RUNTIME_DIR="/run/user/$USER_ID" pactl list sinks short 2>/dev/null)
+                if [ -n "$SINKS" ]; then
+                    echo "$SINKS" | sed 's/^/    /'
+                else
+                    echo "    no sinks"
+                fi
+            fi
+        done
+    else
+        echo "  No active xrdp sessions"
+    fi
+    echo ""
+
+    echo "── Recent xrdp errors ──"
+    grep -i "error\|warn\|fail" /var/log/xrdp-sesman.log 2>/dev/null | tail -5
+    echo ""
+
+    echo "── Sid repo (should be removed) ──"
+    if [ -f /etc/apt/sources.list.d/sid.list ]; then
+        echo "  WARNING: sid.list still exists — run: rm /etc/apt/sources.list.d/sid.list"
+    else
+        echo "  Clean (no sid repo)"
+    fi
+
+    exit 0
+}
+
+# Parse arguments
 DESKTOP="mate"
 while [ $# -gt 0 ]; do
     case "$1" in
         --desktop) DESKTOP="$2"; shift 2 ;;
         --desktop=*) DESKTOP="${1#*=}"; shift ;;
+        --diagnose|--diag) run_diagnose ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -320,3 +407,5 @@ echo "  - Sid repo removed (clean trixie state)"
 echo ""
 echo "Next steps:"
 echo "  In rustguac, enable GFX + H.264 Passthrough on RDP entries"
+echo ""
+echo "To troubleshoot, run: sudo bash $(basename "$0") --diagnose"
