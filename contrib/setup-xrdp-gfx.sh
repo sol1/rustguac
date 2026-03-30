@@ -1,19 +1,16 @@
 #!/bin/bash
 # Setup GFX pipeline with H.264 encoding for xrdp on Debian 13 (trixie).
 #
-# This script rebuilds xrdp from the Debian sid source package with x264
-# support enabled, installs matching xorgxrdp, configures the Xorg backend
-# and GFX pipeline with H.264 encoding.
+# This script installs a desktop environment, rebuilds xrdp from the Debian
+# sid source package with x264 support, and configures the GFX pipeline.
 #
 # The stock Debian 13 xrdp package does NOT include x264 support.
-# This script adds the Debian sid (unstable) repo, rebuilds xrdp with
-# --enable-x264, and pins trixie as the default to prevent accidental
-# upgrades from sid.
+# Sid is added temporarily for the xrdp rebuild, then removed.
 #
 # Run as root on the xrdp target machine (not the rustguac server).
-# Requires: Debian 13 (trixie), ~10 minutes for the rebuild.
+# Requires: Debian 13 (trixie), ~15 minutes.
 #
-# Usage: sudo bash setup-xrdp-gfx.sh [--desktop xfce|kde|gnome|mate|none]
+# Usage: sudo bash setup-xrdp-gfx.sh [--desktop mate|xfce|kde|gnome|none]
 #
 # After running, also run setup-xrdp-audio.sh for audio redirection.
 
@@ -24,7 +21,7 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Parse --desktop flag (default: xfce)
+# Parse --desktop flag (default: mate)
 DESKTOP="mate"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -36,7 +33,7 @@ done
 
 case "$DESKTOP" in
     xfce|kde|gnome|mate|none) ;;
-    *) echo "Error: --desktop must be xfce, kde, gnome, mate, or none"; exit 1 ;;
+    *) echo "Error: --desktop must be mate, xfce, kde, gnome, or none"; exit 1 ;;
 esac
 
 echo "============================================"
@@ -45,30 +42,49 @@ echo "  Desktop: $DESKTOP"
 echo "============================================"
 echo ""
 
-# ---------- Step 1: Install build tools from trixie (before sid) ----------
+# ══════════════════════════════════════════════════════════════════════
+# Phase 1: Install everything from trixie (before touching sid)
+# ══════════════════════════════════════════════════════════════════════
 
-echo "=== Step 1: Installing build tools ==="
+echo "=== Step 1: Installing desktop environment ($DESKTOP) ==="
 apt-get update -qq
+case "$DESKTOP" in
+    xfce)
+        DEBIAN_FRONTEND=noninteractive apt-get install -y task-xfce-desktop
+        STARTWM_CMD="exec startxfce4"
+        ;;
+    kde)
+        DEBIAN_FRONTEND=noninteractive apt-get install -y task-kde-desktop
+        STARTWM_CMD="exec startplasma-x11"
+        ;;
+    gnome)
+        DEBIAN_FRONTEND=noninteractive apt-get install -y task-gnome-desktop
+        STARTWM_CMD="exec gnome-session"
+        ;;
+    mate)
+        DEBIAN_FRONTEND=noninteractive apt-get install -y mate-desktop-environment
+        STARTWM_CMD="exec mate-session"
+        ;;
+    none)
+        echo "  Skipping desktop install"
+        STARTWM_CMD=""
+        ;;
+esac
+echo ""
+
+echo "=== Step 2: Installing build tools ==="
 apt-get install -y build-essential devscripts libx264-dev
 echo ""
 
-# ---------- Step 2: Add sid repo with pinning ----------
+# ══════════════════════════════════════════════════════════════════════
+# Phase 2: Temporarily add sid, rebuild xrdp with x264, then remove sid
+# ══════════════════════════════════════════════════════════════════════
 
-echo "=== Step 2: Configuring apt repos ==="
+echo "=== Step 3: Adding sid repo (temporary) ==="
 SID_LIST="/etc/apt/sources.list.d/sid.list"
 PIN_FILE="/etc/apt/preferences.d/pin-trixie"
 
-if [ ! -f "$SID_LIST" ]; then
-    printf "deb http://deb.debian.org/debian sid main\ndeb-src http://deb.debian.org/debian sid main\n" > "$SID_LIST"
-    echo "  Added sid repo (deb + deb-src) to $SID_LIST"
-else
-    # Ensure deb-src line exists (needed for apt-get source)
-    if ! grep -q "^deb-src.*sid" "$SID_LIST"; then
-        echo "deb-src http://deb.debian.org/debian sid main" >> "$SID_LIST"
-        echo "  Added deb-src line to $SID_LIST"
-    fi
-    echo "  Sid repo configured"
-fi
+printf "deb http://deb.debian.org/debian sid main\ndeb-src http://deb.debian.org/debian sid main\n" > "$SID_LIST"
 
 if [ ! -f "$PIN_FILE" ]; then
     cat > "$PIN_FILE" << 'PINEOF'
@@ -80,35 +96,28 @@ Package: *
 Pin: release a=unstable
 Pin-Priority: 100
 PINEOF
-    echo "  Created apt pinning (trixie=900, sid=100)"
-else
-    echo "  Apt pinning already configured"
 fi
 
 apt-get update -qq
 echo ""
 
-# ---------- Step 3: Install xorgxrdp from sid ----------
-
-echo "=== Step 3: Installing xorgxrdp from sid ==="
+echo "=== Step 4: Installing xorgxrdp from sid ==="
 apt-get install -y -t unstable xorgxrdp
 XORGXRDP_VER=$(dpkg -l xorgxrdp | awk '/^ii/{print $3}')
 echo "  xorgxrdp version: $XORGXRDP_VER"
 echo ""
 
-# ---------- Step 4: Rebuild xrdp with x264 ----------
-
-echo "=== Step 4: Rebuilding xrdp with x264 support ==="
+echo "=== Step 5: Rebuilding xrdp with x264 support ==="
 
 # Install xrdp build dependencies
-apt-get build-dep -y xrdp 2>/dev/null || apt-get build-dep -y -t unstable xrdp
+apt-get build-dep -y -t unstable xrdp
 
 # Get xrdp source from sid
 BUILD_DIR=$(mktemp -d /tmp/xrdp-build.XXXXXX)
 echo "  Build directory: $BUILD_DIR"
 cd "$BUILD_DIR"
 
-# Find the latest version in sid (sort -V to get highest version)
+# Find the latest version in sid
 XRDP_SID_VER=$(apt-cache showsrc -t unstable xrdp 2>/dev/null | grep "^Version:" | awk '{print $2}' | sort -V | tail -1)
 if [ -z "$XRDP_SID_VER" ]; then
     echo "Error: cannot find xrdp source in sid"
@@ -116,7 +125,6 @@ if [ -z "$XRDP_SID_VER" ]; then
 fi
 echo "  Building xrdp $XRDP_SID_VER from sid source"
 
-# Explicitly use -t unstable to ensure we get the sid source
 apt-get source -t unstable "xrdp=$XRDP_SID_VER"
 XRDP_DIR=$(ls -d xrdp-* | head -1)
 cd "$XRDP_DIR"
@@ -128,7 +136,6 @@ elif grep -q -- '--enable-opus' debian/rules; then
     sed -i "s|--enable-opus|--enable-opus --enable-x264|" debian/rules
     echo "  Patched debian/rules: added --enable-x264 (after --enable-opus)"
 else
-    # Fallback: append to the first configure line that has --with or --enable
     sed -i '0,/--\(enable\|with\)-/{s|$| --enable-x264|}' debian/rules
     echo "  Patched debian/rules: appended --enable-x264"
 fi
@@ -162,53 +169,18 @@ else
     echo "  WARNING: xrdp does not appear to be linked to libx264"
 fi
 
-# Cleanup
+# Cleanup build
 rm -rf "$BUILD_DIR"
+
+# Remove sid repo to prevent dependency pollution
+echo "  Removing sid repo (no longer needed)"
+rm -f "$SID_LIST"
+apt-get update -qq
 echo ""
 
-# ---------- Step 5: Install desktop environment ----------
-
-echo "=== Step 5: Installing desktop environment ($DESKTOP) ==="
-case "$DESKTOP" in
-    xfce)
-        DEBIAN_FRONTEND=noninteractive apt-get install -y task-xfce-desktop
-        STARTWM_CMD="exec startxfce4"
-        ;;
-    kde)
-        DEBIAN_FRONTEND=noninteractive apt-get install -y task-kde-desktop
-        STARTWM_CMD="exec startplasma-x11"
-        ;;
-    gnome)
-        DEBIAN_FRONTEND=noninteractive apt-get install -y task-gnome-desktop
-        STARTWM_CMD="exec gnome-session"
-        ;;
-    mate)
-        DEBIAN_FRONTEND=noninteractive apt-get install -y mate-desktop-environment
-        STARTWM_CMD="exec mate-session"
-        ;;
-    none)
-        echo "  Skipping desktop install"
-        STARTWM_CMD=""
-        ;;
-esac
-
-if [ -n "$STARTWM_CMD" ]; then
-    cat > /etc/xrdp/startwm.sh << WMEOF
-#!/bin/sh
-if test -r /etc/profile; then
-    . /etc/profile
-fi
-if test -r ~/.profile; then
-    . ~/.profile
-fi
-$STARTWM_CMD
-WMEOF
-    chmod 755 /etc/xrdp/startwm.sh
-    echo "  Set startwm.sh to: $STARTWM_CMD"
-fi
-echo ""
-
-# ---------- Step 6: Configure Xorg backend ----------
+# ══════════════════════════════════════════════════════════════════════
+# Phase 3: Configure xrdp
+# ══════════════════════════════════════════════════════════════════════
 
 echo "=== Step 6: Configuring Xorg backend ==="
 XRDP_INI="/etc/xrdp/xrdp.ini"
@@ -236,9 +208,23 @@ else
     echo "allowed_users=anybody" > "$XWRAPPER"
     echo "  Created Xwrapper with allowed_users=anybody"
 fi
-echo ""
 
-# ---------- Step 7: Configure GFX pipeline ----------
+# Set startwm.sh
+if [ -n "$STARTWM_CMD" ]; then
+    cat > /etc/xrdp/startwm.sh << WMEOF
+#!/bin/sh
+if test -r /etc/profile; then
+    . /etc/profile
+fi
+if test -r ~/.profile; then
+    . ~/.profile
+fi
+$STARTWM_CMD
+WMEOF
+    chmod 755 /etc/xrdp/startwm.sh
+    echo "  Set startwm.sh to: $STARTWM_CMD"
+fi
+echo ""
 
 echo "=== Step 7: Creating GFX configuration ==="
 GFX_CONF="/etc/xrdp/gfx.toml"
@@ -250,9 +236,6 @@ fi
 cat > "$GFX_CONF" << 'EOF'
 # GFX Pipeline Configuration for xrdp
 # Generated by rustguac contrib/setup-xrdp-gfx.sh
-#
-# H.264 encoding with x264 for best video performance.
-# See: man 5 gfx.toml
 
 [codec]
 order = ["H.264", "RFX"]
@@ -288,8 +271,6 @@ EOF
 echo "  Created $GFX_CONF"
 echo ""
 
-# ---------- Step 8: Restart ----------
-
 echo "=== Step 8: Restarting xrdp ==="
 systemctl restart xrdp
 echo "  xrdp restarted"
@@ -301,16 +282,12 @@ echo "============================================"
 echo ""
 echo "xrdp is now configured with:"
 echo "  - xrdp $(dpkg -l xrdp | awk '/^ii/{print $3}') rebuilt with x264 support"
-echo "  - xorgxrdp $XORGXRDP_VER (from sid)"
+echo "  - xorgxrdp $XORGXRDP_VER"
+echo "  - Desktop: $DESKTOP"
 echo "  - Xorg backend (required for GFX pipeline)"
 echo "  - H.264 encoding via x264 (60fps LAN)"
-echo "  - RemoteFX as fallback codec"
-echo "  - Xwrapper allows non-root Xorg"
+echo "  - Sid repo removed (clean trixie state)"
 echo ""
 echo "Next steps:"
 echo "  1. Run contrib/setup-xrdp-audio.sh for audio support"
-echo "  2. In rustguac, enable 'Graphics Pipeline (GFX)' on RDP entries"
-echo ""
-echo "When connecting from rustguac with H.264 passthrough enabled,"
-echo "the browser's WebCodecs VideoDecoder will decode H.264 directly"
-echo "for low-latency, high-quality video."
+echo "  2. In rustguac, enable GFX + H.264 Passthrough on RDP entries"
