@@ -160,7 +160,7 @@ scripts/           Utility scripts (drive-setup.sh)
 
 ### Getting started
 - [Deployment Guide](deployment-guide.md) -- step-by-step production setup (start here)
-- [Installation](installation.md) -- all install options (Debian, Docker, RPM, bare-metal, dev)
+- [Installation](installation.md) -- all install options (Debian, Docker, bare-metal, dev, RPM from source)
 - [Configuration](configuration.md) -- full config.toml reference
 
 ### Features

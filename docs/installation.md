@@ -174,14 +174,25 @@ volumes:
   rustguac-recordings:
 ```
 
-## Option D: RPM package
+## Option D: RPM package (build from source)
 
-An RPM spec is available for Red Hat / Fedora / Rocky Linux based systems:
+Pre-built RPM packages are not currently provided. An RPM spec file (`rustguac.spec`) and build script (`build-rpm.sh`) are included for Red Hat / Fedora / Rocky Linux based systems. You will need FreeRDP 3.x development headers installed.
 
 ```bash
+# Install build dependencies (example for Rocky/RHEL 9)
+sudo dnf install -y epel-release
+sudo dnf config-manager --set-enabled crb
+sudo dnf install -y gcc gcc-c++ make git autoconf automake libtool \
+    freerdp-devel cairo-devel libjpeg-turbo-devel libpng-devel libwebp-devel \
+    libssh2-devel openssl-devel libvncserver-devel pango-devel \
+    pulseaudio-libs-devel rpm-build
+
+# Build the RPM
 bash build-rpm.sh
 sudo rpm -i rustguac-*.rpm
 ```
+
+RPM builds are untested — contributions and feedback are welcome.
 
 ## Option E: Development
 

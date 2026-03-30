@@ -53,7 +53,7 @@ docker run -d \
   ghcr.io/sol1/rustguac:latest
 ```
 
-See [installation.md](installation.md) for all options including bare-metal script and RPM.
+See [installation.md](installation.md) for all options including bare-metal script and Docker.
 
 ## Step 2: Initial Configuration
 
