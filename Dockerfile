@@ -58,13 +58,8 @@ RUN /build/guacamole-server/configure \
     && make -j"$(nproc)" \
     && make install \
     && mkdir -p /opt/rustguac/lib/freerdp3 \
-    && echo "=== Searching for FreeRDP plugins ===" \
-    && find / -name "libguac*.so*" -not -path "*/guacamole-server/*" -not -path "/proc/*" 2>/dev/null | tee /tmp/guac-plugins.txt \
-    && if [ -s /tmp/guac-plugins.txt ]; then \
-         cp $(cat /tmp/guac-plugins.txt) /opt/rustguac/lib/freerdp3/ 2>/dev/null || true; \
-       fi \
-    && echo "=== Plugins in /opt/rustguac/lib/freerdp3/ ===" \
-    && ls -la /opt/rustguac/lib/freerdp3/ || true
+    && cp /opt/rustguac/lib/libguac*.so* /opt/rustguac/lib/freerdp3/ \
+    && cp /usr/lib/x86_64-linux-gnu/freerdp3/libguac*.so* /opt/rustguac/lib/freerdp3/ 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Stage 2: Build rustguac
@@ -114,12 +109,17 @@ COPY static/ /opt/rustguac/static/
 # Library path for guacd
 RUN echo "/opt/rustguac/lib" > /etc/ld.so.conf.d/rustguac.conf && ldconfig
 
-# Install FreeRDP plugins (RDPDR/drive, audio) into the system FreeRDP plugin dir.
-# FreeRDP looks for plugins in its compiled-in path, so we must place them there.
-RUN FREERDP_DIR=$(find /usr/lib -name "freerdp3" -type d 2>/dev/null | head -1) && \
-    if [ -n "$FREERDP_DIR" ] && [ -d /opt/rustguac/lib/freerdp3 ]; then \
-        cp /opt/rustguac/lib/freerdp3/*.so* "$FREERDP_DIR/" 2>/dev/null; \
-        ls "$FREERDP_DIR"/libguac* 2>/dev/null; \
+# FreeRDP plugin setup: guacd loads "guac-common-svc" by name, which FreeRDP
+# resolves to "guac-common-svc.so" in its plugin path. The build installs it as
+# "libguac-common-svc-client.so", so we create a symlink with the expected name.
+# We also ensure the system FreeRDP plugin dir exists and contains the plugins.
+RUN mkdir -p /usr/lib/x86_64-linux-gnu/freerdp3 && \
+    if [ -d /opt/rustguac/lib/freerdp3 ]; then \
+        cp /opt/rustguac/lib/freerdp3/*.so* /usr/lib/x86_64-linux-gnu/freerdp3/ 2>/dev/null; \
+        ln -sf libguac-common-svc-client.so /opt/rustguac/lib/freerdp3/guac-common-svc.so; \
+        ln -sf libguac-common-svc-client.so /usr/lib/x86_64-linux-gnu/freerdp3/guac-common-svc.so; \
+        echo "FreeRDP plugins installed:"; \
+        ls /usr/lib/x86_64-linux-gnu/freerdp3/guac* /opt/rustguac/lib/freerdp3/guac-common-svc.so 2>/dev/null; \
     fi
 
 # Create writable runtime directories
