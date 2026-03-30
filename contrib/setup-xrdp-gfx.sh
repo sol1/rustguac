@@ -13,7 +13,7 @@
 # Run as root on the xrdp target machine (not the rustguac server).
 # Requires: Debian 13 (trixie), ~10 minutes for the rebuild.
 #
-# Usage: sudo bash setup-xrdp-gfx.sh [--desktop xfce|kde|gnome|none]
+# Usage: sudo bash setup-xrdp-gfx.sh [--desktop xfce|kde|gnome|mate|none]
 #
 # After running, also run setup-xrdp-audio.sh for audio redirection.
 
@@ -25,7 +25,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # Parse --desktop flag (default: xfce)
-DESKTOP="xfce"
+DESKTOP="mate"
 while [ $# -gt 0 ]; do
     case "$1" in
         --desktop) DESKTOP="$2"; shift 2 ;;
@@ -35,8 +35,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$DESKTOP" in
-    xfce|kde|gnome|none) ;;
-    *) echo "Error: --desktop must be xfce, kde, gnome, or none"; exit 1 ;;
+    xfce|kde|gnome|mate|none) ;;
+    *) echo "Error: --desktop must be xfce, kde, gnome, mate, or none"; exit 1 ;;
 esac
 
 echo "============================================"
@@ -181,6 +181,10 @@ case "$DESKTOP" in
     gnome)
         DEBIAN_FRONTEND=noninteractive apt-get install -y task-gnome-desktop
         STARTWM_CMD="exec gnome-session"
+        ;;
+    mate)
+        DEBIAN_FRONTEND=noninteractive apt-get install -y mate-desktop-environment
+        STARTWM_CMD="exec mate-session"
         ;;
     none)
         echo "  Skipping desktop install"
