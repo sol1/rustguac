@@ -28,7 +28,7 @@
         .um-logout { color:var(--text-muted); }
         .um-logout:hover { color:var(--primary); background:var(--input); }
 
-        table { border-collapse: collapse; width: 100%; max-width: 800px; }
+        table { border-collapse: collapse; width: 100%; max-width: 1200px; }
         th, td { text-align: left; padding: 0.4em 0.8em; border-bottom: 1px solid var(--border); }
         th { color: var(--text-muted); font-size: 0.85em; }
         .btn-small {
@@ -189,6 +189,9 @@
         </div>
     </div>
 
+    <div style="max-width:1200px;margin-bottom:1em">
+        <input type="text" id="rec-search" placeholder="Search recordings (user, entry, folder...)" style="width:100%;padding:0.5em;background:var(--input);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:1em;border-radius:3px;box-sizing:border-box">
+    </div>
     <div id="recording-list"></div>
 
     <script>
@@ -273,27 +276,95 @@
                 return res.json();
             })
             .then(function(recordings) {
-                var container = document.getElementById('recording-list');
-                if (recordings.length === 0) {
-                    container.innerHTML = '<p class="empty">No recordings yet. Recordings are created automatically when sessions connect.</p>';
-                    return;
-                }
-                var html = '<table><thead><tr><th>Name</th><th>Size</th><th>Date</th><th></th><th></th><th></th></tr></thead><tbody>';
-                recordings.forEach(function(r) {
-                    var date = r.modified ? new Date(r.modified).toLocaleString() : '';
-                    html += '<tr>' +
-                        '<td>' + escapeHtml(r.name) + '</td>' +
-                        '<td>' + formatBytes(r.size_bytes) + '</td>' +
-                        '<td>' + date + '</td>' +
-                        '<td><button class="btn-small" data-play="' + escapeAttr(r.name) + '">play</button></td>' +
-                        '<td><a class="btn-small" href="/api/recordings/' + encodeURIComponent(r.name) + '" download="' + escapeAttr(r.name) + '">download</a></td>' +
-                        '<td><button class="btn-small btn-delete" data-delete-rec="' + escapeAttr(r.name) + '">delete</button></td>' +
-                        '</tr>';
-                });
-                html += '</tbody></table>';
-                container.innerHTML = html;
+                allRecordings = recordings;
+                renderRecordings(recordings);
             });
         }
+
+        var allRecordings = [];
+        var recSortCol = 'modified';
+        var recSortAsc = false;
+
+        document.getElementById('rec-search').addEventListener('input', function() {
+            var q = this.value.toLowerCase();
+            if (!q) { renderRecordings(allRecordings); return; }
+            var filtered = allRecordings.filter(function(r) {
+                return (r.name || '').toLowerCase().indexOf(q) >= 0 ||
+                       (r.user || '').toLowerCase().indexOf(q) >= 0 ||
+                       (r.entry_display_name || '').toLowerCase().indexOf(q) >= 0 ||
+                       (r.address_book_entry || '').toLowerCase().indexOf(q) >= 0 ||
+                       (r.folder || '').toLowerCase().indexOf(q) >= 0 ||
+                       (r.session_type || '').toLowerCase().indexOf(q) >= 0;
+            });
+            renderRecordings(filtered);
+        });
+
+        function sortRecordings(recs, col, asc) {
+            return recs.slice().sort(function(a, b) {
+                var va = a[col] || '', vb = b[col] || '';
+                if (col === 'size_bytes') { va = va || 0; vb = vb || 0; }
+                if (va < vb) return asc ? -1 : 1;
+                if (va > vb) return asc ? 1 : -1;
+                return 0;
+            });
+        }
+
+        function renderRecordings(recordings) {
+            var container = document.getElementById('recording-list');
+            if (recordings.length === 0) {
+                container.innerHTML = '<p class="empty">No recordings found.</p>';
+                return;
+            }
+            var sorted = sortRecordings(recordings, recSortCol, recSortAsc);
+            function sortHeader(label, col) {
+                var arrow = recSortCol === col ? (recSortAsc ? ' &#9650;' : ' &#9660;') : '';
+                return '<th style="cursor:pointer" data-sort-col="' + col + '">' + label + arrow + '</th>';
+            }
+            var html = '<table><thead><tr>' +
+                sortHeader('Entry', 'entry_display_name') +
+                sortHeader('User', 'user') +
+                sortHeader('Type', 'session_type') +
+                sortHeader('Folder', 'folder') +
+                sortHeader('Size', 'size_bytes') +
+                sortHeader('Date', 'modified') +
+                '<th></th><th></th><th></th>' +
+                '</tr></thead><tbody>';
+            sorted.forEach(function(r) {
+                var date = r.modified ? new Date(r.modified).toLocaleString() : (r.created_at ? new Date(r.created_at).toLocaleString() : '');
+                var entryName = r.entry_display_name || r.address_book_entry || r.name;
+                var typeBadge = r.session_type ? '<span style="color:var(--type-' + r.session_type + '-fg)">' + r.session_type + '</span>' : '';
+                html += '<tr>' +
+                    '<td title="' + escapeAttr(r.name) + '">' + escapeHtml(entryName) + '</td>' +
+                    '<td>' + escapeHtml(r.user || '') + '</td>' +
+                    '<td>' + typeBadge + '</td>' +
+                    '<td>' + escapeHtml(r.folder || '') + '</td>' +
+                    '<td>' + formatBytes(r.size_bytes) + '</td>' +
+                    '<td>' + date + '</td>' +
+                    '<td><button class="btn-small" data-play="' + escapeAttr(r.name) + '">play</button></td>' +
+                    '<td><a class="btn-small" href="/api/recordings/' + encodeURIComponent(r.name) + '" download="' + escapeAttr(r.name) + '">download</a></td>' +
+                    '<td><button class="btn-small btn-delete" data-delete-rec="' + escapeAttr(r.name) + '">delete</button></td>' +
+                    '</tr>';
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        document.getElementById('recording-list').addEventListener('click', function(e) {
+            if (e.target.getAttribute('data-sort-col')) {
+                var col = e.target.getAttribute('data-sort-col');
+                if (recSortCol === col) { recSortAsc = !recSortAsc; }
+                else { recSortCol = col; recSortAsc = true; }
+                renderRecordings(allRecordings.filter(function(r) {
+                    var q = document.getElementById('rec-search').value.toLowerCase();
+                    if (!q) return true;
+                    return (r.name || '').toLowerCase().indexOf(q) >= 0 ||
+                           (r.user || '').toLowerCase().indexOf(q) >= 0 ||
+                           (r.entry_display_name || '').toLowerCase().indexOf(q) >= 0 ||
+                           (r.folder || '').toLowerCase().indexOf(q) >= 0;
+                }));
+                return;
+            }
+        });
 
         // Handle clicks on recording list
         document.getElementById('recording-list').addEventListener('click', function(e) {
