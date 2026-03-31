@@ -137,6 +137,8 @@
         var urlParams = new URLSearchParams(window.location.search);
         var shareToken = urlParams.get('token');
         var apiKey = sessionStorage.getItem('rustguac_api_key');
+        var entryName = urlParams.get('name');
+        if (entryName) document.title = entryName + ' — rustguac';
 
         function showBanner(bannerText) {
             if (!bannerText) return Promise.resolve();

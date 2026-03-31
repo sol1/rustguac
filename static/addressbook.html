@@ -1045,7 +1045,8 @@
                 return res.json();
             })
             .then(function(data) {
-                window.open(data.client_url, '_blank');
+                var url = data.client_url + '?name=' + encodeURIComponent(name);
+                window.open(url, '_blank');
             })
             .catch(function(err) {
                 if (err.message === 'missing_credentials') {
