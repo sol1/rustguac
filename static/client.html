@@ -121,10 +121,6 @@
         function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
         var _themePresets={},_adminPreset='dark';
         function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'dark';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);}
-        fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
-            if(d.site_title){document.title=d.site_title+' - Session';}
-            initTheme(d.theme);
-        });
         var pathParts = window.location.pathname.split('/');
         var sessionId = pathParts[pathParts.length - 1];
 
@@ -138,7 +134,12 @@
         var shareToken = urlParams.get('token');
         var apiKey = sessionStorage.getItem('rustguac_api_key');
         var entryName = urlParams.get('name');
-        if (entryName) document.title = entryName + ' — rustguac';
+
+        fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
+            var siteTitle = d.site_title || 'rustguac';
+            document.title = entryName ? (entryName + ' — ' + siteTitle) : (siteTitle + ' - Session');
+            initTheme(d.theme);
+        });
 
         function showBanner(bannerText) {
             if (!bannerText) return Promise.resolve();
