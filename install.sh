@@ -14,6 +14,7 @@ set -euo pipefail
 PREFIX="/opt/rustguac"
 GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
 GUACD_BRANCH="main"
+GUACD_COMMIT="2980cf0"  # Pin to known-good commit
 BUILD_DIR="/tmp/rustguac-build-$$"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -154,7 +155,8 @@ build_guacd() {
         GUACD_SRC="$SCRIPT_DIR/../guacamole-server"
     else
         info "Cloning guacamole-server..."
-        git clone --depth 1 --branch "$GUACD_BRANCH" "$GUACD_SRC_URL" "$BUILD_DIR/guacamole-server"
+        git clone "$GUACD_SRC_URL" "$BUILD_DIR/guacamole-server"
+        git -C "$BUILD_DIR/guacamole-server" checkout "$GUACD_COMMIT"
         GUACD_SRC="$BUILD_DIR/guacamole-server"
     fi
 

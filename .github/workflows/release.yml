@@ -9,6 +9,7 @@ permissions:
 
 env:
   GUACD_REPO: https://github.com/apache/guacamole-server.git
+  GUACD_COMMIT: 2980cf0  # Pin to known-good commit (before GUACAMOLE-2221 broke -Werror)
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -43,7 +44,7 @@ jobs:
 
       - name: Clone and build guacd
         run: |
-          git clone --depth 1 $GUACD_REPO /tmp/guacamole-server
+          git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
           for patch in patches/*.patch; do
             [ -f "$patch" ] || continue
             echo "Applying: $patch"
@@ -148,7 +149,7 @@ jobs:
 
       - name: Clone and build guacd
         run: |
-          git clone --depth 1 $GUACD_REPO /tmp/guacamole-server
+          git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
           for patch in patches/*.patch; do
             [ -f "$patch" ] || continue
             echo "Applying: $patch"
