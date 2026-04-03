@@ -39,7 +39,7 @@ aes = "0.8"
 cbc = "0.1"
 pbkdf2 = { version = "0.12", default-features = false }
 hmac = "0.12"
-sha1 = "0.10"
+sha1 = "0.11"
 
 # Database
 rusqlite = { version = "0.39", features = ["bundled"] }
