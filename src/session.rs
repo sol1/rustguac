@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
 
-/// Session type: SSH terminal, web browser, RDP, or VNC.
+/// Session type: SSH terminal, web browser, RDP, VNC, or VDI container.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionType {
@@ -27,6 +27,7 @@ pub enum SessionType {
     Web,
     Rdp,
     Vnc,
+    Vdi,
 }
 
 /// Parameters for creating a new session.
@@ -103,6 +104,15 @@ pub struct CreateSessionRequest {
     pub force_lossless: Option<bool>,
     /// Enable H.264 passthrough for RDP.
     pub enable_h264: Option<bool>,
+    // VDI fields
+    /// Docker image for VDI sessions (e.g. "myregistry/desktop:latest").
+    pub container_image: Option<String>,
+    /// CPU limit override for VDI container (fractional cores).
+    pub container_cpu_limit: Option<f64>,
+    /// Memory limit override for VDI container in MB.
+    pub container_memory_limit: Option<u64>,
+    /// Extra environment variables for VDI container.
+    pub container_env: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Session status in the lifecycle.
@@ -174,6 +184,8 @@ pub struct Session {
     pub drive_path: Option<std::path::PathBuf>,
     /// SSH tunnel chain (jump hosts) — kept alive for the session duration.
     pub tunnels: Vec<tunnel::SshTunnel>,
+    /// Docker container ID for VDI sessions.
+    pub container_id: Option<String>,
     /// Whether recording is enabled for this session.
     pub recording_enabled: bool,
     /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
@@ -275,6 +287,7 @@ pub struct SessionManager {
     browser_manager: Arc<BrowserManager>,
     guacd_tls: Option<TlsConnector>,
     db: Option<crate::db::Db>,
+    vdi_driver: Option<Arc<dyn crate::vdi::VdiDriver>>,
 }
 
 impl SessionManager {
@@ -308,13 +321,43 @@ impl SessionManager {
             config.login_script_timeout_secs,
         ));
 
+        let vdi_driver = Self::init_vdi_driver(&config);
+
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             config,
             browser_manager,
             guacd_tls,
             db: None,
+            vdi_driver,
         }
+    }
+
+    fn init_vdi_driver(config: &Config) -> Option<Arc<dyn crate::vdi::VdiDriver>> {
+        let vdi_cfg = config.vdi.as_ref()?;
+        if !vdi_cfg.enabled {
+            return None;
+        }
+        match crate::vdi::DockerDriver::new(&vdi_cfg.docker_socket) {
+            Ok(driver) => {
+                let driver = driver.with_ready_timeout(vdi_cfg.ready_timeout_secs);
+                tracing::info!(
+                    socket = %vdi_cfg.docker_socket,
+                    idle_timeout_mins = vdi_cfg.idle_timeout_mins,
+                    "VDI Docker driver initialized"
+                );
+                Some(Arc::new(driver))
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize VDI Docker driver: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Get the VDI driver (if enabled).
+    pub fn vdi_driver(&self) -> Option<&dyn crate::vdi::VdiDriver> {
+        self.vdi_driver.as_deref()
     }
 
     /// Read-only access to the config.
@@ -352,6 +395,7 @@ impl SessionManager {
             mut browser_session,
             banner_override,
             session_drive_path,
+            container_id,
         ) = match req.session_type {
             SessionType::Ssh => {
                 let hostname = req.hostname.ok_or_else(|| {
@@ -430,7 +474,7 @@ impl SessionManager {
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
                 });
-                (params, hostname, username, None, None, ssh_banner, None)
+                (params, hostname, username, None, None, ssh_banner, None, None)
             }
             SessionType::Rdp => {
                 let hostname = req.hostname.ok_or_else(|| {
@@ -525,6 +569,7 @@ impl SessionManager {
                     None,
                     None,
                     session_drive_path,
+                    None,
                 )
             }
             SessionType::Vnc => {
@@ -554,7 +599,7 @@ impl SessionManager {
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
                 });
-                (params, hostname, username, None, None, None, None)
+                (params, hostname, username, None, None, None, None, None)
             }
             SessionType::Web => {
                 let raw_url = req.url.ok_or_else(|| {
@@ -638,6 +683,123 @@ impl SessionManager {
                     None, // browser spawned after tunnel setup
                     None,
                     None,
+                    None,
+                )
+            }
+            SessionType::Vdi => {
+                let vdi_cfg = self.config.vdi.as_ref().filter(|v| v.enabled).ok_or_else(|| {
+                    SessionError::VdiError("VDI feature is not enabled".into())
+                })?;
+
+                let vdi = self.vdi_driver.as_ref().ok_or_else(|| {
+                    SessionError::VdiError("VDI driver not initialized".into())
+                })?;
+
+                let image = req.container_image.clone().ok_or_else(|| {
+                    SessionError::ValidationError(
+                        "container_image is required for VDI sessions".into(),
+                    )
+                })?;
+
+                // Check allowed images whitelist
+                if !vdi_cfg.allowed_images.is_empty()
+                    && !vdi_cfg.allowed_images.contains(&image)
+                {
+                    return Err(SessionError::VdiError(format!(
+                        "image '{}' is not in the allowed list",
+                        image
+                    )));
+                }
+
+                // Sanitize username and generate ephemeral password
+                let vdi_username = created_by
+                    .split('@')
+                    .next()
+                    .unwrap_or(&created_by)
+                    .to_lowercase()
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                    .collect::<String>();
+                let vdi_password = generate_share_token(); // 32 hex chars
+
+                // Merge env vars
+                let mut env = req.container_env.unwrap_or_default();
+                // Don't let user-provided env override the core VDI vars
+                env.entry("VDI_USERNAME".into()).or_insert(vdi_username.clone());
+                env.entry("VDI_PASSWORD".into()).or_insert(vdi_password.clone());
+
+                // Resolve resource limits: entry overrides > config defaults
+                let cpu_limit = req.container_cpu_limit
+                    .unwrap_or(vdi_cfg.default_cpu_limit);
+                let memory_limit_mb = req.container_memory_limit
+                    .unwrap_or(vdi_cfg.default_memory_limit);
+
+                let spec = crate::vdi::ContainerSpec {
+                    image: image.clone(),
+                    username: vdi_username.clone(),
+                    password: vdi_password.clone(),
+                    cpu_limit,
+                    memory_limit: memory_limit_mb * 1024 * 1024, // MB to bytes
+                    env,
+                };
+
+                tracing::info!(
+                    session_id = %session_id,
+                    image = %image,
+                    username = %vdi_username,
+                    "Creating VDI session"
+                );
+
+                let info = vdi.start_or_reuse(&spec).await.map_err(|e| {
+                    SessionError::VdiError(e.to_string())
+                })?;
+
+                if info.reused {
+                    tracing::info!(
+                        session_id = %session_id,
+                        container_id = %info.container_id,
+                        "Reusing existing VDI container"
+                    );
+                }
+
+                let params = guacd::ConnectionParams::Rdp(Box::new(guacd::RdpParams {
+                    hostname: info.rdp_host,
+                    port: info.rdp_port,
+                    username: vdi_username.clone(),
+                    password: Some(vdi_password),
+                    domain: None,
+                    security: None,
+                    width,
+                    height,
+                    dpi,
+                    ignore_cert: true,
+                    enable_drive: false,
+                    drive_path: None,
+                    drive_name: String::new(),
+                    disable_download: true,
+                    disable_upload: true,
+                    auth_pkg: None,
+                    kdc_url: None,
+                    kerberos_cache: None,
+                    remote_app: None,
+                    remote_app_dir: None,
+                    remote_app_args: None,
+                    disable_copy: req.disable_copy.unwrap_or(false),
+                    disable_paste: req.disable_paste.unwrap_or(false),
+                    enable_gfx: true,
+                    enable_desktop_composition: true,
+                    force_lossless: false,
+                    enable_h264: false,
+                }));
+                (
+                    params,
+                    image,
+                    vdi_username,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(info.container_id),
                 )
             }
         };
@@ -885,6 +1047,7 @@ impl SessionManager {
             deferred_params,
             drive_path: session_drive_path,
             tunnels: ssh_tunnels,
+            container_id,
             recording_enabled,
             address_book_entry: req.address_book_entry,
             address_book_folder: req.address_book_folder,
@@ -1208,6 +1371,21 @@ impl SessionManager {
         Some((session.address_book_entry.clone(), session.max_recordings))
     }
 
+    /// Check if any active session references the given Docker container ID.
+    pub async fn has_active_vdi_session(&self, container_id: &str) -> bool {
+        let sessions = self.sessions.read().await;
+        for session in sessions.values() {
+            let session = session.lock().await;
+            if session.container_id.as_deref() == Some(container_id)
+                && (session.status == SessionStatus::Active
+                    || session.status == SessionStatus::Pending)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn session_max_duration_secs(&self) -> u64 {
         self.config.session_max_duration_secs
     }
@@ -1293,6 +1471,7 @@ pub enum SessionError {
     NotActive,
     ValidationError(String),
     BrowserSpawn(String),
+    VdiError(String),
 }
 
 #[cfg(test)]
@@ -1412,6 +1591,7 @@ impl std::fmt::Display for SessionError {
             SessionError::NotActive => write!(f, "session is not active"),
             SessionError::ValidationError(msg) => write!(f, "validation error: {}", msg),
             SessionError::BrowserSpawn(msg) => write!(f, "browser spawn failed: {}", msg),
+            SessionError::VdiError(msg) => write!(f, "VDI error: {}", msg),
         }
     }
 }

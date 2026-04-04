@@ -72,6 +72,9 @@ pub async fn create_session(
             )
         }
         crate::session::SessionType::Web => req.url.as_deref().unwrap_or("?").to_string(),
+        crate::session::SessionType::Vdi => {
+            req.container_image.as_deref().unwrap_or("?").to_string()
+        }
     };
 
     tracing::info!(
@@ -1675,6 +1678,7 @@ pub async fn ab_connect_entry(
         "rdp" => SessionType::Rdp,
         "vnc" => SessionType::Vnc,
         "web" => SessionType::Web,
+        "vdi" => SessionType::Vdi,
         other => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -1731,6 +1735,10 @@ pub async fn ab_connect_entry(
         enable_desktop_composition: ab_entry.enable_desktop_composition,
         force_lossless: ab_entry.force_lossless,
         enable_h264: ab_entry.enable_h264,
+        container_image: ab_entry.container_image,
+        container_cpu_limit: ab_entry.container_cpu_limit,
+        container_memory_limit: ab_entry.container_memory_limit,
+        container_env: ab_entry.container_env,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -3104,6 +3112,10 @@ pub async fn quick_connect(
             enable_desktop_composition: ab_entry.enable_desktop_composition,
             force_lossless: ab_entry.force_lossless,
             enable_h264: ab_entry.enable_h264,
+            container_image: ab_entry.container_image,
+            container_cpu_limit: ab_entry.container_cpu_limit,
+            container_memory_limit: ab_entry.container_memory_limit,
+            container_env: ab_entry.container_env,
         };
 
         tracing::info!(
@@ -3196,6 +3208,10 @@ pub async fn quick_connect(
         enable_desktop_composition: None,
         force_lossless: None,
         enable_h264: None,
+        container_image: None,
+        container_cpu_limit: None,
+        container_memory_limit: None,
+        container_env: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

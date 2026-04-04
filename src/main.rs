@@ -12,6 +12,7 @@ mod recording;
 mod session;
 mod tunnel;
 mod vault;
+mod vdi;
 mod websocket;
 
 use crate::api::{
@@ -706,6 +707,68 @@ async fn run_server(config: Config, database: Db) {
                 }
             }
         });
+    }
+
+    // Spawn VDI container reaper (cleans up idle containers)
+    if let Some(ref vdi_cfg) = manager.config().vdi {
+        if vdi_cfg.enabled {
+            let idle_timeout = std::time::Duration::from_secs(vdi_cfg.idle_timeout_mins * 60);
+            let reaper_manager = manager.clone();
+            tokio::spawn(async move {
+                // Track last-seen-active times for containers
+                let mut last_active: std::collections::HashMap<String, tokio::time::Instant> =
+                    std::collections::HashMap::new();
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(60));
+                interval.tick().await; // skip immediate first tick
+                loop {
+                    interval.tick().await;
+                    let Some(vdi) = reaper_manager.vdi_driver() else {
+                        continue;
+                    };
+                    let containers = match vdi.list_managed_containers().await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::warn!("VDI reaper: failed to list containers: {}", e);
+                            continue;
+                        }
+                    };
+
+                    let now = tokio::time::Instant::now();
+                    for cid in &containers {
+                        if reaper_manager.has_active_vdi_session(cid).await {
+                            // Container has active session — update last-active time
+                            last_active.insert(cid.clone(), now);
+                        } else if let Some(&last) = last_active.get(cid) {
+                            // No active session — check if idle timeout exceeded
+                            if now.duration_since(last) > idle_timeout {
+                                tracing::info!(
+                                    container_id = %cid,
+                                    "VDI reaper: removing idle container"
+                                );
+                                if let Err(e) = vdi.stop_container(cid).await {
+                                    tracing::warn!(
+                                        container_id = %cid,
+                                        "VDI reaper: failed to remove container: {}", e
+                                    );
+                                }
+                                last_active.remove(cid);
+                            }
+                        } else {
+                            // First time seeing this container without a session — start tracking
+                            last_active.insert(cid.clone(), now);
+                        }
+                    }
+
+                    // Clean up tracking for containers that no longer exist
+                    last_active.retain(|cid, _| containers.contains(cid));
+                }
+            });
+            tracing::info!(
+                idle_timeout_mins = vdi_cfg.idle_timeout_mins,
+                "VDI container reaper started"
+            );
+        }
     }
 
     // Spawn recording rotation background task

@@ -78,6 +78,9 @@ webpki-roots = "1"
 # SSH tunneling (jump host / bastion)
 russh = "0.59"
 
+# Docker (VDI container management)
+bollard = "0.18"
+
 # LUKS drive management (uid/gid for chown)
 libc = "0.2"
 

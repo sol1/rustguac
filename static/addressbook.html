@@ -67,6 +67,7 @@
         .type-rdp { background: var(--type-rdp-bg); color: var(--type-rdp-fg); }
         .type-vnc { background: var(--type-vnc-bg); color: var(--type-vnc-fg); }
         .type-web { background: var(--type-web-bg); color: var(--type-web-fg); }
+        .type-vdi { background: var(--type-vdi-bg); color: var(--type-vdi-fg); }
 
         button {
             padding: 0.4em 1em;
@@ -357,6 +358,7 @@
                     <option value="rdp">RDP</option>
                     <option value="vnc">VNC</option>
                     <option value="web">Web</option>
+                    <option value="vdi">VDI (Docker)</option>
                 </select>
             </label>
             <div id="em-ssh-fields">
@@ -497,6 +499,24 @@
                         <button type="button" id="em-allowed-domains-add" style="margin-top:0.3em;padding:0.3em 0.8em;font-size:0.85em;background:var(--input);color:var(--accent);border:1px solid var(--border);border-radius:4px;cursor:pointer">+ Add domain</button>
                     </div>
                 </div>
+            </div>
+            <div id="em-vdi-fields" style="display:none">
+                <label>Container Image
+                    <input type="text" id="em-vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest">
+                </label>
+                <div class="field-hint">Docker image with xrdp on port 3389. Must accept <code>VDI_USERNAME</code> and <code>VDI_PASSWORD</code> env vars. Container is ephemeral — persists while idle, then removed.</div>
+                <label>CPU Limit <span style="color:var(--text-muted);font-size:0.85em">(optional, cores)</span>
+                    <input type="number" id="em-vdi-cpu" step="0.5" min="0" placeholder="e.g. 2.0 (0 = use default)">
+                </label>
+                <label>Memory Limit <span style="color:var(--text-muted);font-size:0.85em">(optional, MB)</span>
+                    <input type="number" id="em-vdi-memory" min="0" placeholder="e.g. 2048 (0 = use default)">
+                </label>
+                <label>Environment Variables <span style="color:var(--text-muted);font-size:0.85em">(optional, KEY=VALUE per line)</span>
+                    <textarea id="em-vdi-env" rows="3" style="resize:vertical;font-size:0.85em" placeholder="TZ=Australia/Brisbane&#10;LANG=en_US.UTF-8"></textarea>
+                </label>
+                <label>Banner <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="text" id="em-vdi-banner" placeholder="Shown before session starts (user must click Continue)">
+                </label>
             </div>
             <div id="em-remoteapp-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-remoteapp-toggle">
@@ -967,8 +987,10 @@
 
             entries.forEach(function(e) {
                 var label = e.display_name || e.name;
-                var hostBase = e.session_type === 'web' ? (e.url || '') : (e.hostname || '');
-                if (e.port && e.session_type !== 'web') hostBase += ':' + e.port;
+                var hostBase = e.session_type === 'web' ? (e.url || '')
+                             : e.session_type === 'vdi' ? (e.container_image || '')
+                             : (e.hostname || '');
+                if (e.port && e.session_type !== 'web' && e.session_type !== 'vdi') hostBase += ':' + e.port;
                 var hostSuffix = '';
                 if (e.jump_hosts && e.jump_hosts.length > 0) {
                     var hopNames = e.jump_hosts.map(function(h) { return h.hostname; }).join(' \u2192 ');
@@ -1132,7 +1154,7 @@
 
                 // Prompt for credentials if prompt_credentials is set or no stored creds
                 // (RDP and SSH entries without passwords/keys)
-                if (entry && (entry.prompt_credentials || !entry.has_credentials) && entry.session_type !== 'web') {
+                if (entry && (entry.prompt_credentials || !entry.has_credentials) && entry.session_type !== 'web' && entry.session_type !== 'vdi') {
                     showCredPrompt(entry, scope, folder, btn);
                 } else {
                     doConnect(scope, folder, name, btn);
@@ -1319,6 +1341,7 @@
             document.getElementById('em-rdp-fields').style.display = 'none';
             document.getElementById('em-vnc-fields').style.display = 'none';
             document.getElementById('em-web-fields').style.display = 'none';
+            document.getElementById('em-vdi-fields').style.display = 'none';
             var val = entryTypeSelect.value;
             if (val === 'ssh') document.getElementById('em-ssh-fields').style.display = '';
             else if (val === 'rdp') document.getElementById('em-rdp-fields').style.display = '';
@@ -1327,14 +1350,15 @@
                 document.getElementById('em-web-fields').style.display = '';
                 loadLoginScripts(function() { populateLoginScriptDropdown(''); });
             }
+            else if (val === 'vdi') document.getElementById('em-vdi-fields').style.display = '';
             // Show drive option for SSH and RDP only
             document.getElementById('em-drive-section').style.display = (val === 'ssh' || val === 'rdp') ? '' : 'none';
             // Show RemoteApp for RDP only
             document.getElementById('em-remoteapp-section').style.display = val === 'rdp' ? '' : 'none';
             // Show Video Performance for RDP only
             document.getElementById('em-video-perf-section').style.display = val === 'rdp' ? '' : 'none';
-            // Show tunnel option for all session types
-            document.getElementById('em-tunnel-section').style.display = '';
+            // Show tunnel option for VDI excluded (local containers)
+            document.getElementById('em-tunnel-section').style.display = val === 'vdi' ? 'none' : '';
             // Show recording settings for all types
             document.getElementById('em-recording-section').style.display = '';
         });
@@ -1726,6 +1750,11 @@
             document.getElementById('em-remote-app-args').value = '';
             document.getElementById('em-remoteapp-fields').style.display = 'none';
             document.getElementById('em-remoteapp-arrow').innerHTML = '&#9654;';
+            document.getElementById('em-vdi-image').value = '';
+            document.getElementById('em-vdi-cpu').value = '';
+            document.getElementById('em-vdi-memory').value = '';
+            document.getElementById('em-vdi-env').value = '';
+            document.getElementById('em-vdi-banner').value = '';
             document.getElementById('em-override-recording').checked = false;
             document.getElementById('em-enable-recording').checked = true;
             document.getElementById('em-max-recordings').value = '0';
@@ -1832,6 +1861,17 @@
                         document.getElementById('em-allowed-domains-fields').style.display = '';
                         document.getElementById('em-allowed-domains-arrow').innerHTML = '&#9660;';
                     }
+                } else if (type === 'vdi') {
+                    document.getElementById('em-vdi-image').value = entryData.container_image || '';
+                    document.getElementById('em-vdi-cpu').value = entryData.container_cpu_limit || '';
+                    document.getElementById('em-vdi-memory').value = entryData.container_memory_limit || '';
+                    if (entryData.container_env) {
+                        var envLines = Object.keys(entryData.container_env).map(function(k) {
+                            return k + '=' + entryData.container_env[k];
+                        }).join('\n');
+                        document.getElementById('em-vdi-env').value = envLines;
+                    }
+                    document.getElementById('em-vdi-banner').value = entryData.banner || '';
                 }
                 if (type === 'ssh' || type === 'rdp') {
                     document.getElementById('em-enable-drive').checked = !!entryData.enable_drive;
@@ -1971,6 +2011,24 @@
                 if (adValid.length > 0) {
                     entry.allowed_domains = adValid;
                 }
+            } else if (type === 'vdi') {
+                var img = document.getElementById('em-vdi-image').value.trim();
+                if (img) entry.container_image = img;
+                var cpu = parseFloat(document.getElementById('em-vdi-cpu').value);
+                if (cpu > 0) entry.container_cpu_limit = cpu;
+                var mem = parseInt(document.getElementById('em-vdi-memory').value);
+                if (mem > 0) entry.container_memory_limit = mem;
+                var envText = document.getElementById('em-vdi-env').value.trim();
+                if (envText) {
+                    var envMap = {};
+                    envText.split('\n').forEach(function(line) {
+                        var eq = line.indexOf('=');
+                        if (eq > 0) envMap[line.substring(0, eq).trim()] = line.substring(eq + 1);
+                    });
+                    if (Object.keys(envMap).length > 0) entry.container_env = envMap;
+                }
+                var vbn = document.getElementById('em-vdi-banner').value.trim();
+                if (vbn) entry.banner = vbn;
             }
 
             // Drive setting for SSH and RDP

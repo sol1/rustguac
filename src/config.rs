@@ -171,6 +171,45 @@ impl Default for RecordingConfig {
     }
 }
 
+/// VDI (Docker container) configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct VdiConfig {
+    /// Enable VDI sessions. Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Docker socket path. Default: "/var/run/docker.sock".
+    #[serde(default = "default_docker_socket")]
+    pub docker_socket: String,
+    /// Default CPU limit for containers (fractional cores, e.g. 2.0). 0 = no limit.
+    #[serde(default)]
+    pub default_cpu_limit: f64,
+    /// Default memory limit for containers in MB. 0 = no limit.
+    #[serde(default)]
+    pub default_memory_limit: u64,
+    /// Seconds to wait for xrdp to become ready in a new container. Default: 30.
+    #[serde(default = "default_ready_timeout_secs")]
+    pub ready_timeout_secs: u64,
+    /// Minutes a container persists after last session disconnect. Default: 60.
+    /// Containers are kept running for reconnection. Set to 0 for immediate removal.
+    #[serde(default = "default_idle_timeout_mins")]
+    pub idle_timeout_mins: u64,
+    /// Allowed Docker images (exact match). Empty = allow all.
+    #[serde(default)]
+    pub allowed_images: Vec<String>,
+}
+
+fn default_docker_socket() -> String {
+    "/var/run/docker.sock".into()
+}
+
+fn default_ready_timeout_secs() -> u64 {
+    30
+}
+
+fn default_idle_timeout_mins() -> u64 {
+    60
+}
+
 fn default_vault_mount() -> String {
     "secret".into()
 }
@@ -273,6 +312,7 @@ pub struct Config {
     pub drive: Option<DriveConfig>,
     pub theme: Option<ThemeConfig>,
     pub recording: Option<RecordingConfig>,
+    pub vdi: Option<VdiConfig>,
 }
 
 /// Fully-resolved theme palette with all 26 color fields.
@@ -304,6 +344,8 @@ pub struct ThemeColors {
     pub type_vnc_fg: String,
     pub type_web_bg: String,
     pub type_web_fg: String,
+    pub type_vdi_bg: String,
+    pub type_vdi_fg: String,
     pub hop_bg: String,
     pub hop_fg: String,
     /// CSS background-image value (gradient, pattern, or "none").
@@ -347,6 +389,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_vnc_fg: "#b07ff0".into(),
                 type_web_bg: "#1a1a4e".into(),
                 type_web_fg: "#7b8ff0".into(),
+                type_vdi_bg: "#0e2a2a".into(),
+                type_vdi_fg: "#2dd4bf".into(),
                 hop_bg: "#1b4332".into(),
                 hop_fg: "#52b788".into(),
                 bg_pattern: "none".into(),
@@ -381,6 +425,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_vnc_fg: "#6b21a8".into(),
                 type_web_bg: "#dbeafe".into(),
                 type_web_fg: "#1e40af".into(),
+                type_vdi_bg: "#ccfbf1".into(),
+                type_vdi_fg: "#0f766e".into(),
                 hop_bg: "#dcfce7".into(),
                 hop_fg: "#166534".into(),
                 bg_pattern: "none".into(),
@@ -415,6 +461,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_vnc_fg: "#cc66ff".into(),
                 type_web_bg: "#000033".into(),
                 type_web_fg: "#6699ff".into(),
+                type_vdi_bg: "#003333".into(),
+                type_vdi_fg: "#00ffcc".into(),
                 hop_bg: "#003300".into(),
                 hop_fg: "#00ff66".into(),
                 bg_pattern: "none".into(),
@@ -449,6 +497,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_vnc_fg: "#cc66ff".into(),
                 type_web_bg: "#0a0a20".into(),
                 type_web_fg: "#6699ff".into(),
+                type_vdi_bg: "#0a2020".into(),
+                type_vdi_fg: "#33ffcc".into(),
                 hop_bg: "#0a200a".into(),
                 hop_fg: "#33ff33".into(),
                 bg_pattern: "none".into(),
@@ -483,6 +533,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_vnc_fg: "#b48ead".into(),
                 type_web_bg: "#384048".into(),
                 type_web_fg: "#88c0d0".into(),
+                type_vdi_bg: "#2e4040".into(),
+                type_vdi_fg: "#8fbcbb".into(),
                 hop_bg: "#384838".into(),
                 hop_fg: "#a3be8c".into(),
                 bg_pattern: "none".into(),
@@ -517,6 +569,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_vnc_fg: "#c084fc".into(),
                 type_web_bg: "#172554".into(),
                 type_web_fg: "#60a5fa".into(),
+                type_vdi_bg: "#042f2e".into(),
+                type_vdi_fg: "#2dd4bf".into(),
                 hop_bg: "#14532d".into(),
                 hop_fg: "#4ade80".into(),
                 bg_pattern: "none".into(),
@@ -551,6 +605,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_vnc_fg: "#a080d0".into(),
                 type_web_bg: "#0e1a2a".into(),
                 type_web_fg: "#6098d0".into(),
+                type_vdi_bg: "#0e2420".into(),
+                type_vdi_fg: "#50c8a0".into(),
                 hop_bg: "#0e1e16".into(),
                 hop_fg: "#50c878".into(),
                 bg_pattern: "radial-gradient(ellipse at 20% 80%, rgba(80, 200, 120, 0.08) 0%, transparent 50%), radial-gradient(ellipse at 80% 10%, rgba(212, 168, 83, 0.06) 0%, transparent 45%)".into(),
@@ -585,6 +641,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 type_vnc_fg: "#fbbf24".into(),
                 type_web_bg: "#0c2340".into(),
                 type_web_fg: "#60a5fa".into(),
+                type_vdi_bg: "#042f2e".into(),
+                type_vdi_fg: "#2dd4bf".into(),
                 hop_bg: "#0d2818".into(),
                 hop_fg: "#34d399".into(),
                 bg_pattern: "radial-gradient(ellipse at 15% 0%, rgba(59, 130, 246, 0.15) 0%, transparent 50%), radial-gradient(ellipse at 85% 100%, rgba(34, 211, 238, 0.10) 0%, transparent 50%), radial-gradient(ellipse at 50% 50%, rgba(30, 58, 138, 0.12) 0%, transparent 70%)".into(),
@@ -651,6 +709,10 @@ pub struct ThemeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_web_fg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_vdi_bg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_vdi_fg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hop_bg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hop_fg: Option<String>,
@@ -711,6 +773,8 @@ impl ThemeConfig {
         apply!(type_vnc_fg);
         apply!(type_web_bg);
         apply!(type_web_fg);
+        apply!(type_vdi_bg);
+        apply!(type_vdi_fg);
         apply!(hop_bg);
         apply!(hop_fg);
         apply!(bg_pattern);
@@ -828,6 +892,7 @@ impl Default for Config {
             drive: None,
             theme: None,
             recording: None,
+            vdi: None,
         }
     }
 }

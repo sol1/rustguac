@@ -109,6 +109,10 @@ pub async fn cmd_import_guacamole(
             enable_desktop_composition: None,
             force_lossless: None,
             enable_h264: None,
+            container_image: None,
+            container_cpu_limit: None,
+            container_memory_limit: None,
+            container_env: None,
         };
 
         // Build entry name: group prefix + sanitized connection name
@@ -646,6 +650,10 @@ mod tests {
             enable_desktop_composition: None,
             force_lossless: None,
             enable_h264: None,
+            container_image: None,
+            container_cpu_limit: None,
+            container_memory_limit: None,
+            container_env: None,
         };
         let mut entries = vec![
             ("web".into(), entry()),

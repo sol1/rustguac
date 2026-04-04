@@ -151,6 +151,18 @@ pub struct AddressBookEntry {
     /// Requires GFX enabled and xrdp with x264 on the target. Default: true when GFX enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_h264: Option<bool>,
+    /// Docker image for VDI sessions (e.g. "myregistry/desktop:latest").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_image: Option<String>,
+    /// CPU limit override for VDI container (fractional cores). Uses config default if unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_cpu_limit: Option<f64>,
+    /// Memory limit override for VDI container in MB. Uses config default if unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_memory_limit: Option<u64>,
+    /// Extra environment variables for VDI container (key=value).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_env: Option<std::collections::HashMap<String, String>>,
 }
 
 impl AddressBookEntry {
@@ -255,6 +267,9 @@ pub struct EntryInfo {
     /// Enable H.264 passthrough.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_h264: Option<bool>,
+    /// Docker image for VDI sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_image: Option<String>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -303,6 +318,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             enable_desktop_composition: e.enable_desktop_composition,
             force_lossless: e.force_lossless,
             enable_h264: e.enable_h264,
+            container_image: e.container_image.clone(),
         }
     }
 }
