@@ -2,13 +2,14 @@
 
 ## What this project is
 
-rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd (the C daemon from guacamole-server). Supports SSH, VNC, and web browser sessions (headless Chromium on Xvnc).
+rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd (the C daemon from guacamole-server). Supports SSH, RDP, VNC, web browser sessions (headless Chromium on Xvnc), and VDI desktop containers (Docker).
 
 ## Architecture
 
 - **Rust binary** (`rustguac`) — axum web server, session manager, WebSocket proxy
 - **guacd** — built from apache/guacamole-server source, handles SSH/VNC/RDP protocol translation
 - **Xvnc + Chromium** — spawned per web-browser session, streamed via VNC through guacd
+- **Docker** — VDI containers spawned per-user, connected via RDP through guacd
 
 ## Key files
 
@@ -16,6 +17,8 @@ rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp.
 - `src/api.rs` — REST API endpoints (session CRUD, recordings, admin)
 - `src/session.rs` — session state machine, SessionManager
 - `src/browser.rs` — Xvnc + Chromium process lifecycle (display allocator, per-session profile dirs)
+- `src/vdi/mod.rs` — VdiDriver trait, container types (ContainerSpec, ContainerInfo, ManagedContainer)
+- `src/vdi/docker.rs` — Docker-based VDI driver (bollard, unix socket, start/reuse/stop)
 - `src/guacd.rs` — TCP connection to guacd, Guacamole protocol handshake
 - `src/protocol.rs` — Guacamole wire format parser/encoder
 - `src/websocket.rs` — WebSocket <-> guacd TCP bridge, recording tee
@@ -98,7 +101,22 @@ To add a new patch: edit `../guacamole-server`, export with `git diff > patches/
 
 - **SSH** — connects guacd directly to target SSH server
 - **RDP** — connects guacd directly to target RDP server (same pattern as SSH, no browser spawning)
+- **VNC** — connects guacd directly to target VNC server
 - **Web** — spawns Xvnc + Chromium, guacd connects via VNC to local Xvnc display
+- **VDI** — spawns Docker container with xrdp, guacd connects via RDP to container port 3389
+
+### VDI (Docker containers)
+
+Ephemeral per-user Docker desktop containers. `VdiDriver` trait in `src/vdi/mod.rs` enables downstream forks (JumpboxVDI) to add alternative backends (Nomad, Proxmox).
+
+- Container naming: `rustguac-vdi-{username}` (deterministic, one per user)
+- Lifecycle: created on first connect, persists after disconnect for `idle_timeout_mins`, reused on reconnect, destroyed on desktop logout or idle timeout
+- Credentials: auto-generated per session (username from OIDC, random hex password), `chpasswd` updates on reuse
+- BYO image: any Docker image with xrdp on port 3389 accepting `VDI_USERNAME`/`VDI_PASSWORD` env vars
+- Test image: `contrib/vdi-test-image/` (Debian trixie + xrdp + xorgxrdp + xfce4)
+- Thumbnails: client captures display screenshot every 10s, shown in address book "Active Sessions"
+- Config: `[vdi]` section — `enabled`, `docker_socket`, `default_cpu_limit`, `default_memory_limit`, `ready_timeout_secs`, `idle_timeout_mins`, `allowed_images`, `home_base`
+- Requires: `rustguac` user in `docker` group for socket access
 
 ## Ports
 
