@@ -12,6 +12,21 @@ rustguac can spawn ephemeral Docker desktop containers on demand. Each user gets
 6. On logout from the desktop, the container is stopped and removed
 7. Idle containers (no active session) are automatically cleaned up after a configurable timeout
 
+## Prerequisites
+
+VDI requires Docker on the same machine as rustguac. Install Docker and grant access:
+
+```bash
+# Install Docker (if not already installed)
+curl -fsSL https://get.docker.com | sh
+
+# Allow the rustguac user to manage containers
+sudo usermod -aG docker rustguac
+sudo systemctl restart rustguac
+```
+
+You also need at least one Docker image with xrdp pre-pulled on the host (see [Docker image requirements](#docker-image-requirements) below).
+
 ## Configuration
 
 Add a `[vdi]` section to your config file:

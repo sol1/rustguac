@@ -40,6 +40,21 @@ sudo /opt/rustguac/bin/drive-setup.sh
 
 See [Drive / File Transfer](integrations.md#drive--file-transfer--luks-encryption) for details.
 
+5. **(Optional) Enable VDI desktop containers:**
+
+If you want to use VDI sessions (ephemeral Docker desktop containers), install Docker and grant rustguac access:
+
+```bash
+# Install Docker (if not already installed)
+curl -fsSL https://get.docker.com | sh
+
+# Allow rustguac to manage containers
+sudo usermod -aG docker rustguac
+sudo systemctl restart rustguac
+```
+
+Then add a `[vdi]` section to your config — see [VDI Desktop Containers](vdi.md) for full setup.
+
 ## Option B: Bare-metal install script
 
 For fresh Debian 13 systems, the install script builds everything from source:
