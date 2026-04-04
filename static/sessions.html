@@ -213,13 +213,18 @@
     </div>
 
     <form id="session-form" style="display:none">
-        <strong>New Session</strong>
+        <div style="display:flex;align-items:center;gap:0.5em;cursor:pointer" id="new-session-toggle">
+            <span id="new-session-arrow" style="color:var(--accent)">&#9654;</span>
+            <strong style="color:var(--accent)">New Ad-Hoc Session</strong>
+        </div>
+        <div id="new-session-fields" style="display:none;margin-top:0.8em">
         <label>Type
             <select id="session-type" style="display:block;width:100%;padding:0.4em;margin-top:0.2em;background:var(--input);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:1em;border-radius:3px;">
                 <option value="ssh" selected>SSH</option>
                 <option value="rdp">RDP</option>
                 <option value="vnc">VNC</option>
                 <option value="web">Web</option>
+                <option value="vdi">VDI (Docker)</option>
             </select>
         </label>
         <div id="ssh-fields">
@@ -289,6 +294,12 @@
                 <input type="text" id="url" placeholder="https://example.com">
             </label>
         </div>
+        <div id="vdi-fields" style="display:none">
+            <label>Container Image
+                <input type="text" id="vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest">
+            </label>
+            <div style="color:var(--text-muted);font-size:0.8em;margin-top:0.3em">Docker image with xrdp on port 3389. Container is ephemeral.</div>
+        </div>
         <div id="jump-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
             <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="jump-toggle">
                 <span id="jump-arrow">&#9654;</span> SSH Tunnel / Jump Hosts
@@ -305,6 +316,7 @@
         </label>
         <button type="submit" id="connect-btn">Connect</button>
         <div id="error"></div>
+        </div>
     </form>
 
     <div id="sessions">
@@ -408,18 +420,35 @@
             }
         });
 
+        var vdiFields = document.getElementById('vdi-fields');
+
         sessionType.addEventListener('change', function() {
             sshFields.style.display = 'none';
             rdpFields.style.display = 'none';
             vncFields.style.display = 'none';
             webFields.style.display = 'none';
+            vdiFields.style.display = 'none';
             var v = sessionType.value;
             if (v === 'ssh') sshFields.style.display = '';
             else if (v === 'rdp') rdpFields.style.display = '';
             else if (v === 'vnc') vncFields.style.display = '';
             else if (v === 'web') webFields.style.display = '';
-            // Show jump host section for all session types
-            jumpSection.style.display = '';
+            else if (v === 'vdi') vdiFields.style.display = '';
+            // Hide jump hosts for VDI (local containers)
+            jumpSection.style.display = v === 'vdi' ? 'none' : '';
+        });
+
+        // Collapsible "New Ad-Hoc Session" section
+        document.getElementById('new-session-toggle').addEventListener('click', function() {
+            var fields = document.getElementById('new-session-fields');
+            var arrow = document.getElementById('new-session-arrow');
+            if (fields.style.display === 'none') {
+                fields.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                fields.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
         });
 
         // Show jump section on initial load (default is SSH)
@@ -594,7 +623,10 @@
             btn.textContent = 'Connecting...';
 
             var body = {};
-            if (sessionType.value === 'web') {
+            if (sessionType.value === 'vdi') {
+                body.session_type = 'vdi';
+                body.container_image = document.getElementById('vdi-image').value;
+            } else if (sessionType.value === 'web') {
                 body.session_type = 'web';
                 body.url = document.getElementById('url').value;
             } else if (sessionType.value === 'vnc') {
