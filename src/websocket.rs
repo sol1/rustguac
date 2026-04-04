@@ -33,6 +33,15 @@ enum ProxyResult {
     Cancelled,
 }
 
+/// Outcome of the proxy session, including whether guacd sent a disconnect instruction.
+struct ProxyOutcome {
+    result: ProxyResult,
+    /// True if guacd sent `10.disconnect;` through the stream — indicates the
+    /// remote server ended the session (user logout, crash), as opposed to the
+    /// browser/network dropping the WebSocket.
+    server_disconnected: bool,
+}
+
 #[derive(Deserialize)]
 pub struct WsQuery {
     pub token: Option<String>,
@@ -187,8 +196,10 @@ async fn handle_ws(
 
     // Run the bidirectional proxy
     let start = Instant::now();
-    let proxy_result = proxy_ws_guacd(ws, guacd_stream, recording_file, cancel).await;
+    let proxy_outcome = proxy_ws_guacd(ws, guacd_stream, recording_file, cancel).await;
     let elapsed = start.elapsed();
+    let server_disconnected = proxy_outcome.server_disconnected;
+    let proxy_result = proxy_outcome.result;
 
     manager.disconnect_viewer(session_id).await;
 
@@ -250,9 +261,10 @@ async fn handle_ws(
         }
     }
 
-    // VDI: if guacd ended the connection (user logged out / session crashed),
-    // stop the container immediately. Browser disconnect = keep container for reconnect.
-    if matches!(proxy_result, ProxyResult::GuacdEnded(_)) {
+    // VDI: if guacd sent a disconnect instruction (user logged out / session crashed),
+    // stop the container immediately. Browser tab close / network drop = keep container
+    // for reconnection (idle reaper handles eventual cleanup).
+    if server_disconnected {
         if let Some((crate::session::SessionType::Vdi, Some(_))) =
             manager.get_vdi_info(session_id).await
         {
@@ -291,22 +303,28 @@ async fn proxy_ws_guacd(
     guacd: GuacdStream,
     recording_file: Option<tokio::fs::File>,
     cancel: CancellationToken,
-) -> ProxyResult {
+) -> ProxyOutcome {
     let (guacd_read, guacd_write) = tokio::io::split(guacd);
     let (ws_write, ws_read) = ws.split();
 
     let recording = recording_file.map(|f| Arc::new(tokio::sync::Mutex::new(f)));
 
+    // Shared flag: set by guacd_to_ws when it sees `10.disconnect;` in the stream
+    let server_disconnected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // guacd → browser (also tee to recording)
     let recording_clone = recording.clone();
+    let sd_flag = server_disconnected.clone();
     let guacd_to_browser =
-        tokio::spawn(async move { guacd_to_ws(guacd_read, ws_write, recording_clone).await });
+        tokio::spawn(
+            async move { guacd_to_ws(guacd_read, ws_write, recording_clone, sd_flag).await },
+        );
 
     // browser → guacd
     let browser_to_guacd = tokio::spawn(async move { ws_to_guacd(ws_read, guacd_write).await });
 
     // Wait for either direction to finish, or cancellation
-    tokio::select! {
+    let result = tokio::select! {
         result = guacd_to_browser => {
             let err = match result {
                 Ok(Err(e)) => Some(e.to_string()),
@@ -326,6 +344,11 @@ async fn proxy_ws_guacd(
         _ = cancel.cancelled() => {
             ProxyResult::Cancelled
         }
+    };
+
+    ProxyOutcome {
+        result,
+        server_disconnected: server_disconnected.load(std::sync::atomic::Ordering::Relaxed),
     }
 }
 
@@ -334,6 +357,7 @@ async fn guacd_to_ws(
     mut guacd: tokio::io::ReadHalf<GuacdStream>,
     mut ws: futures_util::stream::SplitSink<WebSocket, Message>,
     recording: Option<Arc<tokio::sync::Mutex<tokio::fs::File>>>,
+    server_disconnected: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
 
@@ -364,6 +388,12 @@ async fn guacd_to_ws(
         }
         if text.contains(".clipboard,") {
             tracing::info!("guacd sent clipboard instruction to browser");
+        }
+        // Detect guacd-initiated disconnect (server-side logout/crash).
+        // guacd sends "10.disconnect;" as the final instruction when the remote
+        // server ends the session. This does NOT appear on browser tab close.
+        if text.contains("10.disconnect;") {
+            server_disconnected.store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
         ws.send(Message::Text(text.into())).await?;
