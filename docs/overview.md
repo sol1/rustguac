@@ -2,7 +2,7 @@
 
 ## What is rustguac?
 
-rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, and web browser sessions through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
+rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, web browser sessions, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
 
 rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication, session recording, and an optional Vault-backed address book.
 
@@ -44,6 +44,7 @@ rustguac and Apache Guacamole share the same foundation:
 | **Clipboard control** | Not per-connection | Per-entry disable copy/paste |
 | **Web session autofill** | Not supported | Native Chromium autofill from Vault credentials |
 | **Web domain allowlist** | Not supported | Per-entry domain restriction via --host-rules |
+| **VDI containers** | Not supported | Ephemeral Docker desktop containers per user |
 
 ## Architecture
 
@@ -62,8 +63,11 @@ guacd (C, from guacamole-server)
     +---> RDP server (for RDP sessions)
     +---> VNC server (for VNC sessions)
     +---> Xvnc display (for web browser sessions)
+    |         |
+    |         +---> Chromium (kiosk mode)
+    +---> Docker container :3389 (for VDI sessions)
               |
-              +---> Chromium (kiosk mode)
+              +---> xrdp + desktop (xfce4, etc.)
 ```
 
 For SSH, RDP, VNC, and web browser sessions, an optional multi-hop SSH tunnel chain can route the connection through one or more bastion hosts:
@@ -103,6 +107,12 @@ Spawns a headless Xvnc display and Chromium in kiosk mode, then connects guacd v
 Web sessions support native autofill, per-entry domain allowlisting, login scripts (CDP-based automation), clipboard control, and Chromium security hardening. See [Web Browser Sessions](web-sessions.md) for the full guide with examples.
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach web targets through bastion hosts.
+
+### VDI (Docker containers)
+
+Spawns an ephemeral Docker container running xrdp and a Linux desktop, then connects guacd via RDP to the container. Each user gets a dedicated container named `rustguac-vdi-{username}`. Containers persist after disconnect for reconnection and are automatically cleaned up after an idle timeout.
+
+VDI sessions support persistent home directories, per-entry resource limits and idle timeouts, session thumbnails, and active session previews in the address book. See [VDI Desktop Containers](vdi.md) for configuration and image requirements.
 
 ## SSH tunnel / jump hosts
 
@@ -146,13 +156,15 @@ src/
   session.rs       Session state machine
   tunnel.rs        Multi-hop SSH tunnel chain
   vault.rs         Vault/OpenBao KV v2 client (AppRole auth)
+  vdi/mod.rs       VDI driver trait and container types
+  vdi/docker.rs    Docker-based VDI driver (bollard)
   websocket.rs     WebSocket <-> guacd proxy
 static/
   *.html           Web UI pages
   guac/            Guacamole JS client library
 docs/              This documentation
 patches/           guacd patches for FreeRDP 3.x
-contrib/           Target server setup scripts (xrdp, audio, Windows)
+contrib/           Target server setup scripts (xrdp, audio, Windows, VDI test image)
 scripts/           Utility scripts (drive-setup.sh)
 ```
 
@@ -169,6 +181,7 @@ scripts/           Utility scripts (drive-setup.sh)
 - [Credential Variables](credential-variables.md) -- shared credentials across entries
 - [Reports](reports.md) -- session analytics, history, CSV export
 - [RDP Video Performance](rdp-video-performance.md) -- H.264 passthrough, GFX pipeline, xrdp/Windows tuning
+- [VDI Desktop Containers](vdi.md) -- ephemeral Docker desktops, image requirements, persistent homes
 
 ### Integrations
 - [Integrations](integrations.md) -- OIDC, Vault, SSH tunnels, Kerberos, HAProxy, Knocknoc, drive/LUKS
