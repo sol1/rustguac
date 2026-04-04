@@ -186,6 +186,25 @@ impl DockerDriver {
         // Check if container already exists
         match self.client.inspect_container(&name, None).await {
             Ok(inspect) => {
+                // Check if the image changed — if so, replace the container
+                let existing_image = inspect
+                    .config
+                    .as_ref()
+                    .and_then(|c| c.image.as_deref())
+                    .unwrap_or("");
+                if existing_image != spec.image {
+                    tracing::info!(
+                        container = %name,
+                        old_image = %existing_image,
+                        new_image = %spec.image,
+                        "VDI image changed — replacing container"
+                    );
+                    let cid = inspect.id.as_deref().unwrap_or(&name);
+                    let _ = self.do_stop_container(cid).await;
+                    // Container removed — recurse to create fresh
+                    return Box::pin(self.do_start_or_reuse(spec)).await;
+                }
+
                 let running = inspect
                     .state
                     .as_ref()

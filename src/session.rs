@@ -751,6 +751,11 @@ impl SessionManager {
                     idle_timeout_mins: req.container_idle_timeout_mins,
                 };
 
+                // Clear stale VDI thumbnail before starting/reusing container
+                let container_name = format!("rustguac-vdi-{}", vdi_username);
+                let stale_thumb = self.vdi_thumbnail_path(&container_name);
+                let _ = std::fs::remove_file(&stale_thumb);
+
                 tracing::info!(
                     session_id = %session_id,
                     image = %image,
