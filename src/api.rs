@@ -205,11 +205,16 @@ pub async fn put_session_thumbnail(
     Path(id): Path<Uuid>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    // Validate: session must exist
+    if manager.get_session(id).await.is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     // Reject oversized thumbnails (100KB max)
     if body.len() > 100_000 {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
-    if body.is_empty() {
+    // Validate JPEG magic bytes
+    if body.len() < 3 || body[0] != 0xFF || body[1] != 0xD8 || body[2] != 0xFF {
         return StatusCode::BAD_REQUEST.into_response();
     }
 
@@ -311,6 +316,13 @@ pub async fn get_vdi_container_thumbnail(
     State(manager): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    // Prevent path traversal: container names are alphanumeric + hyphens only
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     let path = manager.vdi_thumbnail_path(&name);
     match tokio::fs::read(&path).await {
         Ok(data) => (

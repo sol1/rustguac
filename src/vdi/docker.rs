@@ -253,6 +253,20 @@ impl DockerDriver {
                     format!("VDI_PASSWORD={}", spec.password),
                 ];
                 for (k, v) in &spec.env {
+                    // Validate env var names (alphanumeric + underscore only)
+                    if !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                        return Err(VdiError::Docker(format!(
+                            "invalid environment variable name: {}",
+                            k
+                        )));
+                    }
+                    // Reject values with newlines (could inject additional env vars)
+                    if v.contains('\n') || v.contains('\r') {
+                        return Err(VdiError::Docker(format!(
+                            "environment variable '{}' contains newline",
+                            k
+                        )));
+                    }
                     env_vec.push(format!("{}={}", k, v));
                 }
 
@@ -292,12 +306,17 @@ impl DockerDriver {
 
                 // Persistent home directory bind mount
                 let binds = if let Some(ref base) = spec.home_base {
-                    let host_path = format!("{}/{}", base, spec.username);
+                    let base_path = std::path::Path::new(base);
+                    let host_path = base_path.join(&spec.username);
+                    // Verify no path traversal (username is sanitized but belt-and-suspenders)
+                    if !host_path.starts_with(base_path) {
+                        return Err(VdiError::Docker("path traversal in home_base".into()));
+                    }
                     // Ensure host directory exists
                     if let Err(e) = std::fs::create_dir_all(&host_path) {
-                        tracing::warn!(path = %host_path, "Failed to create VDI home dir: {}", e);
+                        tracing::warn!(path = ?host_path, "Failed to create VDI home dir: {}", e);
                     }
-                    let mount = format!("{}:/home/{}", host_path, spec.username);
+                    let mount = format!("{}:/home/{}", host_path.display(), spec.username);
                     tracing::info!(mount = %mount, "VDI home directory bind mount");
                     Some(vec![mount])
                 } else {
