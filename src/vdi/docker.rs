@@ -277,10 +277,25 @@ impl DockerDriver {
                     None
                 };
 
+                // Persistent home directory bind mount
+                let binds = if let Some(ref base) = spec.home_base {
+                    let host_path = format!("{}/{}", base, spec.username);
+                    // Ensure host directory exists
+                    if let Err(e) = std::fs::create_dir_all(&host_path) {
+                        tracing::warn!(path = %host_path, "Failed to create VDI home dir: {}", e);
+                    }
+                    let mount = format!("{}:/home/{}", host_path, spec.username);
+                    tracing::info!(mount = %mount, "VDI home directory bind mount");
+                    Some(vec![mount])
+                } else {
+                    None
+                };
+
                 let host_config = HostConfig {
                     port_bindings: Some(port_bindings),
                     nano_cpus,
                     memory,
+                    binds,
                     ..Default::default()
                 };
 

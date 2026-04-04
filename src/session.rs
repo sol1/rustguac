@@ -741,6 +741,7 @@ impl SessionManager {
                     cpu_limit,
                     memory_limit: memory_limit_mb * 1024 * 1024, // MB to bytes
                     env,
+                    home_base: vdi_cfg.home_base.clone(),
                 };
 
                 tracing::info!(
@@ -1300,6 +1301,37 @@ impl SessionManager {
         let session = sessions.get(&id)?;
         let session = session.lock().await;
         Some(session.created_by.clone())
+    }
+
+    /// Get session type and container_id for a session (used for VDI cleanup).
+    pub async fn get_vdi_info(&self, id: Uuid) -> Option<(SessionType, Option<String>)> {
+        let sessions = self.sessions.read().await;
+        let session = sessions.get(&id)?;
+        let session = session.lock().await;
+        Some((session.session_type.clone(), session.container_id.clone()))
+    }
+
+    /// Stop and remove the VDI container for a session.
+    pub async fn stop_vdi_container(&self, id: Uuid) {
+        let container_id = {
+            let sessions = self.sessions.read().await;
+            let session = sessions.get(&id);
+            if let Some(session) = session {
+                let mut session = session.lock().await;
+                session.container_id.take()
+            } else {
+                None
+            }
+        };
+
+        if let Some(cid) = container_id {
+            if let Some(ref vdi) = self.vdi_driver {
+                tracing::info!(session_id = %id, container_id = %cid, "Stopping VDI container (session ended by server)");
+                if let Err(e) = vdi.stop_container(&cid).await {
+                    tracing::warn!(container_id = %cid, "Failed to stop VDI container: {}", e);
+                }
+            }
+        }
     }
 
     /// Terminate a session. Cancels all active proxy connections.

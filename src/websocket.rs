@@ -250,6 +250,16 @@ async fn handle_ws(
         }
     }
 
+    // VDI: if guacd ended the connection (user logged out / session crashed),
+    // stop the container immediately. Browser disconnect = keep container for reconnect.
+    if matches!(proxy_result, ProxyResult::GuacdEnded(_)) {
+        if let Some((crate::session::SessionType::Vdi, Some(_))) =
+            manager.get_vdi_info(session_id).await
+        {
+            manager.stop_vdi_container(session_id).await;
+        }
+    }
+
     // Record session end in history
     manager.end_session_history(
         session_id,

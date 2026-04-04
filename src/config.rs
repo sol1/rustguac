@@ -196,6 +196,11 @@ pub struct VdiConfig {
     /// Allowed Docker images (exact match). Empty = allow all.
     #[serde(default)]
     pub allowed_images: Vec<String>,
+    /// Base directory for persistent user home directories.
+    /// Each user gets `{home_base}/{username}` mounted as `/home/{username}` in the container.
+    /// Unset = no persistent storage (ephemeral home dirs).
+    #[serde(default)]
+    pub home_base: Option<String>,
 }
 
 fn default_docker_socket() -> String {

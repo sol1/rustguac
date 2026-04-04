@@ -23,6 +23,9 @@ pub struct ContainerSpec {
     pub memory_limit: u64,
     /// Extra environment variables (merged with VDI_USERNAME/VDI_PASSWORD).
     pub env: HashMap<String, String>,
+    /// Host path for persistent home directory (bind mount).
+    /// When set, `{home_base}/{username}` is mounted as `/home/{username}`.
+    pub home_base: Option<String>,
 }
 
 /// Result of a successfully started/reused container.
