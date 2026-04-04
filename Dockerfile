@@ -12,6 +12,12 @@
 # Run:
 #   docker run -d -p 8089:8089 rustguac
 #
+# Run with VDI (Docker desktop containers):
+#   docker run -d -p 8089:8089 \
+#     -v /var/run/docker.sock:/var/run/docker.sock \
+#     --group-add $(getent group docker | cut -d: -f3) \
+#     rustguac
+#
 # The image runs both guacd and rustguac under a simple entrypoint script.
 # =============================================================================
 
@@ -126,7 +132,8 @@ RUN mkdir -p /usr/lib/x86_64-linux-gnu/freerdp3 && \
 
 # Create writable runtime directories
 RUN mkdir -p /opt/rustguac/data /opt/rustguac/recordings /opt/rustguac/tls \
-    /opt/rustguac/certs /opt/rustguac/drives /opt/rustguac/scripts
+    /opt/rustguac/certs /opt/rustguac/drives /opt/rustguac/scripts \
+    /opt/rustguac/vdi-homes
 
 # Chromium policy: web session hardening.
 # DeveloperToolsAvailability=0: CDP needed for login scripts. Users can't reach DevTools
@@ -158,6 +165,13 @@ display_range_end = 199
 cert_path = "/opt/rustguac/tls/cert.pem"
 key_path = "/opt/rustguac/tls/key.pem"
 guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+
+# VDI Docker desktop containers (uncomment to enable)
+# Requires: -v /var/run/docker.sock:/var/run/docker.sock
+# [vdi]
+# enabled = true
+# idle_timeout_mins = 60
+# home_base = "/opt/rustguac/vdi-homes"
 EOF
 
 # Set ownership so the non-root user can write to runtime dirs.
@@ -166,7 +180,7 @@ EOF
 RUN chown rustguac:rustguac /opt/rustguac && \
     chown -R rustguac:rustguac /opt/rustguac/data /opt/rustguac/recordings \
     /opt/rustguac/tls /opt/rustguac/certs /opt/rustguac/drives \
-    /opt/rustguac/scripts /opt/rustguac/config.toml.default
+    /opt/rustguac/scripts /opt/rustguac/vdi-homes /opt/rustguac/config.toml.default
 
 # Entrypoint script: starts guacd in background, then rustguac in foreground
 RUN cat > /opt/rustguac/entrypoint.sh <<'SCRIPT'
@@ -217,7 +231,7 @@ RUN chmod +x /opt/rustguac/entrypoint.sh
 
 WORKDIR /opt/rustguac
 EXPOSE 8089
-VOLUME ["/opt/rustguac/data", "/opt/rustguac/recordings", "/opt/rustguac/drives"]
+VOLUME ["/opt/rustguac/data", "/opt/rustguac/recordings", "/opt/rustguac/drives", "/opt/rustguac/vdi-homes"]
 
 ENV RUST_LOG=info
 ENV GUACD_LOG_LEVEL=info
