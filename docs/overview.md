@@ -4,7 +4,7 @@
 
 rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, web browser sessions, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
 
-rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication, session recording, and an optional Vault-backed address book.
+rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication, session recording, VDI container orchestration, and an optional Vault-backed address book.
 
 ## Why not Apache Guacamole?
 
@@ -13,6 +13,7 @@ Apache Guacamole is a mature, feature-rich platform. rustguac is a purpose-built
 - **No Java stack** — rustguac is a single Rust binary. No Tomcat, no WAR files, no JVM tuning.
 - **Security-first design** — CIDR allowlists, TLS everywhere, LUKS-encrypted file transfer, Vault integration, rate limiting, audit logging.
 - **Simpler deployment** — one binary + guacd. Install with a single script or Docker image.
+- **VDI desktops** — ephemeral Docker containers give each user an isolated Linux desktop on demand. No VM infrastructure required.
 - **Address book in Vault** — connection credentials stored in HashiCorp Vault / OpenBao KV v2. Credentials never reach the browser.
 - **Zero-trust integration** — works with [Knocknoc](https://knocknoc.io) for identity-aware network access control at the HAProxy layer.
 
@@ -23,7 +24,7 @@ rustguac and Apache Guacamole share the same foundation:
 - **guacd** — both use guacd from [guacamole-server](https://github.com/apache/guacamole-server) for protocol translation. This is the same battle-tested C daemon.
 - **Guacamole protocol** — the wire protocol between the webapp and guacd is identical. rustguac uses the same instruction format, the same JavaScript client library (`guac-common-js`), and the same WebSocket framing.
 - **Session recording** — recordings are in the standard Guacamole format and can be played back with the bundled player.
-- **SSH/RDP/VNC support** — the same protocol backends provided by guacd.
+- **SSH/RDP/VNC support** — the same protocol backends provided by guacd. rustguac adds web browser and VDI container session types on top.
 
 ## Key differences from Apache Guacamole
 
@@ -70,7 +71,7 @@ guacd (C, from guacamole-server)
               +---> xrdp + desktop (xfce4, etc.)
 ```
 
-For SSH, RDP, VNC, and web browser sessions, an optional multi-hop SSH tunnel chain can route the connection through one or more bastion hosts:
+For SSH, RDP, VNC, and web browser sessions, an optional multi-hop SSH tunnel chain can route the connection through one or more bastion hosts. VDI sessions connect to local Docker containers and do not use tunnels.
 
 ```
 Browser -> rustguac -> SSH tunnel (hop 1) -> SSH tunnel (hop 2) -> ... -> guacd -> target
@@ -116,7 +117,7 @@ VDI sessions support persistent home directories, per-entry resource limits and 
 
 ## SSH tunnel / jump hosts
 
-All session types (SSH, RDP, VNC, and web browser) can be routed through one or more SSH bastion hosts using multi-hop SSH tunnel chains. This is useful when target machines are not directly reachable from the rustguac server.
+SSH, RDP, VNC, and web browser sessions can be routed through one or more SSH bastion hosts using multi-hop SSH tunnel chains. This is useful when target machines are not directly reachable from the rustguac server. VDI sessions do not support tunnels (containers run locally).
 
 Each hop in the chain establishes an SSH connection and creates a local TCP port forward (`direct-tcpip`). The hops are chained sequentially — each hop connects through the previous hop's local listener. The final hop forwards to the actual target (e.g., an RDP server on port 3389).
 
