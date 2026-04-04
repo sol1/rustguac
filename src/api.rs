@@ -1867,6 +1867,7 @@ pub async fn ab_connect_entry(
         container_cpu_limit: ab_entry.container_cpu_limit,
         container_memory_limit: ab_entry.container_memory_limit,
         container_env: ab_entry.container_env,
+        container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -3244,6 +3245,7 @@ pub async fn quick_connect(
             container_cpu_limit: ab_entry.container_cpu_limit,
             container_memory_limit: ab_entry.container_memory_limit,
             container_env: ab_entry.container_env,
+            container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
         };
 
         tracing::info!(
@@ -3340,6 +3342,7 @@ pub async fn quick_connect(
         container_cpu_limit: None,
         container_memory_limit: None,
         container_env: None,
+        container_idle_timeout_mins: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

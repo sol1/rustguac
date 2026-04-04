@@ -113,6 +113,7 @@ pub async fn cmd_import_guacamole(
             container_cpu_limit: None,
             container_memory_limit: None,
             container_env: None,
+            container_idle_timeout_mins: None,
         };
 
         // Build entry name: group prefix + sanitized connection name
@@ -654,6 +655,7 @@ mod tests {
             container_cpu_limit: None,
             container_memory_limit: None,
             container_env: None,
+            container_idle_timeout_mins: None,
         };
         let mut entries = vec![
             ("web".into(), entry()),

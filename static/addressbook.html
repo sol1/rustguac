@@ -564,6 +564,9 @@
                 <label>Environment Variables <span style="color:var(--text-muted);font-size:0.85em">(optional, KEY=VALUE per line)</span>
                     <textarea id="em-vdi-env" rows="3" style="resize:vertical;font-size:0.85em" placeholder="TZ=Australia/Brisbane&#10;LANG=en_US.UTF-8"></textarea>
                 </label>
+                <label>Idle Timeout <span style="color:var(--text-muted);font-size:0.85em">(optional, minutes)</span>
+                    <input type="number" id="em-vdi-idle-timeout" min="0" placeholder="e.g. 60 (0 = use global default)">
+                </label>
                 <label>Banner <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
                     <input type="text" id="em-vdi-banner" placeholder="Shown before session starts (user must click Continue)">
                 </label>
@@ -1911,6 +1914,7 @@
             document.getElementById('em-vdi-cpu').value = '';
             document.getElementById('em-vdi-memory').value = '';
             document.getElementById('em-vdi-env').value = '';
+            document.getElementById('em-vdi-idle-timeout').value = '';
             document.getElementById('em-vdi-banner').value = '';
             document.getElementById('em-override-recording').checked = false;
             document.getElementById('em-enable-recording').checked = true;
@@ -2028,6 +2032,7 @@
                         }).join('\n');
                         document.getElementById('em-vdi-env').value = envLines;
                     }
+                    document.getElementById('em-vdi-idle-timeout').value = entryData.container_idle_timeout_mins || '';
                     document.getElementById('em-vdi-banner').value = entryData.banner || '';
                 }
                 if (type === 'ssh' || type === 'rdp') {
@@ -2184,6 +2189,8 @@
                     });
                     if (Object.keys(envMap).length > 0) entry.container_env = envMap;
                 }
+                var idleT = parseInt(document.getElementById('em-vdi-idle-timeout').value);
+                if (idleT > 0) entry.container_idle_timeout_mins = idleT;
                 var vbn = document.getElementById('em-vdi-banner').value.trim();
                 if (vbn) entry.banner = vbn;
             }

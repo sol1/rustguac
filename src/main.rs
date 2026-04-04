@@ -712,7 +712,8 @@ async fn run_server(config: Config, database: Db) {
     // Spawn VDI container reaper (cleans up idle containers)
     if let Some(ref vdi_cfg) = manager.config().vdi {
         if vdi_cfg.enabled {
-            let idle_timeout = std::time::Duration::from_secs(vdi_cfg.idle_timeout_mins * 60);
+            let default_idle_timeout =
+                std::time::Duration::from_secs(vdi_cfg.idle_timeout_mins * 60);
             let reaper_manager = manager.clone();
             tokio::spawn(async move {
                 // Track last-seen-active times for containers
@@ -726,7 +727,7 @@ async fn run_server(config: Config, database: Db) {
                     let Some(vdi) = reaper_manager.vdi_driver() else {
                         continue;
                     };
-                    let containers = match vdi.list_managed_containers().await {
+                    let containers = match vdi.list_managed_containers_detail().await {
                         Ok(c) => c,
                         Err(e) => {
                             tracing::warn!("VDI reaper: failed to list containers: {}", e);
@@ -735,33 +736,39 @@ async fn run_server(config: Config, database: Db) {
                     };
 
                     let now = tokio::time::Instant::now();
-                    for cid in &containers {
-                        if reaper_manager.has_active_vdi_session(cid).await {
-                            // Container has active session — update last-active time
-                            last_active.insert(cid.clone(), now);
-                        } else if let Some(&last) = last_active.get(cid) {
-                            // No active session — check if idle timeout exceeded
-                            if now.duration_since(last) > idle_timeout {
+                    let cids: Vec<String> =
+                        containers.iter().map(|c| c.container_id.clone()).collect();
+                    for c in &containers {
+                        if reaper_manager.has_active_vdi_session(&c.container_id).await {
+                            last_active.insert(c.container_id.clone(), now);
+                        } else if let Some(&last) = last_active.get(&c.container_id) {
+                            // Per-container timeout from label, or global default
+                            let timeout = c
+                                .idle_timeout_mins
+                                .map(|m| std::time::Duration::from_secs(m * 60))
+                                .unwrap_or(default_idle_timeout);
+                            if now.duration_since(last) > timeout {
                                 tracing::info!(
-                                    container_id = %cid,
+                                    container = %c.container_name,
                                     "VDI reaper: removing idle container"
                                 );
-                                if let Err(e) = vdi.stop_container(cid).await {
+                                if let Err(e) = vdi.stop_container(&c.container_id).await {
                                     tracing::warn!(
-                                        container_id = %cid,
+                                        container = %c.container_name,
                                         "VDI reaper: failed to remove container: {}", e
                                     );
                                 }
-                                last_active.remove(cid);
+                                last_active.remove(&c.container_id);
+                                // Clean up VDI thumbnail
+                                let vdi_thumb =
+                                    reaper_manager.vdi_thumbnail_path(&c.container_name);
+                                let _ = tokio::fs::remove_file(&vdi_thumb).await;
                             }
                         } else {
-                            // First time seeing this container without a session — start tracking
-                            last_active.insert(cid.clone(), now);
+                            last_active.insert(c.container_id.clone(), now);
                         }
                     }
-
-                    // Clean up tracking for containers that no longer exist
-                    last_active.retain(|cid, _| containers.contains(cid));
+                    last_active.retain(|cid, _| cids.contains(cid));
                 }
             });
             tracing::info!(

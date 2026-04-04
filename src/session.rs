@@ -113,6 +113,8 @@ pub struct CreateSessionRequest {
     pub container_memory_limit: Option<u64>,
     /// Extra environment variables for VDI container.
     pub container_env: Option<std::collections::HashMap<String, String>>,
+    /// Override idle timeout for VDI container in minutes.
+    pub container_idle_timeout_mins: Option<u64>,
 }
 
 /// Session status in the lifecycle.
@@ -746,6 +748,7 @@ impl SessionManager {
                     env,
                     home_base: vdi_cfg.home_base.clone(),
                     entry_key: req.address_book_entry.clone(),
+                    idle_timeout_mins: req.container_idle_timeout_mins,
                 };
 
                 tracing::info!(

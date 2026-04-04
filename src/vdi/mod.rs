@@ -28,6 +28,8 @@ pub struct ContainerSpec {
     pub home_base: Option<String>,
     /// Address book entry key (e.g. "shared/folder/entry") for reconnect.
     pub entry_key: Option<String>,
+    /// Per-entry idle timeout in minutes (overrides global config).
+    pub idle_timeout_mins: Option<u64>,
 }
 
 /// Info about a managed VDI container (for the active desktops list).
@@ -45,6 +47,9 @@ pub struct ManagedContainer {
     pub thumbnail_url: Option<String>,
     /// Whether this container has an active session right now.
     pub has_active_session: bool,
+    /// Per-container idle timeout in minutes (from address book entry, via label).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_mins: Option<u64>,
 }
 
 /// Result of a successfully started/reused container.

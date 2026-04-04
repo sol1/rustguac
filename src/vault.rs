@@ -163,6 +163,9 @@ pub struct AddressBookEntry {
     /// Extra environment variables for VDI container (key=value).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_env: Option<std::collections::HashMap<String, String>>,
+    /// Override idle timeout for VDI container in minutes. Uses global default if unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_idle_timeout_mins: Option<u64>,
 }
 
 impl AddressBookEntry {
@@ -270,6 +273,9 @@ pub struct EntryInfo {
     /// Docker image for VDI sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_image: Option<String>,
+    /// Idle timeout for VDI container in minutes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_idle_timeout_mins: Option<u64>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -319,6 +325,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             force_lossless: e.force_lossless,
             enable_h264: e.enable_h264,
             container_image: e.container_image.clone(),
+            container_idle_timeout_mins: e.container_idle_timeout_mins,
         }
     }
 }

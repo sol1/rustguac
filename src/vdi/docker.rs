@@ -273,6 +273,9 @@ impl DockerDriver {
                 if let Some(ref entry_key) = spec.entry_key {
                     labels.insert("rustguac.entry".to_string(), entry_key.clone());
                 }
+                if let Some(timeout) = spec.idle_timeout_mins {
+                    labels.insert("rustguac.idle_timeout_mins".to_string(), timeout.to_string());
+                }
                 labels.insert("rustguac.image".to_string(), spec.image.clone());
 
                 // Resource limits
@@ -455,6 +458,9 @@ impl DockerDriver {
                     entry_key: labels.get("rustguac.entry").cloned(),
                     thumbnail_url: None, // populated by API layer
                     has_active_session: false, // populated by API layer
+                    idle_timeout_mins: labels
+                        .get("rustguac.idle_timeout_mins")
+                        .and_then(|v| v.parse().ok()),
                 }
             })
             .collect())
