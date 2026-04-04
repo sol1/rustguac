@@ -261,14 +261,27 @@ async fn handle_ws(
         }
     }
 
-    // VDI: if guacd sent a disconnect instruction (user logged out / session crashed),
-    // stop the container immediately. Browser tab close / network drop = keep container
-    // for reconnection (idle reaper handles eventual cleanup).
-    if server_disconnected {
-        if let Some((crate::session::SessionType::Vdi, Some(_))) =
-            manager.get_vdi_info(session_id).await
-        {
+    // VDI container lifecycle on session end
+    if let Some((crate::session::SessionType::Vdi, Some(ref _cid))) =
+        manager.get_vdi_info(session_id).await
+    {
+        if server_disconnected {
+            // User logged out / session crashed → stop container immediately
             manager.stop_vdi_container(session_id).await;
+            // Clean up session thumbnail
+            let _ = tokio::fs::remove_file(manager.thumbnail_path(session_id)).await;
+        } else {
+            // Browser disconnect / network drop → container persists.
+            // Copy session thumbnail to container-keyed file for the active desktops UI.
+            let session_thumb = manager.thumbnail_path(session_id);
+            // Derive container name from session username
+            if let Some(info) = manager.get_session(session_id).await {
+                let container_name = format!("rustguac-vdi-{}", info.username);
+                let vdi_thumb = manager.vdi_thumbnail_path(&container_name);
+                if session_thumb.exists() {
+                    let _ = tokio::fs::copy(&session_thumb, &vdi_thumb).await;
+                }
+            }
         }
     }
 

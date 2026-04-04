@@ -250,6 +250,48 @@
         .flow-node-hop { background: var(--hop-bg); color: var(--hop-fg); }
         .flow-node-target { background: var(--input); color: var(--accent); font-weight: bold; }
         .flow-arrow { color: var(--text-muted); margin: 0 0.3em; }
+        .session-card {
+            flex: 0 0 auto;
+            width: 280px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .session-card:hover { border-color: var(--accent); }
+        .session-card-thumb {
+            width: 100%;
+            height: 158px;
+            object-fit: cover;
+            background: #111;
+            display: block;
+        }
+        .session-card-info {
+            padding: 0.5em 0.8em;
+            font-size: 0.85em;
+        }
+        .session-card-info .card-name {
+            font-weight: bold;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .session-card-info .card-meta {
+            color: var(--text-muted);
+            font-size: 0.85em;
+            margin-top: 0.2em;
+            display: flex;
+            gap: 0.5em;
+            align-items: center;
+        }
+        .session-card-info .card-meta .type-badge {
+            font-size: 0.8em;
+        }
+        .session-card.dormant { opacity: 0.75; }
+        .session-card.dormant .session-card-thumb { filter: brightness(0.7); }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -263,7 +305,8 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
-        <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item" id="my-creds-item">&#128273; My Credentials</div><div class="um-item" id="show-tour-item">&#9432; Welcome Tour</div><div class="um-divider"></div><div class="um-item um-logout" id="logout-item">Logout</div></div></span>
+        <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item" id="my-creds-item">&#128273; My Credentials</div><div class="um-item" id="show-tour-item">&#9432; Welcome Tour</div></div></span>
+        <a href="#" id="logout-item" style="margin-left:0.5em;color:var(--text-muted)">Logout</a>
     </nav>
 
     <div id="global-error"></div>
@@ -286,6 +329,13 @@
     </div>
 
     <div id="main-content" style="display:none">
+        <div id="active-sessions" style="display:none;margin-bottom:1.5em">
+            <div style="display:flex;align-items:center;gap:0.5em;margin-bottom:0.8em">
+                <strong style="color:var(--accent)">Active Sessions</strong>
+                <span id="active-sessions-count" style="color:var(--text-muted);font-size:0.85em"></span>
+            </div>
+            <div id="active-sessions-grid" style="display:flex;gap:1em;overflow-x:auto;padding-bottom:0.5em"></div>
+        </div>
         <div class="layout">
             <div class="sidebar">
                 <div class="sidebar-header">
@@ -811,10 +861,117 @@
                     return;
                 }
                 loadFolders();
+                loadActiveSessions();
+                setInterval(loadActiveSessions, 10000);
                 startOnboarding(currentUserRole);
             })
             .catch(function(err) {
                 showError('Failed to check authentication: ' + err.message);
+            });
+        }
+
+        function loadActiveSessions() {
+            // Fetch active sessions and dormant VDI containers in parallel
+            var sessionsP = fetch('/api/sessions', { headers: apiHeaders(), credentials: 'same-origin' }).then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; });
+            var vdiP = fetch('/api/vdi/containers', { headers: apiHeaders(), credentials: 'same-origin' }).then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; });
+
+            Promise.all([sessionsP, vdiP]).then(function(results) {
+                var sessions = results[0] || [];
+                var vdiContainers = results[1] || [];
+
+                // Active/pending sessions (all visible to the current user)
+                var activeSessions = sessions.filter(function(s) {
+                    return s.status === 'active' || s.status === 'pending';
+                });
+
+                // Active session container IDs (to avoid duplicating in VDI list)
+                var activeContainerSessions = {};
+                activeSessions.forEach(function(s) {
+                    if (s.session_type === 'vdi') activeContainerSessions[s.hostname] = true;
+                });
+
+                // Dormant VDI containers (running but no active session)
+                var dormantContainers = vdiContainers.filter(function(c) {
+                    return !c.has_active_session;
+                });
+
+                var grid = document.getElementById('active-sessions-grid');
+                var section = document.getElementById('active-sessions');
+                var total = activeSessions.length + dormantContainers.length;
+
+                if (total === 0) {
+                    section.style.display = 'none';
+                    return;
+                }
+
+                section.style.display = '';
+                document.getElementById('active-sessions-count').textContent = '(' + total + ')';
+                grid.innerHTML = '';
+
+                // Render active sessions
+                activeSessions.forEach(function(s) {
+                    var card = document.createElement('div');
+                    card.className = 'session-card';
+                    card.title = 'Click to reconnect';
+                    var thumbUrl = s.thumbnail_url || '';
+                    var name = s.entry_display_name || s.hostname || s.url || '?';
+                    var typeBadge = '<span class="type-badge type-' + escapeHtml(s.session_type) + '">' + escapeHtml(s.session_type) + '</span>';
+                    card.innerHTML = '<img class="session-card-thumb" src="' + escapeHtml(thumbUrl) + (thumbUrl ? '?t=' + Date.now() : '') + '" onerror="this.style.display=\'none\'" alt="">'
+                        + '<div class="session-card-info"><div class="card-name">' + escapeHtml(name) + '</div>'
+                        + '<div class="card-meta">' + typeBadge + ' <span>' + escapeHtml(s.username || '') + '</span></div></div>';
+                    card.addEventListener('click', function() {
+                        if (s.address_book_entry) {
+                            // Reconnect via address book connect (creates new session to same target)
+                            var parts = s.address_book_entry.split('/');
+                            if (parts.length === 3) {
+                                fetch('/api/addressbook/folders/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]) + '/entries/' + encodeURIComponent(parts[2]) + '/connect', {
+                                    method: 'POST',
+                                    headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
+                                    credentials: 'same-origin',
+                                    body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+                                }).then(function(res) { return res.json(); }).then(function(data) {
+                                    if (data.session_id) window.open('/client/' + data.session_id + '?name=' + encodeURIComponent(s.entry_display_name || ''), '_blank');
+                                    else showError(data.error || 'Failed to reconnect');
+                                }).catch(function(e) { showError('Reconnect failed: ' + e.message); });
+                                return;
+                            }
+                        }
+                        // Fallback: open existing session URL (ad-hoc sessions)
+                        window.open(s.client_url, '_blank');
+                    });
+                    grid.appendChild(card);
+                });
+
+                // Render dormant VDI containers
+                dormantContainers.forEach(function(c) {
+                    var card = document.createElement('div');
+                    card.className = 'session-card dormant';
+                    card.title = 'Dormant desktop — click to reconnect';
+                    var thumbUrl = c.thumbnail_url || '';
+                    var name = c.image || c.container_name;
+                    card.innerHTML = '<img class="session-card-thumb" src="' + escapeHtml(thumbUrl) + (thumbUrl ? '?t=' + Date.now() : '') + '" onerror="this.style.display=\'none\'" alt="">'
+                        + '<div class="session-card-info"><div class="card-name">' + escapeHtml(name) + '</div>'
+                        + '<div class="card-meta"><span class="type-badge type-vdi">vdi</span> <span>dormant</span></div></div>';
+                    if (c.entry_key) {
+                        card.addEventListener('click', function() {
+                            // Reconnect via address book connect
+                            var parts = c.entry_key.split('/');
+                            if (parts.length === 3) {
+                                var scope = parts[0], folder = parts[1], entry = parts[2];
+                                fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(entry) + '/connect', {
+                                    method: 'POST',
+                                    headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
+                                    credentials: 'same-origin',
+                                    body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+                                }).then(function(res) { return res.json(); }).then(function(data) {
+                                    if (data.session_id) window.open('/client/' + data.session_id, '_blank');
+                                    else showError(data.error || 'Failed to reconnect');
+                                }).catch(function(e) { showError('Reconnect failed: ' + e.message); });
+                            }
+                        });
+                    }
+                    grid.appendChild(card);
+                });
             });
         }
 

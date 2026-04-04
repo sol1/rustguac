@@ -128,6 +128,12 @@ impl VdiDriver for DockerDriver {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<String>, VdiError>> + Send + '_>> {
         Box::pin(self.do_list_managed_containers())
     }
+
+    fn list_managed_containers_detail(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<super::ManagedContainer>, VdiError>> + Send + '_>> {
+        Box::pin(self.do_list_managed_containers_detail())
+    }
 }
 
 impl DockerDriver {
@@ -264,6 +270,10 @@ impl DockerDriver {
                 let mut labels = HashMap::new();
                 labels.insert("rustguac.managed".to_string(), "true".to_string());
                 labels.insert("rustguac.username".to_string(), spec.username.clone());
+                if let Some(ref entry_key) = spec.entry_key {
+                    labels.insert("rustguac.entry".to_string(), entry_key.clone());
+                }
+                labels.insert("rustguac.image".to_string(), spec.image.clone());
 
                 // Resource limits
                 let nano_cpus = if spec.cpu_limit > 0.0 {
@@ -407,6 +417,46 @@ impl DockerDriver {
         Ok(containers
             .into_iter()
             .filter_map(|c| c.id)
+            .collect())
+    }
+
+    async fn do_list_managed_containers_detail(&self) -> Result<Vec<super::ManagedContainer>, VdiError> {
+        let mut filters = HashMap::new();
+        filters.insert("label", vec!["rustguac.managed=true"]);
+
+        let opts = ListContainersOptions {
+            all: false, // only running containers
+            filters,
+            ..Default::default()
+        };
+
+        let containers = self
+            .client
+            .list_containers(Some(opts))
+            .await
+            .map_err(|e| VdiError::Docker(format!("failed to list containers: {}", e)))?;
+
+        Ok(containers
+            .into_iter()
+            .map(|c| {
+                let labels = c.labels.unwrap_or_default();
+                let names = c.names.unwrap_or_default();
+                let container_name = names
+                    .first()
+                    .map(|n| n.trim_start_matches('/').to_string())
+                    .unwrap_or_default();
+                super::ManagedContainer {
+                    container_id: c.id.unwrap_or_default(),
+                    container_name,
+                    username: labels.get("rustguac.username").cloned().unwrap_or_default(),
+                    image: labels.get("rustguac.image").cloned()
+                        .or_else(|| c.image.clone())
+                        .unwrap_or_default(),
+                    entry_key: labels.get("rustguac.entry").cloned(),
+                    thumbnail_url: None, // populated by API layer
+                    has_active_session: false, // populated by API layer
+                }
+            })
             .collect())
     }
 }

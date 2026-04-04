@@ -198,6 +198,134 @@ pub async fn delete_session(
     }
 }
 
+/// PUT /api/sessions/:id/thumbnail — Upload a session thumbnail (JPEG).
+/// Called by the client periodically to update the session preview.
+pub async fn put_session_thumbnail(
+    State(manager): State<AppState>,
+    Path(id): Path<Uuid>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    // Reject oversized thumbnails (100KB max)
+    if body.len() > 100_000 {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    if body.is_empty() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let dir = manager.thumbnails_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!("Failed to create thumbnails dir: {}", e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let path = manager.thumbnail_path(id);
+    match tokio::fs::write(&path, &body).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::warn!(session_id = %id, "Failed to write thumbnail: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// GET /api/sessions/:id/thumbnail — Serve a session thumbnail (JPEG).
+pub async fn get_session_thumbnail(
+    State(manager): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let path = manager.thumbnail_path(id);
+    match tokio::fs::read(&path).await {
+        Ok(data) => (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, "image/jpeg"),
+                (axum::http::header::CACHE_CONTROL, "no-cache"),
+            ],
+            data,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// GET /api/vdi/containers — List running VDI containers for the current user.
+/// Returns containers with metadata for the "Active Desktops" UI.
+pub async fn list_vdi_containers(
+    State(manager): State<AppState>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> impl IntoResponse {
+    let id = match identity {
+        Some(Extension(ref id)) if id.has_role("operator") => id,
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "operator role required"})),
+            )
+                .into_response()
+        }
+    };
+
+    let Some(vdi) = manager.vdi_driver() else {
+        return Json(json!([])).into_response();
+    };
+
+    let mut containers = match vdi.list_managed_containers_detail().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to list VDI containers: {}", e);
+            return Json(json!([])).into_response();
+        }
+    };
+
+    // Filter to current user's containers
+    let current_user = id
+        .display_name()
+        .split('@')
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect::<String>();
+
+    containers.retain(|c| c.username == current_user);
+
+    // Populate thumbnail URLs and active session status
+    for c in &mut containers {
+        let vdi_thumb = manager.vdi_thumbnail_path(&c.container_name);
+        if vdi_thumb.exists() {
+            c.thumbnail_url = Some(format!(
+                "/api/vdi/containers/{}/thumbnail",
+                c.container_name
+            ));
+        }
+        c.has_active_session = manager.has_active_vdi_session(&c.container_id).await;
+    }
+
+    Json(json!(containers)).into_response()
+}
+
+/// GET /api/vdi/containers/:name/thumbnail — Serve a VDI container's thumbnail.
+pub async fn get_vdi_container_thumbnail(
+    State(manager): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let path = manager.vdi_thumbnail_path(&name);
+    match tokio::fs::read(&path).await {
+        Ok(data) => (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, "image/jpeg"),
+                (axum::http::header::CACHE_CONTROL, "no-cache"),
+            ],
+            data,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 /// GET /api/login-scripts — List available login scripts. Requires operator+.
 pub async fn list_login_scripts(
     State(manager): State<AppState>,

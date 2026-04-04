@@ -825,16 +825,57 @@
             });
 
             // ── State changes ──
+            // ── Thumbnail capture (owner only, not shared viewers) ──
+            var _thumbInterval = null;
+            function captureAndUploadThumbnail() {
+                try {
+                    var display = client.getDisplay();
+                    var canvas = display.flatten();
+                    if (!canvas || canvas.width === 0) return;
+                    // Scale down to 320px wide
+                    var thumb = document.createElement('canvas');
+                    thumb.width = 320;
+                    thumb.height = Math.round(320 * canvas.height / canvas.width) || 180;
+                    thumb.getContext('2d').drawImage(canvas, 0, 0, thumb.width, thumb.height);
+                    thumb.toBlob(function(blob) {
+                        if (!blob) return;
+                        var headers = {};
+                        if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+                        fetch('/api/sessions/' + sessionId + '/thumbnail', {
+                            method: 'PUT',
+                            headers: headers,
+                            credentials: 'same-origin',
+                            body: blob
+                        }).catch(function() {}); // fire and forget
+                    }, 'image/jpeg', 0.6);
+                } catch(e) { /* ignore capture errors */ }
+            }
+
             client.onstatechange = function(state) {
                 switch (state) {
                     case Guacamole.Client.State.CONNECTING: statusEl.textContent = 'Connecting...'; statusEl.className = ''; break;
                     case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; break;
                     case Guacamole.Client.State.CONNECTED:
                         statusEl.textContent = 'Connected'; statusEl.className = 'connected';
+                        // Start thumbnail capture for session owner
+                        if (!shareToken && !_thumbInterval) {
+                            _thumbInterval = setInterval(captureAndUploadThumbnail, 10000);
+                            // First capture after 3s (let display render)
+                            setTimeout(captureAndUploadThumbnail, 3000);
+                        }
                         break;
-                    case Guacamole.Client.State.DISCONNECTING: statusEl.textContent = 'Disconnecting...'; statusEl.className = ''; break;
+                    case Guacamole.Client.State.DISCONNECTING:
+                        statusEl.textContent = 'Disconnecting...'; statusEl.className = '';
+                        // Final thumbnail capture before disconnect
+                        if (_thumbInterval) {
+                            clearInterval(_thumbInterval);
+                            _thumbInterval = null;
+                            captureAndUploadThumbnail();
+                        }
+                        break;
                     case Guacamole.Client.State.DISCONNECTED:
                         statusEl.textContent = 'Disconnected'; statusEl.className = '';
+                        if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                         document.getElementById('disconnected-overlay').className = 'visible';
                         break;
                 }

@@ -26,6 +26,25 @@ pub struct ContainerSpec {
     /// Host path for persistent home directory (bind mount).
     /// When set, `{home_base}/{username}` is mounted as `/home/{username}`.
     pub home_base: Option<String>,
+    /// Address book entry key (e.g. "shared/folder/entry") for reconnect.
+    pub entry_key: Option<String>,
+}
+
+/// Info about a managed VDI container (for the active desktops list).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ManagedContainer {
+    pub container_id: String,
+    pub container_name: String,
+    pub username: String,
+    pub image: String,
+    /// Address book entry key for reconnecting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_key: Option<String>,
+    /// URL to the container's thumbnail (if captured before disconnect).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_url: Option<String>,
+    /// Whether this container has an active session right now.
+    pub has_active_session: bool,
 }
 
 /// Result of a successfully started/reused container.
@@ -92,4 +111,9 @@ pub trait VdiDriver: Send + Sync {
     fn list_managed_containers(
         &self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<String>, VdiError>> + Send + '_>>;
+
+    /// List managed containers with full metadata (for active desktops UI).
+    fn list_managed_containers_detail(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<ManagedContainer>, VdiError>> + Send + '_>>;
 }

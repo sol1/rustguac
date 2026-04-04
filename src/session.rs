@@ -155,6 +155,8 @@ pub struct SessionInfo {
     pub address_book_folder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_url: Option<String>,
 }
 
 /// Internal session state including the guacd connection.
@@ -276,6 +278,7 @@ impl Session {
             address_book_entry: self.address_book_entry.clone(),
             address_book_folder: self.address_book_folder.clone(),
             entry_display_name: self.entry_display_name.clone(),
+            thumbnail_url: Some(format!("/api/sessions/{}/thumbnail", self.id)),
         }
     }
 }
@@ -742,6 +745,7 @@ impl SessionManager {
                     memory_limit: memory_limit_mb * 1024 * 1024, // MB to bytes
                     env,
                     home_base: vdi_cfg.home_base.clone(),
+                    entry_key: req.address_book_entry.clone(),
                 };
 
                 tracing::info!(
@@ -1382,6 +1386,21 @@ impl SessionManager {
 
     pub fn recording_path(&self) -> &std::path::Path {
         self.config.effective_recording_path()
+    }
+
+    /// Path to the thumbnails directory (under recording_path).
+    pub fn thumbnails_dir(&self) -> std::path::PathBuf {
+        self.config.effective_recording_path().join("thumbnails")
+    }
+
+    /// Path to a specific session's thumbnail file.
+    pub fn thumbnail_path(&self, session_id: Uuid) -> std::path::PathBuf {
+        self.thumbnails_dir().join(format!("{}.jpg", session_id))
+    }
+
+    /// Path to a VDI container's thumbnail (persists across sessions).
+    pub fn vdi_thumbnail_path(&self, container_name: &str) -> std::path::PathBuf {
+        self.thumbnails_dir().join(format!("vdi-{}.jpg", container_name))
     }
 
     /// Check if recording is enabled for a given session.

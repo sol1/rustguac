@@ -822,6 +822,7 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/sessions", get(api::list_sessions))
         .route("/api/sessions/{id}", get(api::get_session))
         .route("/api/sessions/{id}", delete(api::delete_session))
+        .route("/api/vdi/containers", get(api::list_vdi_containers))
         .route("/api/recordings", get(api::list_recordings))
         .route("/api/recordings/{name}", get(api::serve_recording))
         .route("/api/recordings/{name}", delete(api::delete_recording))
@@ -958,6 +959,8 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/health", get(api::health))
         .route("/api/docs", get(api::get_docs))
         .route("/api/sessions/{id}/banner", get(api::get_session_banner))
+        .route("/api/sessions/{id}/thumbnail", put(api::put_session_thumbnail).get(api::get_session_thumbnail))
+        .route("/api/vdi/containers/{name}/thumbnail", get(api::get_vdi_container_thumbnail))
         .route("/client/{session_id}", get(serve_client_page))
         .with_state(manager);
 
