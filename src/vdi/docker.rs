@@ -412,6 +412,7 @@ impl DockerDriver {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn do_health_check(&self) -> Result<(), VdiError> {
         self.client
             .ping()
@@ -420,6 +421,7 @@ impl DockerDriver {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn do_list_managed_containers(&self) -> Result<Vec<String>, VdiError> {
         let mut filters = HashMap::new();
         filters.insert("label", vec!["rustguac.managed=true"]);

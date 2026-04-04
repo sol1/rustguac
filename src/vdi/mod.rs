@@ -66,6 +66,7 @@ pub struct ContainerInfo {
 
 /// Errors specific to VDI operations.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum VdiError {
     /// Docker API or communication error.
     Docker(String),
@@ -108,11 +109,13 @@ pub trait VdiDriver: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), VdiError>> + Send + 'a>>;
 
     /// Check if the driver backend is reachable (e.g. Docker socket exists).
+    #[allow(dead_code)]
     fn health_check(
         &self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), VdiError>> + Send + '_>>;
 
     /// List container IDs managed by rustguac (label `rustguac.managed=true`).
+    #[allow(dead_code)]
     fn list_managed_containers(
         &self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<String>, VdiError>> + Send + '_>>;
