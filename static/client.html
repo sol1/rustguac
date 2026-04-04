@@ -68,6 +68,56 @@
             cursor: pointer;
         }
         #banner-continue:hover { background: var(--primary-hover); }
+        #disconnected-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 3000;
+            justify-content: center;
+            align-items: center;
+        }
+        #disconnected-overlay.visible { display: flex; }
+        #disconnected-box {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 2em 3em;
+            max-width: 500px;
+            text-align: center;
+            font-family: monospace;
+            color: var(--text);
+        }
+        #disconnected-box h2 {
+            margin: 0 0 0.5em 0;
+            color: var(--text);
+            font-size: 1.3em;
+        }
+        #disconnected-box p {
+            color: var(--text-muted);
+            margin: 0 0 1.5em 0;
+            font-size: 0.95em;
+        }
+        #disconnected-box button {
+            padding: 0.6em 2em;
+            border: none;
+            font-family: monospace;
+            font-size: 1em;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 0 0.3em;
+        }
+        #btn-close-session {
+            background: var(--primary);
+            color: var(--text-on-primary);
+        }
+        #btn-close-session:hover { background: var(--primary-hover); }
+        #btn-reconnect {
+            background: var(--input);
+            color: var(--text);
+            border: 1px solid var(--border) !important;
+        }
+        #btn-reconnect:hover { background: var(--border); }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 
@@ -108,6 +158,16 @@
     <script src="/guac/SessionRecording.js"></script>
 </head>
 <body>
+    <div id="disconnected-overlay">
+        <div id="disconnected-box">
+            <h2 id="disconnected-title">Session Ended</h2>
+            <p id="disconnected-message">The remote session has been disconnected.</p>
+            <div>
+                <button id="btn-reconnect">Reconnect</button>
+                <button id="btn-close-session">Close</button>
+            </div>
+        </div>
+    </div>
     <div id="banner-overlay">
         <div id="banner-box">
             <div id="banner-text"></div>
@@ -773,14 +833,30 @@
                         statusEl.textContent = 'Connected'; statusEl.className = 'connected';
                         break;
                     case Guacamole.Client.State.DISCONNECTING: statusEl.textContent = 'Disconnecting...'; statusEl.className = ''; break;
-                    case Guacamole.Client.State.DISCONNECTED: statusEl.textContent = 'Disconnected'; statusEl.className = ''; break;
+                    case Guacamole.Client.State.DISCONNECTED:
+                        statusEl.textContent = 'Disconnected'; statusEl.className = '';
+                        document.getElementById('disconnected-overlay').className = 'visible';
+                        break;
                 }
             };
 
             client.onerror = function(status) {
                 statusEl.textContent = 'Error: ' + (status.message || 'Unknown error');
                 statusEl.className = '';
+                document.getElementById('disconnected-title').textContent = 'Connection Error';
+                document.getElementById('disconnected-message').textContent = status.message || 'An error occurred.';
+                document.getElementById('disconnected-overlay').className = 'visible';
             };
+
+            // Disconnected overlay buttons
+            document.getElementById('btn-close-session').addEventListener('click', function() {
+                window.close();
+                // window.close() may be blocked if not opened by script — navigate away as fallback
+                window.location.href = '/';
+            });
+            document.getElementById('btn-reconnect').addEventListener('click', function() {
+                window.location.reload();
+            });
 
             // ── Keyboard — attached to display so it doesn't steal from textarea ──
             displayEl.tabIndex = 0;
