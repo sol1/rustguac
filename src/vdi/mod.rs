@@ -100,7 +100,9 @@ pub trait VdiDriver: Send + Sync {
     fn start_or_reuse<'a>(
         &'a self,
         spec: &'a ContainerSpec,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ContainerInfo, VdiError>> + Send + 'a>>;
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<ContainerInfo, VdiError>> + Send + 'a>,
+    >;
 
     /// Stop and remove a container by ID.
     fn stop_container<'a>(
@@ -118,10 +120,14 @@ pub trait VdiDriver: Send + Sync {
     #[allow(dead_code)]
     fn list_managed_containers(
         &self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<String>, VdiError>> + Send + '_>>;
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<String>, VdiError>> + Send + '_>,
+    >;
 
     /// List managed containers with full metadata (for active desktops UI).
     fn list_managed_containers_detail(
         &self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<ManagedContainer>, VdiError>> + Send + '_>>;
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<ManagedContainer>, VdiError>> + Send + '_>,
+    >;
 }

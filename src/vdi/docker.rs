@@ -106,32 +106,44 @@ impl VdiDriver for DockerDriver {
     fn start_or_reuse<'a>(
         &'a self,
         spec: &'a ContainerSpec,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ContainerInfo, VdiError>> + Send + 'a>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<ContainerInfo, VdiError>> + Send + 'a>,
+    > {
         Box::pin(self.do_start_or_reuse(spec))
     }
 
     fn stop_container<'a>(
         &'a self,
         container_id: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), VdiError>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), VdiError>> + Send + 'a>>
+    {
         Box::pin(self.do_stop_container(container_id))
     }
 
     fn health_check(
         &self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), VdiError>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), VdiError>> + Send + '_>>
+    {
         Box::pin(self.do_health_check())
     }
 
     fn list_managed_containers(
         &self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<String>, VdiError>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<String>, VdiError>> + Send + '_>,
+    > {
         Box::pin(self.do_list_managed_containers())
     }
 
     fn list_managed_containers_detail(
         &self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<super::ManagedContainer>, VdiError>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<super::ManagedContainer>, VdiError>>
+                + Send
+                + '_,
+        >,
+    > {
         Box::pin(self.do_list_managed_containers_detail())
     }
 }
@@ -148,7 +160,10 @@ impl DockerDriver {
         // Defence in depth: reject anything that could break the shell command.
         // Username is pre-sanitized to [a-z0-9_] and password is hex-only,
         // but validate here as a safety net.
-        if !username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        if !username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
             return Err(VdiError::Docker("invalid characters in username".into()));
         }
         if !password.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -307,7 +322,10 @@ impl DockerDriver {
                     labels.insert("rustguac.entry".to_string(), entry_key.clone());
                 }
                 if let Some(timeout) = spec.idle_timeout_mins {
-                    labels.insert("rustguac.idle_timeout_mins".to_string(), timeout.to_string());
+                    labels.insert(
+                        "rustguac.idle_timeout_mins".to_string(),
+                        timeout.to_string(),
+                    );
                 }
                 labels.insert("rustguac.image".to_string(), spec.image.clone());
 
@@ -410,10 +428,7 @@ impl DockerDriver {
         // Stop with 5s grace period
         let _ = self
             .client
-            .stop_container(
-                container_id,
-                Some(StopContainerOptions { t: 5 }),
-            )
+            .stop_container(container_id, Some(StopContainerOptions { t: 5 }))
             .await;
 
         // Force remove
@@ -457,13 +472,12 @@ impl DockerDriver {
             .await
             .map_err(|e| VdiError::Docker(format!("failed to list containers: {}", e)))?;
 
-        Ok(containers
-            .into_iter()
-            .filter_map(|c| c.id)
-            .collect())
+        Ok(containers.into_iter().filter_map(|c| c.id).collect())
     }
 
-    async fn do_list_managed_containers_detail(&self) -> Result<Vec<super::ManagedContainer>, VdiError> {
+    async fn do_list_managed_containers_detail(
+        &self,
+    ) -> Result<Vec<super::ManagedContainer>, VdiError> {
         let mut filters = HashMap::new();
         filters.insert("label", vec!["rustguac.managed=true"]);
 
@@ -492,11 +506,13 @@ impl DockerDriver {
                     container_id: c.id.unwrap_or_default(),
                     container_name,
                     username: labels.get("rustguac.username").cloned().unwrap_or_default(),
-                    image: labels.get("rustguac.image").cloned()
+                    image: labels
+                        .get("rustguac.image")
+                        .cloned()
                         .or_else(|| c.image.clone())
                         .unwrap_or_default(),
                     entry_key: labels.get("rustguac.entry").cloned(),
-                    thumbnail_url: None, // populated by API layer
+                    thumbnail_url: None,       // populated by API layer
                     has_active_session: false, // populated by API layer
                     idle_timeout_mins: labels
                         .get("rustguac.idle_timeout_mins")

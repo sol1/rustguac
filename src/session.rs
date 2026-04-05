@@ -479,7 +479,9 @@ impl SessionManager {
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
                 });
-                (params, hostname, username, None, None, ssh_banner, None, None)
+                (
+                    params, hostname, username, None, None, ssh_banner, None, None,
+                )
             }
             SessionType::Rdp => {
                 let hostname = req.hostname.ok_or_else(|| {
@@ -692,13 +694,17 @@ impl SessionManager {
                 )
             }
             SessionType::Vdi => {
-                let vdi_cfg = self.config.vdi.as_ref().filter(|v| v.enabled).ok_or_else(|| {
-                    SessionError::VdiError("VDI feature is not enabled".into())
-                })?;
+                let vdi_cfg = self
+                    .config
+                    .vdi
+                    .as_ref()
+                    .filter(|v| v.enabled)
+                    .ok_or_else(|| SessionError::VdiError("VDI feature is not enabled".into()))?;
 
-                let vdi = self.vdi_driver.as_ref().ok_or_else(|| {
-                    SessionError::VdiError("VDI driver not initialized".into())
-                })?;
+                let vdi = self
+                    .vdi_driver
+                    .as_ref()
+                    .ok_or_else(|| SessionError::VdiError("VDI driver not initialized".into()))?;
 
                 let image = req.container_image.clone().ok_or_else(|| {
                     SessionError::ValidationError(
@@ -707,9 +713,7 @@ impl SessionManager {
                 })?;
 
                 // Check allowed images whitelist
-                if !vdi_cfg.allowed_images.is_empty()
-                    && !vdi_cfg.allowed_images.contains(&image)
-                {
+                if !vdi_cfg.allowed_images.is_empty() && !vdi_cfg.allowed_images.contains(&image) {
                     return Err(SessionError::VdiError(format!(
                         "image '{}' is not in the allowed list",
                         image
@@ -730,13 +734,15 @@ impl SessionManager {
                 // Merge env vars
                 let mut env = req.container_env.unwrap_or_default();
                 // Don't let user-provided env override the core VDI vars
-                env.entry("VDI_USERNAME".into()).or_insert(vdi_username.clone());
-                env.entry("VDI_PASSWORD".into()).or_insert(vdi_password.clone());
+                env.entry("VDI_USERNAME".into())
+                    .or_insert(vdi_username.clone());
+                env.entry("VDI_PASSWORD".into())
+                    .or_insert(vdi_password.clone());
 
                 // Resolve resource limits: entry overrides > config defaults
-                let cpu_limit = req.container_cpu_limit
-                    .unwrap_or(vdi_cfg.default_cpu_limit);
-                let memory_limit_mb = req.container_memory_limit
+                let cpu_limit = req.container_cpu_limit.unwrap_or(vdi_cfg.default_cpu_limit);
+                let memory_limit_mb = req
+                    .container_memory_limit
                     .unwrap_or(vdi_cfg.default_memory_limit);
 
                 let spec = crate::vdi::ContainerSpec {
@@ -763,9 +769,10 @@ impl SessionManager {
                     "Creating VDI session"
                 );
 
-                let info = vdi.start_or_reuse(&spec).await.map_err(|e| {
-                    SessionError::VdiError(e.to_string())
-                })?;
+                let info = vdi
+                    .start_or_reuse(&spec)
+                    .await
+                    .map_err(|e| SessionError::VdiError(e.to_string()))?;
 
                 if info.reused {
                     tracing::info!(
@@ -1408,7 +1415,8 @@ impl SessionManager {
 
     /// Path to a VDI container's thumbnail (persists across sessions).
     pub fn vdi_thumbnail_path(&self, container_name: &str) -> std::path::PathBuf {
-        self.thumbnails_dir().join(format!("vdi-{}.jpg", container_name))
+        self.thumbnails_dir()
+            .join(format!("vdi-{}.jpg", container_name))
     }
 
     /// Check if recording is enabled for a given session.
