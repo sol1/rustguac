@@ -13,7 +13,7 @@
         nav a:hover { text-decoration: underline; }
         nav .active { color: var(--primary); font-weight: bold; }
         #user-menu-wrapper { position: relative; float: right; }
-        #user-menu-btn { cursor: pointer; font-size: 0.95em; color: var(--text-muted); }
+        #user-menu-btn { cursor: pointer; font-size: 1.3em; color: var(--text-muted); }
         #user-menu-btn:hover { color: var(--text); }
         #user-menu { display:none; position:absolute; right:0; top:1.8em; background:var(--surface); border:1px solid var(--border); border-radius:6px; min-width:220px; z-index:50; padding:0.4em 0; }
         .um-section-label { padding:0.4em 0.9em; font-size:0.8em; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
@@ -305,8 +305,7 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
-        <a href="#" id="logout-item" style="color:var(--text-muted)">Logout</a>
-        <span id="user-menu-wrapper"><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item" id="my-creds-item">&#128273; My Credentials</div><div class="um-item" id="show-tour-item">&#9432; Welcome Tour</div></div></span>
+        <span id="user-menu-wrapper"><a href="#" id="logout-item" style="color:var(--text-muted);text-decoration:none;margin-right:1em">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item" id="my-creds-item">&#128273; My Credentials</div><div class="um-item" id="show-tour-item">&#9432; Welcome Tour</div></div></span>
     </nav>
 
     <div id="global-error"></div>
