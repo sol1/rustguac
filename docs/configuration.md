@@ -58,6 +58,8 @@ CIDR ranges controlling which hosts sessions can connect to. All default to loca
 | Key | Default | Description |
 |-----|---------|-------------|
 | `trusted_proxies` | `[]` | CIDRs of reverse proxies whose X-Forwarded-For to trust |
+| `rate_limit` | `false` | Enable API rate limiting. Not needed when behind a rate-limiting reverse proxy. |
+| `session_history_retention_days` | `90` | Days to keep session history in the database. 0 = keep forever. |
 
 ## `[tls]` section
 
@@ -198,6 +200,51 @@ accent_color = "#FF6600"
 Place the logo file in the `static_path` directory (e.g. `/opt/rustguac/static/acme-logo.png`). In Docker, mount it as a volume:
 ```
 -v /path/to/acme-logo.png:/opt/rustguac/static/acme-logo.png:ro
+```
+
+## `[recording]` section
+
+Controls session recording behaviour and disk management.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `path` | string | `recording_path` | Path for recording files. Overrides the top-level `recording_path`. |
+| `enabled` | bool | `true` | Whether recording is enabled globally. |
+| `max_disk_percent` | integer | `80` | Delete oldest recordings when disk usage exceeds this percent. 0 = disabled. |
+| `max_recordings` | integer | `0` | Keep at most this many recordings globally. 0 = unlimited. |
+| `rotation_interval_secs` | integer | `300` | How often (seconds) to run the rotation check. |
+
+```toml
+[recording]
+enabled = true
+max_disk_percent = 80
+max_recordings = 1000
+rotation_interval_secs = 300
+```
+
+## `[vdi]` section
+
+Enables VDI (Virtual Desktop Infrastructure) sessions using Docker containers. Each user gets an ephemeral Linux desktop in a Docker container, accessed via xrdp through guacd.
+
+**Prerequisites:** Docker must be installed on the host and the `rustguac` user must be in the `docker` group. See [VDI Desktop Containers](vdi.md) for full setup.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable VDI sessions. |
+| `docker_socket` | string | `/var/run/docker.sock` | Docker daemon socket path. |
+| `default_cpu_limit` | float | `0` | Default CPU limit for containers (fractional cores, e.g. 2.0). 0 = no limit. |
+| `default_memory_limit` | integer | `0` | Default memory limit in MB. 0 = no limit. |
+| `ready_timeout_secs` | integer | `30` | Seconds to wait for xrdp to become ready in a new container. |
+| `idle_timeout_mins` | integer | `60` | Minutes a container persists after last session disconnect. 0 = remove immediately. |
+| `allowed_images` | list | `[]` | Allowed Docker images (exact match). Empty = allow all. |
+| `home_base` | string | *(none)* | Base directory for persistent user home dirs. Each user gets `{home_base}/{username}` mounted into the container. |
+
+```toml
+[vdi]
+enabled = true
+idle_timeout_mins = 60
+home_base = "/vdi-homes"
+# allowed_images = ["myregistry/desktop:latest"]
 ```
 
 ## Environment variables
