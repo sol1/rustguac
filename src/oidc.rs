@@ -49,8 +49,27 @@ pub struct OidcState {
 
 /// Initialize OIDC client by discovering provider metadata.
 pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<OidcState, String> {
-    let http_client = openidconnect::reqwest::ClientBuilder::new()
-        .redirect(openidconnect::reqwest::redirect::Policy::none())
+    let mut builder = openidconnect::reqwest::ClientBuilder::new()
+        .redirect(openidconnect::reqwest::redirect::Policy::none());
+
+    if config.tls_skip_verify {
+        tracing::warn!(
+            "OIDC TLS certificate verification is DISABLED (tls_skip_verify = true). \
+             This exposes client_secret and tokens to MITM attacks — do NOT use in production."
+        );
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+
+    if let Some(ref ca_path) = config.ca_cert {
+        let pem = std::fs::read(ca_path)
+            .map_err(|e| format!("Failed to read OIDC CA cert {}: {}", ca_path, e))?;
+        let cert = reqwest::tls::Certificate::from_pem(&pem)
+            .map_err(|e| format!("Failed to parse OIDC CA cert {}: {}", ca_path, e))?;
+        builder = builder.add_root_certificate(cert);
+        tracing::info!("OIDC TLS: added custom CA certificate from {}", ca_path);
+    }
+
+    let http_client = builder
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
@@ -59,7 +78,7 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
 
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, &http_client)
         .await
-        .map_err(|e| format!("OIDC discovery failed: {}", e))?;
+        .map_err(|e| format!("OIDC discovery failed: {:?}", e))?;
 
     let client = CoreClient::from_provider_metadata(
         provider_metadata,

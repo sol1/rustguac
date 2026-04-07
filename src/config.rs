@@ -26,6 +26,14 @@ pub struct OidcConfig {
     /// Extra OIDC scopes to request beyond openid/email/profile (e.g. ["groups"]).
     #[serde(default)]
     pub extra_scopes: Vec<String>,
+    /// Skip TLS certificate verification for OIDC provider connections.
+    /// WARNING: Only use this for debugging — disabling verification exposes
+    /// client_secret and tokens to MITM attacks.
+    #[serde(default)]
+    pub tls_skip_verify: bool,
+    /// Path to a custom CA certificate (PEM) for verifying the OIDC provider.
+    /// Use this when your identity provider uses a private or internal CA.
+    pub ca_cert: Option<String>,
 }
 
 fn default_oidc_default_role() -> String {

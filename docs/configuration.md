@@ -112,6 +112,10 @@ Enables OpenID Connect authentication. When configured, the web UI shows a login
 | `default_role` | `operator` | Role assigned to new users on first login |
 | `groups_claim` | `groups` | JWT claim name containing group memberships |
 | `extra_scopes` | `[]` | Additional OIDC scopes to request |
+| `ca_cert` | — | Path to CA certificate (PEM) for verifying the OIDC provider |
+| `tls_skip_verify` | `false` | Skip TLS verification (debugging only — exposes secrets to MITM) |
+
+**Note:** `issuer_url` must match the discovered issuer URI **exactly**, including default ports and trailing slashes. For example, `https://idp.example.com/` and `https://idp.example.com` may be treated as different issuers. Check your provider's `.well-known/openid-configuration` for the canonical value.
 
 ## `[vault]` section
 

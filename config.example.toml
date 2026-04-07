@@ -140,6 +140,14 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 #
 # # Extra OIDC scopes to request beyond openid/email/profile.
 # extra_scopes = ["groups"]
+#
+# # Custom CA certificate (PEM) for verifying the OIDC provider.
+# # Use this when your IdP uses a private or internal CA not in the system trust store.
+# # ca_cert = "/etc/ssl/private/internal-ca.pem"
+#
+# # Skip TLS certificate verification for OIDC connections (default: false).
+# # WARNING: Only use for debugging — exposes client_secret and tokens to MITM attacks.
+# # tls_skip_verify = false
 
 # ─── Vault / Address Book ──────────────────────────────────────────────────
 #
