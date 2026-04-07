@@ -1734,17 +1734,29 @@ Guacamole.Client = function(tunnel) {
             // Flush display, send sync when done
             display.flush(function displaySyncComplete() {
 
-                // Synchronize all audio players
-                for (var index in audioPlayers) {
-                    var audioPlayer = audioPlayers[index];
-                    if (audioPlayer)
-                        audioPlayer.sync();
-                }
+                var sendSync = function() {
 
-                // Send sync response to server
-                if (timestamp !== currentTimestamp) {
-                    tunnel.sendMessage("sync", timestamp);
-                    currentTimestamp = timestamp;
+                    // Synchronize all audio players
+                    for (var index in audioPlayers) {
+                        var audioPlayer = audioPlayers[index];
+                        if (audioPlayer)
+                            audioPlayer.sync();
+                    }
+
+                    // Send sync response to server
+                    if (timestamp !== currentTimestamp) {
+                        tunnel.sendMessage("sync", timestamp);
+                        currentTimestamp = timestamp;
+                    }
+
+                };
+
+                // Gate sync response on H.264 decode completion so that
+                // guacd receives accurate backpressure from decode speed
+                if (guac_client._h264Decoder) {
+                    guac_client._h264Decoder.waitForPending(sendSync);
+                } else {
+                    sendSync();
                 }
 
             }, timestamp, frames);

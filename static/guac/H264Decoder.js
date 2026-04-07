@@ -44,20 +44,41 @@ Guacamole.H264Decoder = function H264Decoder(display) {
     var timestamp = 0;
 
     /**
-     * The target layer for rendering decoded frames.
+     * Number of frames submitted to the decoder but not yet output.
      *
      * @private
-     * @type {?Guacamole.Display.VisibleLayer}
+     * @type {number}
      */
-    var targetLayer = null;
+    var pendingDecodes = 0;
 
     /**
-     * Pending draw position for the current frame.
+     * Per-frame draw positions keyed by chunk timestamp. The VideoDecoder
+     * output callback uses this to draw each frame at the correct position,
+     * avoiding shared mutable state between concurrent decodes.
      *
      * @private
+     * @type {Object.<number, {layer: Guacamole.Display.VisibleLayer, x: number, y: number}>}
      */
-    var pendingX = 0;
-    var pendingY = 0;
+    var pendingPositions = {};
+
+    /**
+     * Callbacks waiting for all pending decodes to complete (used by
+     * waitForPending to gate the Guacamole sync response).
+     *
+     * @private
+     * @type {function[]}
+     */
+    var flushResolvers = [];
+
+    /**
+     * Maximum number of frames allowed in the WebCodecs decode queue before
+     * delta frames are dropped. At 30fps, 5 frames is ~167ms of latency.
+     *
+     * @private
+     * @constant
+     * @type {number}
+     */
+    var MAX_DECODE_QUEUE = 5;
 
     /**
      * Total frames decoded.
@@ -74,9 +95,38 @@ Guacamole.H264Decoder = function H264Decoder(display) {
     this.framesDropped = 0;
 
     /**
+     * Total number of sync responses that were delayed waiting for H.264
+     * decode completion.
+     *
+     * @type {number}
+     */
+    this.syncsGated = 0;
+
+    /**
+     * Peak decode queue depth seen during this session.
+     *
+     * @type {number}
+     */
+    this.peakQueueDepth = 0;
+
+    /**
      * Reference to this for closures.
      */
     var self = this;
+
+    /**
+     * If pendingDecodes has reached zero, fire and clear all flush resolvers.
+     *
+     * @private
+     */
+    function resolveIfIdle() {
+        if (pendingDecodes <= 0 && flushResolvers.length > 0) {
+            var resolvers = flushResolvers;
+            flushResolvers = [];
+            for (var i = 0; i < resolvers.length; i++)
+                resolvers[i]();
+        }
+    }
 
     /**
      * Initialise the VideoDecoder if not already done.
@@ -99,19 +149,24 @@ Guacamole.H264Decoder = function H264Decoder(display) {
             output: function(frame) {
                 self.framesDecoded++;
                 try {
-                    // Draw the decoded VideoFrame directly to the layer's canvas
-                    if (targetLayer) {
-                        var canvas = targetLayer.getCanvas();
+                    var pos = pendingPositions[frame.timestamp];
+                    delete pendingPositions[frame.timestamp];
+                    if (pos && pos.layer) {
+                        var canvas = pos.layer.getCanvas();
                         var ctx = canvas.getContext('2d');
-                        ctx.drawImage(frame, pendingX, pendingY);
+                        ctx.drawImage(frame, pos.x, pos.y);
                     }
                 } finally {
                     // CRITICAL: always close VideoFrame to release GPU memory
                     frame.close();
+                    pendingDecodes--;
+                    resolveIfIdle();
                 }
             },
             error: function(e) {
                 self.framesDropped++;
+                pendingDecodes--;
+                resolveIfIdle();
                 console.error('[rustguac] H.264 decode error:', e.message);
             }
         });
@@ -146,9 +201,18 @@ Guacamole.H264Decoder = function H264Decoder(display) {
         if (!decoder || decoder.state === 'closed')
             return;
 
-        targetLayer = layer;
-        pendingX = x;
-        pendingY = y;
+        // Track peak queue depth for diagnostics
+        if (decoder.decodeQueueSize > self.peakQueueDepth)
+            self.peakQueueDepth = decoder.decodeQueueSize;
+
+        // Drop delta frames when the decode queue is too deep (safety valve
+        // for transient overload, e.g. tab backgrounding). Never drop
+        // keyframes — the next keyframe will restore a clean picture.
+        if (!isKeyFrame && decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+            self.framesDropped++;
+            console.warn('[rustguac] H.264: dropping delta frame, queue depth ' + decoder.decodeQueueSize);
+            return;
+        }
 
         try {
             var chunk = new EncodedVideoChunk({
@@ -156,6 +220,10 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                 timestamp: timestamp,
                 data: nalData
             });
+
+            // Store per-frame position before submitting to decoder
+            pendingPositions[timestamp] = {layer: layer, x: x, y: y};
+            pendingDecodes++;
             timestamp += 33333; // ~30fps in microseconds
 
             decoder.decode(chunk);
@@ -163,6 +231,47 @@ Guacamole.H264Decoder = function H264Decoder(display) {
             self.framesDropped++;
             console.error('[rustguac] H.264 chunk error:', e.message);
         }
+    };
+
+    /**
+     * Wait for all pending decodes to complete, then invoke the callback.
+     * Used to gate the Guacamole sync response so that guacd receives
+     * accurate backpressure from the client's decode speed.
+     *
+     * Includes a 1-second safety timeout to prevent permanent stall if the
+     * decoder enters an unexpected state.
+     *
+     * @param {function} callback - Called when all pending decodes are done.
+     */
+    this.waitForPending = function(callback) {
+        if (pendingDecodes <= 0 || !decoder || decoder.state === 'closed') {
+            callback();
+            return;
+        }
+
+        self.syncsGated++;
+        var waitStart = performance.now();
+        var waitingOn = pendingDecodes;
+
+        var resolved = false;
+        var timer = setTimeout(function() {
+            if (!resolved) {
+                resolved = true;
+                console.warn('[rustguac] H.264: sync wait timeout (' + waitingOn + ' frames pending), forcing flush');
+                callback();
+            }
+        }, 1000);
+
+        flushResolvers.push(function() {
+            if (!resolved) {
+                resolved = true;
+                clearTimeout(timer);
+                var elapsed = (performance.now() - waitStart).toFixed(1);
+                if (elapsed > 16) // only log if wait was > 1 frame (~16ms)
+                    console.log('[rustguac] H.264: sync gated ' + elapsed + 'ms (' + waitingOn + ' frames)');
+                callback();
+            }
+        });
     };
 
     /**
@@ -180,6 +289,33 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                 // Decoder may be in error state
             }
         }
+        pendingDecodes = 0;
+        pendingPositions = {};
+        var resolvers = flushResolvers;
+        flushResolvers = [];
+        for (var i = 0; i < resolvers.length; i++)
+            resolvers[i]();
+    };
+
+    /**
+     * Return current decoder statistics for console debugging.
+     * Usage: open browser console and run:
+     *   client._h264Decoder.stats()
+     *
+     * @returns {Object} Decoder statistics.
+     */
+    this.stats = function() {
+        var s = {
+            framesDecoded: self.framesDecoded,
+            framesDropped: self.framesDropped,
+            syncsGated: self.syncsGated,
+            pendingDecodes: pendingDecodes,
+            decodeQueueSize: decoder ? decoder.decodeQueueSize : 0,
+            peakQueueDepth: self.peakQueueDepth,
+            decoderState: decoder ? decoder.state : 'none'
+        };
+        console.table(s);
+        return s;
     };
 
     /**
@@ -195,6 +331,12 @@ Guacamole.H264Decoder = function H264Decoder(display) {
         }
         decoder = null;
         configured = false;
+        pendingDecodes = 0;
+        pendingPositions = {};
+        var resolvers = flushResolvers;
+        flushResolvers = [];
+        for (var i = 0; i < resolvers.length; i++)
+            resolvers[i]();
     };
 
 };

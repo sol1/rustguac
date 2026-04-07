@@ -264,6 +264,8 @@
 
             var tunnel = new Guacamole.WebSocketTunnel(wsUrl);
             var client = new Guacamole.Client(tunnel);
+            // Expose for console debugging (e.g. client._h264Decoder.stats())
+            window.__guac_client = client;
             setupClient(client, tunnel);
         }
 
