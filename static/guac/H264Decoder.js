@@ -71,16 +71,6 @@ Guacamole.H264Decoder = function H264Decoder(display) {
     var flushResolvers = [];
 
     /**
-     * Maximum number of frames allowed in the WebCodecs decode queue before
-     * delta frames are dropped. At 30fps, 5 frames is ~167ms of latency.
-     *
-     * @private
-     * @constant
-     * @type {number}
-     */
-    var MAX_DECODE_QUEUE = 5;
-
-    /**
      * Total frames decoded.
      *
      * @type {number}
@@ -204,15 +194,6 @@ Guacamole.H264Decoder = function H264Decoder(display) {
         // Track peak queue depth for diagnostics
         if (decoder.decodeQueueSize > self.peakQueueDepth)
             self.peakQueueDepth = decoder.decodeQueueSize;
-
-        // Drop delta frames when the decode queue is too deep (safety valve
-        // for transient overload, e.g. tab backgrounding). Never drop
-        // keyframes — the next keyframe will restore a clean picture.
-        if (!isKeyFrame && decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
-            self.framesDropped++;
-            console.warn('[rustguac] H.264: dropping delta frame, queue depth ' + decoder.decodeQueueSize);
-            return;
-        }
 
         try {
             var chunk = new EncodedVideoChunk({
