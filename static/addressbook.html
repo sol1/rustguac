@@ -1763,21 +1763,74 @@
                 var body = document.createElement('div');
                 body.className = 'hop-card-body' + (hop.expanded ? ' expanded' : '');
 
+                var fpDisplay = hop.host_key_fingerprint || (hop.host_key ? 'pinned' : '');
+                var fpColor = hop.host_key ? 'color:var(--accent,#0a0)' : 'color:var(--text-muted,#888)';
+                var fpLabel = hop.host_key ? fpDisplay : 'not pinned';
+                var verifyLabel = hop.host_key ? 'Re-verify' : 'Verify Host Key';
+
                 body.innerHTML =
                     '<label>SSH Port<input type="number" data-hop="' + i + '" data-field="port" value="' + (hop.port || 22) + '"></label>' +
                     '<label>Username<input type="text" data-hop="' + i + '" data-field="username" value="' + escapeAttr(hop.username || '') + '"></label>' +
                     '<label>Password<input type="password" data-hop="' + i + '" data-field="password" value="' + escapeAttr(hop.password || '') + '"></label>' +
-                    '<label>Private key (PEM)<textarea data-hop="' + i + '" data-field="private_key" rows="2" style="resize:vertical;font-size:0.85em" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----">' + escapeHtml(hop.private_key || '') + '</textarea></label>';
+                    '<label>Private key (PEM)<textarea data-hop="' + i + '" data-field="private_key" rows="2" style="resize:vertical;font-size:0.85em" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----">' + escapeHtml(hop.private_key || '') + '</textarea></label>' +
+                    '<div style="margin-top:0.5em;display:flex;align-items:center;gap:0.6em">' +
+                        '<button type="button" class="hop-verify-btn" data-hop="' + i + '" style="padding:0.3em 0.7em;font-size:0.85em;font-family:monospace;cursor:pointer;background:var(--input,#222);color:var(--accent,#0f0);border:1px solid var(--border,#333);border-radius:3px">' + verifyLabel + '</button>' +
+                        '<span class="hop-fp" data-hop="' + i + '" style="font-size:0.8em;' + fpColor + '">' + escapeHtml(fpLabel) + '</span>' +
+                    '</div>';
 
                 var inputs = body.querySelectorAll('input, textarea');
                 for (var j = 0; j < inputs.length; j++) {
                     inputs[j].addEventListener('input', onHopFieldChange);
                 }
 
+                var verifyBtn = body.querySelector('.hop-verify-btn');
+                verifyBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var idx = parseInt(this.getAttribute('data-hop'));
+                    probeHostKey(idx);
+                });
+
                 card.appendChild(body);
                 container.appendChild(card);
             });
             updateFlowDiagram();
+        }
+
+        function probeHostKey(hopIndex) {
+            var hop = hopList[hopIndex];
+            if (!hop || !hop.hostname || !hop.hostname.trim()) {
+                alert('Enter a hostname first.');
+                return;
+            }
+            var btn = document.querySelector('.hop-verify-btn[data-hop="' + hopIndex + '"]');
+            var fpSpan = document.querySelector('.hop-fp[data-hop="' + hopIndex + '"]');
+            if (btn) { btn.disabled = true; btn.textContent = 'Probing...'; }
+
+            fetch('/api/ssh/probe-host-key', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ hostname: hop.hostname.trim(), port: hop.port || 22 })
+            }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+            .then(function(res) {
+                if (!res.ok) {
+                    alert('Probe failed: ' + (res.data.error || 'unknown error'));
+                    if (btn) { btn.disabled = false; btn.textContent = hop.host_key ? 'Re-verify' : 'Verify Host Key'; }
+                    return;
+                }
+                var msg = 'Host key for ' + hop.hostname.trim() + ':' + (hop.port || 22) + ':\n\n' +
+                    res.data.fingerprint + ' (' + res.data.algorithm + ')\n\n' +
+                    'Trust this key?';
+                if (confirm(msg)) {
+                    hopList[hopIndex].host_key = res.data.host_key;
+                    hopList[hopIndex].host_key_fingerprint = res.data.fingerprint;
+                    renderHops();
+                } else {
+                    if (btn) { btn.disabled = false; btn.textContent = hop.host_key ? 'Re-verify' : 'Verify Host Key'; }
+                }
+            }).catch(function(e) {
+                alert('Probe failed: ' + e.message);
+                if (btn) { btn.disabled = false; btn.textContent = hop.host_key ? 'Re-verify' : 'Verify Host Key'; }
+            });
         }
 
         function onHopFieldChange(e) {
@@ -2079,7 +2132,7 @@
                 // Populate hop list from jump_hosts array
                 if (entryData.jump_hosts && entryData.jump_hosts.length > 0) {
                     hopList = entryData.jump_hosts.map(function(h) {
-                        return { hostname: h.hostname || '', port: h.port || 22, username: h.username || '', password: '', private_key: '', expanded: false };
+                        return { hostname: h.hostname || '', port: h.port || 22, username: h.username || '', password: '', private_key: '', host_key: h.host_key || '', host_key_fingerprint: h.host_key_fingerprint || '', expanded: false };
                     });
                     renderHops();
                     // Auto-expand the tunnel section
@@ -2236,6 +2289,7 @@
                         var hop = { hostname: h.hostname.trim(), port: h.port || 22, username: h.username || '' };
                         if (h.password) hop.password = h.password;
                         if (h.private_key) hop.private_key = h.private_key;
+                        if (h.host_key) hop.host_key = h.host_key;
                         return hop;
                     });
                 }

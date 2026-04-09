@@ -923,6 +923,7 @@ async fn run_server(config: Config, database: Db) {
             "/api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect",
             post(api::ab_connect_entry),
         )
+        .route("/api/ssh/probe-host-key", post(api::ssh_probe_host_key))
         .merge(session_create_route)
         .with_state(manager.clone());
     if rate_limit_enabled {

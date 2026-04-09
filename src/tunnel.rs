@@ -9,10 +9,12 @@
 
 use russh::client;
 use russh::keys::key::PrivateKeyWithHashAlg;
+use russh::keys::{HashAlg, PublicKey};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -27,6 +29,10 @@ pub struct JumpHost {
     pub password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_key: Option<String>,
+    /// SSH server public key in OpenSSH format (e.g. "ssh-ed25519 AAAA...").
+    /// Stored on first verification and checked on subsequent connections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<String>,
 }
 
 fn default_ssh_port() -> u16 {
@@ -39,6 +45,9 @@ pub struct JumpHostInfo {
     pub hostname: String,
     pub port: u16,
     pub username: String,
+    /// SSH server host key fingerprint (e.g. "SHA256:...") if pinned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_key_fingerprint: Option<String>,
 }
 
 /// A running SSH tunnel. Dropping or cancelling shuts it down.
@@ -71,6 +80,9 @@ pub struct TunnelConfig {
     pub jump_private_key: Option<String>,
     pub target_host: String,
     pub target_port: u16,
+    /// Expected SSH server host key in OpenSSH format. If set, the connection
+    /// is rejected when the server presents a different key.
+    pub expected_host_key: Option<String>,
 }
 
 /// Errors from tunnel setup.
@@ -93,20 +105,143 @@ impl std::fmt::Display for TunnelError {
     }
 }
 
-/// Minimal handler for the SSH client — accepts all server keys.
-struct TunnelHandler;
+/// Compute the SHA-256 fingerprint of an OpenSSH-format public key string.
+pub fn fingerprint_openssh_key(openssh_key: &str) -> Result<String, String> {
+    let pubkey = russh::keys::parse_public_key_base64(
+        openssh_key
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or(openssh_key),
+    )
+    .map_err(|e| format!("invalid host key: {}", e))?;
+    Ok(pubkey.fingerprint(HashAlg::Sha256).to_string())
+}
+
+/// SSH client handler that verifies the server's host key against an expected
+/// key stored in the address book. If no expected key is set (legacy entries),
+/// the connection is accepted with a warning log.
+struct TunnelHandler {
+    expected_key: Option<String>,
+    hop_index: usize,
+    jump_host: String,
+}
 
 impl client::Handler for TunnelHandler {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::PublicKey,
+        server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        // For jump hosts, we accept any server key.
-        // The real authentication happens at the protocol level (RDP/VNC/SSH).
+        let fingerprint = server_public_key.fingerprint(HashAlg::Sha256);
+        let algorithm = server_public_key.algorithm();
+
+        let Some(ref expected) = self.expected_key else {
+            tracing::warn!(
+                hop = self.hop_index,
+                host = %self.jump_host,
+                fingerprint = %fingerprint,
+                algorithm = %algorithm,
+                "SSH host key not pinned — accepting on trust (TOFU). \
+                 Pin this key in the address book to prevent MITM attacks."
+            );
+            return Ok(true);
+        };
+
+        // Parse the stored OpenSSH key and compare
+        let expected_pubkey = match russh::keys::parse_public_key_base64(
+            expected.split_whitespace().nth(1).unwrap_or(expected),
+        ) {
+            Ok(k) => k,
+            Err(e) => {
+                tracing::error!(
+                    hop = self.hop_index,
+                    host = %self.jump_host,
+                    error = %e,
+                    "Failed to parse stored host key — accepting connection but key verification skipped"
+                );
+                return Ok(true);
+            }
+        };
+
+        if *server_public_key == expected_pubkey {
+            tracing::debug!(
+                hop = self.hop_index,
+                host = %self.jump_host,
+                fingerprint = %fingerprint,
+                "SSH host key verified"
+            );
+            Ok(true)
+        } else {
+            let expected_fp = expected_pubkey.fingerprint(HashAlg::Sha256);
+            tracing::error!(
+                hop = self.hop_index,
+                host = %self.jump_host,
+                expected = %expected_fp,
+                actual = %fingerprint,
+                "SSH HOST KEY MISMATCH — possible MITM attack! \
+                 Update the host key in the address book if the server was re-provisioned."
+            );
+            Ok(false)
+        }
+    }
+}
+
+/// Handler used by `probe_host_key` to capture the server's public key
+/// during key exchange without authenticating.
+struct ProbeHandler {
+    captured_key: Arc<Mutex<Option<String>>>,
+}
+
+impl client::Handler for ProbeHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKey,
+    ) -> Result<bool, Self::Error> {
+        let openssh = server_public_key
+            .to_openssh()
+            .map_err(|e| russh::Error::Keys(russh::keys::Error::SshKey(e)))?;
+        *self.captured_key.lock().await = Some(openssh);
         Ok(true)
     }
+}
+
+/// Probe an SSH server to retrieve its host key without authenticating.
+/// Returns the public key in OpenSSH format.
+pub async fn probe_host_key(hostname: &str, port: u16) -> Result<String, TunnelError> {
+    let addr = format!("{}:{}", hostname, port);
+    let captured = Arc::new(Mutex::new(None));
+
+    let ssh_config = Arc::new(client::Config {
+        ..Default::default()
+    });
+
+    let handler = ProbeHandler {
+        captured_key: captured.clone(),
+    };
+
+    // Connect with a 10-second timeout — we only need the key exchange
+    let handle = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client::connect(ssh_config, &addr, handler),
+    )
+    .await
+    .map_err(|_| TunnelError::Ssh(0, format!("timeout probing host key for {}", addr)))?
+    .map_err(|e| TunnelError::Ssh(0, format!("failed to probe host key for {}: {}", addr, e)))?;
+
+    // Disconnect cleanly
+    let _ = handle
+        .disconnect(russh::Disconnect::ByApplication, "", "")
+        .await;
+
+    let result = captured
+        .lock()
+        .await
+        .take()
+        .ok_or_else(|| TunnelError::Ssh(0, format!("no host key received from {}", addr)));
+    result
 }
 
 /// Start a multi-hop SSH tunnel chain.
@@ -157,6 +292,7 @@ pub async fn start_chain(
             jump_private_key: hop.private_key.clone(),
             target_host: fwd_host,
             target_port: fwd_port,
+            expected_host_key: hop.host_key.clone(),
         };
 
         let tunnel = start(config, i).await?;
@@ -197,9 +333,15 @@ pub async fn start(config: TunnelConfig, hop_index: usize) -> Result<SshTunnel, 
         ..Default::default()
     });
 
+    let handler = TunnelHandler {
+        expected_key: config.expected_host_key,
+        hop_index,
+        jump_host: jump_addr.clone(),
+    };
+
     let mut handle = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        client::connect(ssh_config, &jump_addr, TunnelHandler),
+        client::connect(ssh_config, &jump_addr, handler),
     )
     .await
     .map_err(|_| {

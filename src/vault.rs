@@ -183,6 +183,7 @@ impl AddressBookEntry {
                     username: self.jump_username.clone().unwrap_or_default(),
                     password: self.jump_password.clone(),
                     private_key: self.jump_private_key.clone(),
+                    host_key: None,
                 }]);
             }
         }
@@ -286,6 +287,9 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
                     hostname: h.hostname.clone(),
                     port: h.port,
                     username: h.username.clone(),
+                    host_key_fingerprint: h.host_key.as_ref().and_then(|k| {
+                        tunnel::fingerprint_openssh_key(k).ok()
+                    }),
                 })
                 .collect()
         });

@@ -835,6 +835,7 @@ impl SessionManager {
                     username: req.jump_username.clone().unwrap_or_default(),
                     password: req.jump_password.clone(),
                     private_key: req.jump_private_key.clone(),
+                    host_key: None,
                 }]
             } else {
                 Vec::new()

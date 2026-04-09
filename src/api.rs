@@ -1727,6 +1727,57 @@ pub struct ConnectRequest {
     pub domain: Option<String>,
 }
 
+/// POST /api/ssh/probe-host-key — Probe an SSH server to retrieve its host key.
+pub async fn ssh_probe_host_key(
+    identity: Option<Extension<AuthIdentity>>,
+    axum::Json(body): axum::Json<ProbeHostKeyRequest>,
+) -> impl IntoResponse {
+    // Require admin or poweruser
+    match &identity {
+        Some(Extension(id)) if id.has_role("poweruser") => {}
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                axum::Json(serde_json::json!({"error": "requires poweruser or admin role"})),
+            )
+                .into_response();
+        }
+    }
+
+    let port = body.port.unwrap_or(22);
+    match crate::tunnel::probe_host_key(&body.hostname, port).await {
+        Ok(host_key) => {
+            let fingerprint = crate::tunnel::fingerprint_openssh_key(&host_key)
+                .unwrap_or_else(|_| "unknown".into());
+            let algorithm = host_key
+                .split_whitespace()
+                .next()
+                .unwrap_or("unknown")
+                .to_string();
+            (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "host_key": host_key,
+                    "fingerprint": fingerprint,
+                    "algorithm": algorithm,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            axum::Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ProbeHostKeyRequest {
+    pub hostname: String,
+    pub port: Option<u16>,
+}
+
 /// POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect — Create session from entry.
 #[allow(clippy::too_many_arguments)]
 pub async fn ab_connect_entry(
@@ -2143,6 +2194,10 @@ pub async fn ab_update_entry(
                                 .private_key
                                 .clone()
                                 .or_else(|| old.and_then(|o| o.private_key.clone())),
+                            host_key: hop
+                                .host_key
+                                .clone()
+                                .or_else(|| old.and_then(|o| o.host_key.clone())),
                         }
                     })
                     .collect();
