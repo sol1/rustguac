@@ -108,10 +108,7 @@ impl std::fmt::Display for TunnelError {
 /// Compute the SHA-256 fingerprint of an OpenSSH-format public key string.
 pub fn fingerprint_openssh_key(openssh_key: &str) -> Result<String, String> {
     let pubkey = russh::keys::parse_public_key_base64(
-        openssh_key
-            .split_whitespace()
-            .nth(1)
-            .unwrap_or(openssh_key),
+        openssh_key.split_whitespace().nth(1).unwrap_or(openssh_key),
     )
     .map_err(|e| format!("invalid host key: {}", e))?;
     Ok(pubkey.fingerprint(HashAlg::Sha256).to_string())
