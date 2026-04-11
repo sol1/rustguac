@@ -377,6 +377,41 @@ impl SessionManager {
         req: CreateSessionRequest,
         created_by: String,
     ) -> Result<SessionInfo, SessionError> {
+        // Enforce session limits (only count active/pending sessions)
+        {
+            let sessions = self.sessions.read().await;
+            let max_global = self.config.max_sessions;
+            let max_per_user = self.config.max_sessions_per_user;
+
+            if max_global > 0 {
+                let active_count = sessions.values().count(); // includes all states still in HashMap
+                if active_count >= max_global {
+                    return Err(SessionError::ValidationError(format!(
+                        "maximum concurrent sessions reached ({})",
+                        max_global
+                    )));
+                }
+            }
+
+            if max_per_user > 0 {
+                let mut user_count = 0usize;
+                for session in sessions.values() {
+                    let s = session.lock().await;
+                    if s.created_by == created_by
+                        && matches!(s.status, SessionStatus::Pending | SessionStatus::Active)
+                    {
+                        user_count += 1;
+                    }
+                }
+                if user_count >= max_per_user {
+                    return Err(SessionError::ValidationError(format!(
+                        "maximum sessions per user reached ({})",
+                        max_per_user
+                    )));
+                }
+            }
+        }
+
         let session_id = Uuid::new_v4();
         let raw_width = req.width.unwrap_or(1920);
         let raw_height = req.height.unwrap_or(1080);
@@ -1399,6 +1434,40 @@ impl SessionManager {
             self.delete_session(id).await;
         }
         count
+    }
+
+    /// Remove sessions in terminal states (Completed, Error, Expired) that have
+    /// been in that state longer than the configured cleanup delay. The session
+    /// history in SQLite is not affected — this only frees in-memory state.
+    pub async fn reap_completed_sessions(&self) -> usize {
+        let delay = std::time::Duration::from_secs(self.config.session_cleanup_delay_secs);
+        let now = Utc::now();
+        let mut to_remove = Vec::new();
+
+        {
+            let sessions = self.sessions.read().await;
+            for (id, session) in sessions.iter() {
+                let session = session.lock().await;
+                match session.status {
+                    SessionStatus::Completed | SessionStatus::Error | SessionStatus::Expired => {
+                        let age = now.signed_duration_since(session.created_at);
+                        if age.to_std().unwrap_or_default() > delay {
+                            to_remove.push(*id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if !to_remove.is_empty() {
+            let mut sessions = self.sessions.write().await;
+            for id in &to_remove {
+                sessions.remove(id);
+            }
+        }
+
+        to_remove.len()
     }
 
     pub fn recording_path(&self) -> &std::path::Path {

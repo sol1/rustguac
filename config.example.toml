@@ -51,6 +51,18 @@ session_max_duration_secs = 28800
 # Default: 86400 (24 hours)
 # auth_session_ttl_secs = 86400
 
+# ─── Session Limits ──────────────────────────────────────────────────────────
+
+# Maximum concurrent sessions (all types). Default: 500. Set to 0 for unlimited.
+# max_sessions = 500
+
+# Maximum concurrent sessions per user. Default: 50. Set to 0 for unlimited.
+# max_sessions_per_user = 50
+
+# Seconds to keep completed sessions in memory before cleanup.
+# Session history in SQLite is not affected. Default: 300 (5 minutes).
+# session_cleanup_delay_secs = 300
+
 # ─── Browser Sessions (Xvnc + Chromium) ──────────────────────────────────────
 
 # Path to the Xvnc binary (from tigervnc-standalone-server).

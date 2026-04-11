@@ -709,6 +709,25 @@ async fn run_server(config: Config, database: Db) {
         });
     }
 
+    // Spawn background task to clean completed sessions from memory
+    {
+        let cleanup_manager = manager.clone();
+        let cleanup_interval =
+            std::cmp::max(cleanup_manager.config().session_cleanup_delay_secs / 2, 30);
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(cleanup_interval));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                let cleaned = cleanup_manager.reap_completed_sessions().await;
+                if cleaned > 0 {
+                    tracing::debug!("Cleaned up {} completed sessions from memory", cleaned);
+                }
+            }
+        });
+    }
+
     // Spawn VDI container reaper (cleans up idle containers)
     if let Some(ref vdi_cfg) = manager.config().vdi {
         if vdi_cfg.enabled {

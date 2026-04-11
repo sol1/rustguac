@@ -344,6 +344,19 @@ pub struct Config {
     #[serde(default = "default_localhost_networks")]
     pub web_allowed_networks: Vec<String>,
 
+    /// Maximum concurrent sessions (all types). Default: 500. Set to 0 for unlimited.
+    #[serde(default = "default_max_sessions")]
+    pub max_sessions: usize,
+
+    /// Maximum concurrent sessions per user. Default: 50. Set to 0 for unlimited.
+    #[serde(default = "default_max_sessions_per_user")]
+    pub max_sessions_per_user: usize,
+
+    /// Seconds to keep completed/error/expired sessions in memory before cleanup.
+    /// Default: 300 (5 minutes). The session history in SQLite is not affected.
+    #[serde(default = "default_session_cleanup_delay_secs")]
+    pub session_cleanup_delay_secs: u64,
+
     /// Enable API rate limiting. Default: false.
     /// When behind a reverse proxy (HAProxy, nginx) or access gateway (KnockNoc),
     /// rate limiting is typically handled upstream and not needed here.
@@ -860,6 +873,18 @@ fn default_session_max_duration_secs() -> u64 {
     8 * 3600 // 8 hours
 }
 
+fn default_max_sessions() -> usize {
+    500
+}
+
+fn default_max_sessions_per_user() -> usize {
+    50
+}
+
+fn default_session_cleanup_delay_secs() -> u64 {
+    300 // 5 minutes
+}
+
 fn default_auth_session_ttl_secs() -> u64 {
     86400 // 24 hours
 }
@@ -933,6 +958,9 @@ impl Default for Config {
             vnc_allowed_networks: default_localhost_networks(),
             web_allowed_networks: default_localhost_networks(),
             session_history_retention_days: default_session_history_retention_days(),
+            max_sessions: default_max_sessions(),
+            max_sessions_per_user: default_max_sessions_per_user(),
+            session_cleanup_delay_secs: default_session_cleanup_delay_secs(),
             rate_limit: false,
             trusted_proxies: Vec::new(),
             tls: None,
