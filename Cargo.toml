@@ -79,7 +79,7 @@ webpki-roots = "1"
 russh = "0.60"
 
 # Docker (VDI container management)
-bollard = "0.18"
+bollard = "0.20"
 
 # LUKS drive management (uid/gid for chown)
 libc = "0.2"

@@ -1,12 +1,12 @@
 //! Docker-based VDI driver using bollard (unix socket).
 
 use super::{ContainerInfo, ContainerSpec, VdiDriver, VdiError};
-use bollard::container::{
-    Config as ContainerConfig, CreateContainerOptions, ListContainersOptions,
-    RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
-};
 use bollard::exec::CreateExecOptions;
-use bollard::models::{HostConfig, PortBinding};
+use bollard::models::{ContainerCreateBody, HostConfig, PortBinding};
+use bollard::query_parameters::{
+    CreateContainerOptions, ListContainersOptions, RemoveContainerOptions, StartContainerOptions,
+    StopContainerOptions,
+};
 use bollard::Docker;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -247,7 +247,7 @@ impl DockerDriver {
                 // Container exists but stopped — start it
                 tracing::info!(container = %name, "Starting stopped VDI container");
                 self.client
-                    .start_container(&name, None::<StartContainerOptions<String>>)
+                    .start_container(&name, None::<StartContainerOptions>)
                     .await
                     .map_err(|e| VdiError::Docker(format!("failed to start container: {}", e)))?;
 
@@ -368,7 +368,7 @@ impl DockerDriver {
                     ..Default::default()
                 };
 
-                let config = ContainerConfig {
+                let config = ContainerCreateBody {
                     image: Some(spec.image.clone()),
                     env: Some(env_vec),
                     labels: Some(labels),
@@ -377,7 +377,7 @@ impl DockerDriver {
                 };
 
                 let opts = CreateContainerOptions {
-                    name: name.clone(),
+                    name: Some(name.clone()),
                     ..Default::default()
                 };
 
@@ -388,7 +388,7 @@ impl DockerDriver {
                     .map_err(|e| VdiError::Docker(format!("failed to create container: {}", e)))?;
 
                 self.client
-                    .start_container(&name, None::<StartContainerOptions<String>>)
+                    .start_container(&name, None::<StartContainerOptions>)
                     .await
                     .map_err(|e| VdiError::Docker(format!("failed to start container: {}", e)))?;
 
@@ -428,7 +428,13 @@ impl DockerDriver {
         // Stop with 5s grace period
         let _ = self
             .client
-            .stop_container(container_id, Some(StopContainerOptions { t: 5 }))
+            .stop_container(
+                container_id,
+                Some(StopContainerOptions {
+                    t: Some(5),
+                    signal: Default::default(),
+                }),
+            )
             .await;
 
         // Force remove
@@ -458,11 +464,14 @@ impl DockerDriver {
     #[allow(dead_code)]
     async fn do_list_managed_containers(&self) -> Result<Vec<String>, VdiError> {
         let mut filters = HashMap::new();
-        filters.insert("label", vec!["rustguac.managed=true"]);
+        filters.insert(
+            "label".to_string(),
+            vec!["rustguac.managed=true".to_string()],
+        );
 
         let opts = ListContainersOptions {
             all: true,
-            filters,
+            filters: Some(filters),
             ..Default::default()
         };
 
@@ -479,11 +488,14 @@ impl DockerDriver {
         &self,
     ) -> Result<Vec<super::ManagedContainer>, VdiError> {
         let mut filters = HashMap::new();
-        filters.insert("label", vec!["rustguac.managed=true"]);
+        filters.insert(
+            "label".to_string(),
+            vec!["rustguac.managed=true".to_string()],
+        );
 
         let opts = ListContainersOptions {
             all: false, // only running containers
-            filters,
+            filters: Some(filters),
             ..Default::default()
         };
 
