@@ -141,7 +141,8 @@ pub struct SessionInfo {
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,
     pub client_url: String,
-    pub share_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share_url: Option<String>,
     pub ws_url: String,
     pub hostname: String,
     pub username: String,
@@ -269,7 +270,7 @@ impl Session {
             status: self.status.clone(),
             created_at: self.created_at,
             client_url: format!("/client/{}", self.id),
-            share_url: format!("/client/{}?token={}", self.id, self.share_token),
+            share_url: Some(format!("/client/{}?token={}", self.id, self.share_token)),
             ws_url: format!("/ws/{}", self.id),
             hostname: self.hostname.clone(),
             username: self.username.clone(),

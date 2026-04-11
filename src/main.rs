@@ -997,13 +997,20 @@ async fn run_server(config: Config, database: Db) {
         .merge(unauth_routes)
         .merge(html_routes);
 
-    // Add OIDC routes if configured
+    // Add OIDC routes if configured (always rate-limited to prevent brute-force)
     if let Some(ref oidc_st) = oidc_state {
+        let auth_rate_conf = GovernorConfigBuilder::default()
+            .per_second(1)
+            .burst_size(5)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .expect("Failed to build auth rate limit config");
         let oidc_routes = Router::new()
             .route("/auth/login", get(oidc::login))
             .route("/auth/callback", get(oidc::callback))
             .with_state(oidc_st.clone())
-            .layer(Extension(database.clone()));
+            .layer(Extension(database.clone()))
+            .layer(GovernorLayer::new(auth_rate_conf));
 
         let logout_route = Router::new()
             .route("/auth/logout", get(oidc::logout))

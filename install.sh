@@ -426,8 +426,8 @@ rustguac ALL=(root) NOPASSWD: /bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
 rustguac ALL=(root) NOPASSWD: /usr/bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
 rustguac ALL=(root) NOPASSWD: /bin/umount $MOUNT_POINT
 rustguac ALL=(root) NOPASSWD: /usr/bin/umount $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /bin/chown *\:* $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /usr/bin/chown *\:* $MOUNT_POINT
+rustguac ALL=(root) NOPASSWD: /bin/chown rustguac\:rustguac $MOUNT_POINT
+rustguac ALL=(root) NOPASSWD: /usr/bin/chown rustguac\:rustguac $MOUNT_POINT
 SUDOERS
     chmod 0440 /etc/sudoers.d/rustguac-drive
 

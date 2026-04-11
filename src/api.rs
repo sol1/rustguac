@@ -115,9 +115,32 @@ pub async fn create_session(
     }
 }
 
+/// Strip share_url from session info unless the caller is the session creator or an admin.
+fn redact_share_url(
+    mut info: crate::session::SessionInfo,
+    identity: &Option<Extension<AuthIdentity>>,
+) -> crate::session::SessionInfo {
+    let is_owner_or_admin = match identity {
+        Some(Extension(id)) => id.has_role("admin") || id.display_name() == info.created_by,
+        None => false,
+    };
+    if !is_owner_or_admin {
+        info.share_url = None;
+    }
+    info
+}
+
 /// GET /api/sessions — List all sessions. All authenticated roles.
-pub async fn list_sessions(State(manager): State<AppState>) -> impl IntoResponse {
-    let sessions = manager.list_sessions().await;
+pub async fn list_sessions(
+    State(manager): State<AppState>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> impl IntoResponse {
+    let sessions: Vec<_> = manager
+        .list_sessions()
+        .await
+        .into_iter()
+        .map(|s| redact_share_url(s, &identity))
+        .collect();
     Json(json!(sessions))
 }
 
@@ -125,9 +148,13 @@ pub async fn list_sessions(State(manager): State<AppState>) -> impl IntoResponse
 pub async fn get_session(
     State(manager): State<AppState>,
     Path(id): Path<Uuid>,
+    identity: Option<Extension<AuthIdentity>>,
 ) -> impl IntoResponse {
     match manager.get_session(id).await {
-        Some(info) => (StatusCode::OK, Json(json!(info))).into_response(),
+        Some(info) => {
+            let info = redact_share_url(info, &identity);
+            (StatusCode::OK, Json(json!(info))).into_response()
+        }
         None => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "session not found" })),

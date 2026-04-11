@@ -727,7 +727,7 @@
                 sessions.forEach(function(s) {
                     var tr = document.createElement('tr');
                     var shortId = s.session_id.substring(0, 8);
-                    var shareFullUrl = window.location.origin + s.share_url;
+                    var shareFullUrl = s.share_url ? (window.location.origin + s.share_url) : '';
                     var rowId = 'share-' + s.session_id;
                     var hostCol = s.session_type === 'web' ? (s.url || '') : s.hostname;
 
@@ -749,7 +749,7 @@
                     tr.appendChild(tdOpen);
 
                     var tdShare = document.createElement('td');
-                    if (isActive) tdShare.appendChild(h('button', 'share', { 'class': 'btn-small btn-share', 'data-url': shareFullUrl, 'data-row': rowId }));
+                    if (isActive && shareFullUrl) tdShare.appendChild(h('button', 'share', { 'class': 'btn-small btn-share', 'data-url': shareFullUrl, 'data-row': rowId }));
                     tr.appendChild(tdShare);
 
                     var tdDel = document.createElement('td');

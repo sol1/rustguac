@@ -395,17 +395,16 @@ async fn guacd_to_ws(
             })?
             .to_owned();
 
-        // Log filesystem and clipboard instructions from guacd
-        if text.contains(".filesystem,") {
-            tracing::info!("guacd sent filesystem instruction");
-        }
-        if text.contains(".clipboard,") {
-            tracing::info!("guacd sent clipboard instruction to browser");
-        }
         // Detect guacd-initiated disconnect (server-side logout/crash).
         // guacd sends "10.disconnect;" as the final instruction when the remote
         // server ends the session. This does NOT appear on browser tab close.
-        if text.contains("10.disconnect;") {
+        //
+        // IMPORTANT: We must check instruction boundaries, not raw substring
+        // matching. The Guacamole wire format is length-prefixed, so
+        // "10.disconnect;" inside a clipboard blob or key instruction would
+        // appear as e.g. "14.10.disconnect;" (with a length prefix), never bare.
+        // A real disconnect instruction appears at position 0 or after ";".
+        if text.starts_with("10.disconnect;") || text.contains(";10.disconnect;") {
             server_disconnected.store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
