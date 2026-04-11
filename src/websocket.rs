@@ -64,18 +64,25 @@ pub async fn ws_handler(
     let identity = identity.map(|Extension(id)| id);
 
     // Validate Origin header to prevent cross-site WebSocket hijacking (CSWSH).
-    // Compare Origin's host against the request's Host header.
+    // Compare Origin's hostname against the request's Host header hostname.
+    // Only the hostname is compared (ports stripped) to avoid false rejections
+    // behind reverse proxies that may add/remove default ports.
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
         let host = headers
             .get("host")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        // Extract host from origin URL (e.g. "https://example.com:8089" → "example.com:8089")
+        // Extract hostname without port from Origin URL
         let origin_host = origin
             .trim_start_matches("https://")
             .trim_start_matches("http://")
-            .trim_end_matches('/');
-        if !host.is_empty() && origin_host != host {
+            .trim_end_matches('/')
+            .split(':')
+            .next()
+            .unwrap_or("");
+        // Extract hostname without port from Host header
+        let host_name = host.split(':').next().unwrap_or("");
+        if !host_name.is_empty() && !origin_host.is_empty() && origin_host != host_name {
             tracing::warn!(
                 session_id = %session_id,
                 client_ip = %ip,
