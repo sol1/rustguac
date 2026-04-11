@@ -603,8 +603,21 @@ pub struct VaultConfigured(pub bool);
 #[derive(Clone)]
 pub struct DriveConfigured(pub bool);
 
-/// GET /api/recordings — List all recording files. All authenticated roles.
-pub async fn list_recordings(State(manager): State<AppState>) -> impl IntoResponse {
+/// GET /api/recordings — List all recording files. Requires poweruser+ role.
+pub async fn list_recordings(
+    State(manager): State<AppState>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> impl IntoResponse {
+    match &identity {
+        Some(Extension(id)) if id.has_role("poweruser") => {}
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "requires poweruser or admin role"})),
+            )
+                .into_response();
+        }
+    }
     let recording_path = manager.recording_path().to_path_buf();
 
     match tokio::task::spawn_blocking(move || {
@@ -913,11 +926,22 @@ pub async fn report_summary(
     }
 }
 
-/// GET /api/recordings/{name} — Serve a .guac recording file.
+/// GET /api/recordings/{name} — Serve a .guac recording file. Requires poweruser+ role.
 pub async fn serve_recording(
     State(manager): State<AppState>,
     Path(name): Path<String>,
+    identity: Option<Extension<AuthIdentity>>,
 ) -> impl IntoResponse {
+    match &identity {
+        Some(Extension(id)) if id.has_role("poweruser") => {}
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "requires poweruser or admin role"})),
+            )
+                .into_response();
+        }
+    }
     if !is_safe_recording_name(&name, manager.recording_path()) {
         return (
             StatusCode::BAD_REQUEST,

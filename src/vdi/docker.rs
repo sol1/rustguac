@@ -353,7 +353,11 @@ impl DockerDriver {
                     if let Err(e) = std::fs::create_dir_all(&host_path) {
                         tracing::warn!(path = ?host_path, "Failed to create VDI home dir: {}", e);
                     }
-                    let mount = format!("{}:/home/{}", host_path.display(), spec.username);
+                    let mount = format!(
+                        "{}:/home/{}:nosuid,nodev",
+                        host_path.display(),
+                        spec.username
+                    );
                     tracing::info!(mount = %mount, "VDI home directory bind mount");
                     Some(vec![mount])
                 } else {

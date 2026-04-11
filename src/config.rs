@@ -12,7 +12,7 @@ pub struct TlsConfig {
     pub guacd_cert_path: Option<PathBuf>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 pub struct OidcConfig {
     pub issuer_url: String,
     pub client_id: String,
@@ -36,6 +36,22 @@ pub struct OidcConfig {
     pub ca_cert: Option<String>,
 }
 
+impl std::fmt::Debug for OidcConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OidcConfig")
+            .field("issuer_url", &self.issuer_url)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("default_role", &self.default_role)
+            .field("groups_claim", &self.groups_claim)
+            .field("extra_scopes", &self.extra_scopes)
+            .field("tls_skip_verify", &self.tls_skip_verify)
+            .field("ca_cert", &self.ca_cert)
+            .finish()
+    }
+}
+
 fn default_oidc_default_role() -> String {
     "operator".into()
 }
@@ -44,7 +60,7 @@ fn default_groups_claim() -> String {
     "groups".into()
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 pub struct VaultConfig {
     pub addr: String,
     #[serde(default = "default_vault_mount")]
@@ -69,6 +85,26 @@ pub struct VaultConfig {
     pub client_cert: Option<String>,
     /// Path to the client private key (PEM) for mTLS authentication to Vault.
     pub client_key: Option<String>,
+}
+
+impl std::fmt::Debug for VaultConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VaultConfig")
+            .field("addr", &self.addr)
+            .field("mount", &self.mount)
+            .field("base_path", &self.base_path)
+            .field("role_id", &"[REDACTED]")
+            .field("namespace", &self.namespace)
+            .field("instance_name", &self.instance_name)
+            .field("tls_skip_verify", &self.tls_skip_verify)
+            .field("ca_cert", &self.ca_cert)
+            .field("client_cert", &self.client_cert)
+            .field(
+                "client_key",
+                &self.client_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

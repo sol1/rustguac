@@ -1151,21 +1151,32 @@ async fn serve_client_page(
     }
 }
 
+/// HTML-escape a string to prevent XSS when injecting config values into HTML.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 /// Rewrite branding in HTML: replace default "rustguac" site title and logo.
 fn rewrite_branding(html: &str, site_title: &str, logo_url: Option<&str>) -> String {
     let mut out = html.to_string();
     if site_title != "rustguac" {
+        let safe_title = html_escape(site_title);
         // <title>rustguac</title> and <title>rustguac - Sessions</title> etc.
         out = out.replace(
             "<title>rustguac</title>",
-            &format!("<title>{}</title>", site_title),
+            &format!("<title>{}</title>", safe_title),
         );
-        out = out.replace("<title>rustguac - ", &format!("<title>{} - ", site_title));
+        out = out.replace("<title>rustguac - ", &format!("<title>{} - ", safe_title));
         // <h1>rustguac</h1> (with or without inline style)
-        out = out.replace(">rustguac</h1>", &format!(">{}</h1>", site_title));
+        out = out.replace(">rustguac</h1>", &format!(">{}</h1>", safe_title));
     }
     if let Some(url) = logo_url {
-        out = out.replace("src=\"/logo.svg\"", &format!("src=\"{}\"", url));
+        let safe_url = html_escape(url);
+        out = out.replace("src=\"/logo.svg\"", &format!("src=\"{}\"", safe_url));
     }
     out
 }

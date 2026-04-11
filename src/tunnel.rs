@@ -155,9 +155,10 @@ impl client::Handler for TunnelHandler {
                     hop = self.hop_index,
                     host = %self.jump_host,
                     error = %e,
-                    "Failed to parse stored host key — accepting connection but key verification skipped"
+                    "Failed to parse stored host key — rejecting connection. \
+                     Re-verify the host key in the address book."
                 );
-                return Ok(true);
+                return Ok(false);
             }
         };
 

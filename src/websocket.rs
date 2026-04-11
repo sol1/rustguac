@@ -63,6 +63,34 @@ pub async fn ws_handler(
     let ip = client_ip(&headers, addr.ip(), &proxies);
     let identity = identity.map(|Extension(id)| id);
 
+    // Validate Origin header to prevent cross-site WebSocket hijacking (CSWSH).
+    // Compare Origin's host against the request's Host header.
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        let host = headers
+            .get("host")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        // Extract host from origin URL (e.g. "https://example.com:8089" → "example.com:8089")
+        let origin_host = origin
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_end_matches('/');
+        if !host.is_empty() && origin_host != host {
+            tracing::warn!(
+                session_id = %session_id,
+                client_ip = %ip,
+                origin = %origin,
+                host = %host,
+                "WebSocket upgrade rejected: Origin does not match Host (possible CSWSH)"
+            );
+            return (
+                StatusCode::FORBIDDEN,
+                axum::Json(json!({"error": "cross-origin WebSocket request rejected"})),
+            )
+                .into_response();
+        }
+    }
+
     // Check if this is an owner connection (session is Pending)
     let is_owner = manager.is_session_pending(session_id).await;
 

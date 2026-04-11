@@ -603,6 +603,7 @@ impl VaultClient {
         scope: &str,
         folder: &str,
     ) -> Result<FolderConfig, VaultError> {
+        validate_name(folder)?;
         let scope_prefix = self.resolve_scope_prefix(scope)?;
         let path = self.data_path(&scope_prefix, &format!("{}/{}", folder, ".config"));
         let resp = self.request(reqwest::Method::GET, &path, None).await?;
@@ -622,6 +623,7 @@ impl VaultClient {
 
     /// List entry names in a folder (excludes .config).
     pub async fn list_entries(&self, scope: &str, folder: &str) -> Result<Vec<String>, VaultError> {
+        validate_name(folder)?;
         let scope_prefix = self.resolve_scope_prefix(scope)?;
         let path = format!("{}/", self.metadata_path(&scope_prefix, folder));
         let keys = self.kv_list(&path).await?;
@@ -635,6 +637,7 @@ impl VaultClient {
         folder: &str,
         entry: &str,
     ) -> Result<AddressBookEntry, VaultError> {
+        validate_name(folder)?;
         validate_name(entry)?;
         let scope_prefix = self.resolve_scope_prefix(scope)?;
         let path = self.data_path(&scope_prefix, &format!("{}/{}", folder, entry));
