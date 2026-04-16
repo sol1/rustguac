@@ -155,11 +155,11 @@ Enables file transfer for RDP (drive redirection) and SSH (SFTP).
 
 Customises the UI appearance — colours, logo, and background. All fields are optional. Start from a built-in preset and override individual colours, or set everything from scratch.
 
-**Built-in presets:** `dark` (default), `light`, `high-contrast`, `terminal`, `nord`, `corporate`
+**Built-in presets:** `aurora` (default), `dark`, `light`, `high-contrast`, `terminal`, `nord`, `corporate`, `jaguar`
 
 | Key | Description |
 |-----|-------------|
-| `preset` | Base preset name (default: `dark`) |
+| `preset` | Base preset name (default: `aurora`) |
 | `logo_url` | URL or path to a custom logo image (replaces the default rustguac logo) |
 | `primary_color` | Primary action colour (buttons, links) |
 | `primary_hover` | Primary hover state |
@@ -184,6 +184,7 @@ Customises the UI appearance — colours, logo, and background. All fields are o
 | `type_rdp_bg` / `type_rdp_fg` | RDP session type badge |
 | `type_vnc_bg` / `type_vnc_fg` | VNC session type badge |
 | `type_web_bg` / `type_web_fg` | Web session type badge |
+| `type_vdi_bg` / `type_vdi_fg` | VDI session type badge |
 | `hop_bg` / `hop_fg` | Jump host badge |
 
 All colour values are CSS colour strings (e.g. `"#003366"`, `"rgb(0,51,102)"`).

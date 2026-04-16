@@ -715,7 +715,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ThemeConfig {
-    /// Built-in preset name: dark, light, high-contrast, terminal, nord, corporate.
+    /// Built-in preset name: aurora (default), dark, light, high-contrast,
+    /// terminal, nord, corporate, jaguar.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -786,9 +787,9 @@ pub struct ThemeConfig {
 
 impl ThemeConfig {
     /// Resolve config into a full ThemeColors palette.
-    /// Starts from the named preset (default: "dark"), then applies overrides.
+    /// Starts from the named preset (default: "aurora"), then applies overrides.
     pub fn resolve(&self) -> (String, ThemeColors) {
-        let preset_name = self.preset.as_deref().unwrap_or("dark");
+        let preset_name = self.preset.as_deref().unwrap_or("aurora");
         let presets = builtin_presets();
         let mut colors = presets
             .iter()
@@ -1082,7 +1083,7 @@ mod tests {
     fn test_theme_resolve_default_preset() {
         let cfg: ThemeConfig = toml::from_str("").unwrap();
         let (name, colors) = cfg.resolve();
-        assert_eq!(name, "dark");
+        assert_eq!(name, "aurora");
         assert!(!colors.primary.is_empty());
     }
 

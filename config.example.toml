@@ -204,12 +204,13 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # override individual colors. Users can switch themes in the browser via
 # the theme switcher (persisted in localStorage).
 #
-# Built-in presets: dark (default), light, high-contrast, terminal, nord, corporate
+# Built-in presets: aurora (default), dark, light, high-contrast, terminal,
+# nord, corporate, jaguar
 #
 # All color values are CSS color strings (hex, rgb(), hsl(), named colors).
 
 # [theme]
-# preset = "dark"                    # built-in preset to use as the base
+# preset = "aurora"                 # built-in preset to use as the base
 # logo_url = "/logo.svg"            # custom logo URL (shown on login + nav)
 #
 # # Override individual colors on top of the preset:
