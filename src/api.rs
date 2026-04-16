@@ -1631,6 +1631,42 @@ pub async fn ab_list_folders(
     Json(json!(visible)).into_response()
 }
 
+/// GET /api/addressbook/folders/:scope/:folder/subfolders — List subfolders at a path.
+pub async fn ab_list_subfolders(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(vault): Extension<VaultState>,
+    Path((scope, folder)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let vault = match require_vault(&vault).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let id = match identity {
+        Some(Extension(ref id)) if id.has_role("operator") => id,
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "operator role required"})),
+            )
+                .into_response()
+        }
+    };
+
+    if let Err(resp) = check_folder_access(&vault, &scope, &folder, id).await {
+        return resp;
+    }
+
+    match vault.list_subfolders(&scope, &folder).await {
+        Ok(subfolders) => Json(json!(subfolders)).into_response(),
+        Err(crate::vault::VaultError::NotFound) => Json(json!([])).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/addressbook — Batch endpoint returning all visible folders with entries.
 /// Replaces the N+1 pattern of listing folders then entries per folder.
 pub async fn ab_list_all(

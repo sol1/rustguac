@@ -342,6 +342,12 @@ pub struct FolderInfo {
     pub description: String,
     /// "shared" or "instance"
     pub scope: String,
+    /// Full path from scope root (e.g. "Clients/Acme"). Same as name for top-level folders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Whether this folder has subfolders (for lazy tree loading).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_children: Option<bool>,
 }
 
 // ── Vault client ──
@@ -561,7 +567,7 @@ impl VaultClient {
 
     // ── KV v2 operations ──
 
-    /// List folders visible across all scopes (shared + instance).
+    /// List top-level folders visible across all scopes (shared + instance).
     pub async fn list_folders(&self) -> Result<Vec<FolderInfo>, VaultError> {
         let mut folders = Vec::new();
 
@@ -569,15 +575,16 @@ impl VaultClient {
             let path = format!("/v1/{}/metadata/{}/{}/", self.mount, self.base_path, prefix);
             match self.kv_list(&path).await {
                 Ok(keys) => {
-                    for key in keys {
-                        // Folder names end with "/"
-                        if let Some(name) = key.strip_suffix('/') {
-                            folders.push(FolderInfo {
-                                name: name.to_string(),
-                                description: String::new(),
-                                scope: scope_label.to_string(),
-                            });
-                        }
+                    let has_subfolders: Vec<&str> =
+                        keys.iter().filter_map(|k| k.strip_suffix('/')).collect();
+                    for name in &has_subfolders {
+                        folders.push(FolderInfo {
+                            name: name.to_string(),
+                            description: String::new(),
+                            scope: scope_label.to_string(),
+                            path: Some(name.to_string()),
+                            has_children: None, // enriched below
+                        });
                     }
                 }
                 Err(VaultError::NotFound) => {
@@ -587,10 +594,63 @@ impl VaultClient {
             }
         }
 
-        // Enrich with descriptions from .config
+        // Enrich with descriptions and child detection
         for folder in &mut folders {
             if let Ok(config) = self.get_folder_config(&folder.scope, &folder.name).await {
                 folder.description = config.description;
+            }
+            // Check for subfolders by listing children
+            if let Ok(children) = self.list_children(&folder.scope, &folder.name).await {
+                folder.has_children = Some(children.iter().any(|c| c.strip_suffix('/').is_some()));
+            }
+        }
+
+        Ok(folders)
+    }
+
+    /// List immediate children (subfolders and entries) at a given folder path.
+    /// Subfolder names end with `/` in the returned list.
+    pub async fn list_children(
+        &self,
+        scope: &str,
+        folder_path: &str,
+    ) -> Result<Vec<String>, VaultError> {
+        validate_path(folder_path)?;
+        let scope_prefix = self.resolve_scope_prefix(scope)?;
+        let path = format!("{}/", self.metadata_path(&scope_prefix, folder_path));
+        self.kv_list(&path).await
+    }
+
+    /// List subfolders at a given path within a scope.
+    /// Returns FolderInfo for each subfolder, with has_children populated.
+    pub async fn list_subfolders(
+        &self,
+        scope: &str,
+        parent_path: &str,
+    ) -> Result<Vec<FolderInfo>, VaultError> {
+        let children = self.list_children(scope, parent_path).await?;
+        let mut folders = Vec::new();
+
+        for key in &children {
+            if let Some(name) = key.strip_suffix('/') {
+                let full_path = format!("{}/{}", parent_path, name);
+                let mut info = FolderInfo {
+                    name: name.to_string(),
+                    description: String::new(),
+                    scope: scope.to_string(),
+                    path: Some(full_path.clone()),
+                    has_children: None,
+                };
+                // Enrich with description
+                if let Ok(config) = self.get_folder_config(scope, &full_path).await {
+                    info.description = config.description;
+                }
+                // Check for grandchildren
+                if let Ok(grandchildren) = self.list_children(scope, &full_path).await {
+                    info.has_children =
+                        Some(grandchildren.iter().any(|c| c.strip_suffix('/').is_some()));
+                }
+                folders.push(info);
             }
         }
 
@@ -603,7 +663,7 @@ impl VaultClient {
         scope: &str,
         folder: &str,
     ) -> Result<FolderConfig, VaultError> {
-        validate_name(folder)?;
+        validate_path(folder)?;
         let scope_prefix = self.resolve_scope_prefix(scope)?;
         let path = self.data_path(&scope_prefix, &format!("{}/{}", folder, ".config"));
         let resp = self.request(reqwest::Method::GET, &path, None).await?;
@@ -623,7 +683,7 @@ impl VaultClient {
 
     /// List entry names in a folder (excludes .config).
     pub async fn list_entries(&self, scope: &str, folder: &str) -> Result<Vec<String>, VaultError> {
-        validate_name(folder)?;
+        validate_path(folder)?;
         let scope_prefix = self.resolve_scope_prefix(scope)?;
         let path = format!("{}/", self.metadata_path(&scope_prefix, folder));
         let keys = self.kv_list(&path).await?;
@@ -637,7 +697,7 @@ impl VaultClient {
         folder: &str,
         entry: &str,
     ) -> Result<AddressBookEntry, VaultError> {
-        validate_name(folder)?;
+        validate_path(folder)?;
         validate_name(entry)?;
         let scope_prefix = self.resolve_scope_prefix(scope)?;
         let path = self.data_path(&scope_prefix, &format!("{}/{}", folder, entry));
@@ -666,7 +726,7 @@ impl VaultClient {
         entry: &str,
         data: &AddressBookEntry,
     ) -> Result<(), VaultError> {
-        validate_name(folder)?;
+        validate_path(folder)?;
         validate_name(entry)?;
         let scope_prefix = self.resolve_scope_prefix(scope)?;
         let path = self.data_path(&scope_prefix, &format!("{}/{}", folder, entry));
@@ -715,7 +775,7 @@ impl VaultClient {
         folder: &str,
         config: &FolderConfig,
     ) -> Result<(), VaultError> {
-        validate_name(folder)?;
+        validate_path(folder)?;
         let scope_prefix = self.resolve_scope_prefix(scope)?;
         let path = self.data_path(&scope_prefix, &format!("{}/{}", folder, ".config"));
         let body = serde_json::json!({ "data": config });
@@ -738,7 +798,7 @@ impl VaultClient {
 
     /// Delete an entire folder (all entries + .config).
     pub async fn delete_folder(&self, scope: &str, folder: &str) -> Result<(), VaultError> {
-        validate_name(folder)?;
+        validate_path(folder)?;
         // List and delete all entries
         let entries = self.list_entries(scope, folder).await.unwrap_or_default();
         for entry in entries {
@@ -1108,6 +1168,32 @@ fn validate_name(name: &str) -> Result<(), VaultError> {
     Ok(())
 }
 
+/// Validate a folder path that may contain subfolders (e.g. "Clients/Acme/Servers").
+/// Each segment is validated with the same rules as `validate_name`.
+/// Empty segments, trailing slashes, and leading slashes are rejected.
+fn validate_path(path: &str) -> Result<(), VaultError> {
+    if path.is_empty() {
+        return Err(VaultError::BadName("path cannot be empty".into()));
+    }
+    if path.len() > 256 {
+        return Err(VaultError::BadName("path too long (max 256 chars)".into()));
+    }
+    if path.starts_with('/') || path.ends_with('/') {
+        return Err(VaultError::BadName(
+            "path cannot start or end with /".into(),
+        ));
+    }
+    if path.contains("//") {
+        return Err(VaultError::BadName(
+            "path cannot contain empty segments".into(),
+        ));
+    }
+    for segment in path.split('/') {
+        validate_name(segment)?;
+    }
+    Ok(())
+}
+
 /// Sanitize an email address for use as a Vault path component.
 /// Replaces `@` with `_at_` and strips any characters not in `[a-zA-Z0-9._-]`.
 fn sanitize_email_key(email: &str) -> String {
@@ -1390,6 +1476,25 @@ mod tests {
     fn test_validate_name_rejects_empty_and_long() {
         assert!(validate_name("").is_err());
         assert!(validate_name(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn test_validate_path_ok() {
+        assert!(validate_path("my-folder").is_ok());
+        assert!(validate_path("Clients/Acme").is_ok());
+        assert!(validate_path("Clients/Acme/Servers").is_ok());
+        assert!(validate_path("a/b/c/d").is_ok());
+    }
+
+    #[test]
+    fn test_validate_path_rejects_bad_input() {
+        assert!(validate_path("").is_err()); // empty
+        assert!(validate_path("/leading").is_err()); // leading slash
+        assert!(validate_path("trailing/").is_err()); // trailing slash
+        assert!(validate_path("a//b").is_err()); // empty segment
+        assert!(validate_path("a/../b").is_err()); // traversal
+        assert!(validate_path("a/.config/b").is_err()); // reserved name
+        assert!(validate_path(&format!("a/{}", "x".repeat(65))).is_err()); // segment too long
     }
 
     #[test]

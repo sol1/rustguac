@@ -923,6 +923,10 @@ async fn run_server(config: Config, database: Db) {
             delete(api::ab_delete_folder),
         )
         .route(
+            "/api/addressbook/folders/{scope}/{folder}/subfolders",
+            get(api::ab_list_subfolders),
+        )
+        .route(
             "/api/addressbook/folders/{scope}/{folder}/entries",
             get(api::ab_list_entries),
         )
