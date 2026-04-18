@@ -1345,7 +1345,10 @@ impl SessionManager {
                 continue;
             }
             if t.token_hash.len() == provided_hex.len()
-                && t.token_hash.as_bytes().ct_eq(provided_hex.as_bytes()).into()
+                && t.token_hash
+                    .as_bytes()
+                    .ct_eq(provided_hex.as_bytes())
+                    .into()
             {
                 return true;
             }

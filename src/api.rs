@@ -161,13 +161,7 @@ pub async fn list_sessions(
         .list_sessions()
         .await
         .into_iter()
-        .filter(|s| {
-            show_all
-                || owner
-                    .as_deref()
-                    .map(|o| s.created_by == o)
-                    .unwrap_or(false)
-        })
+        .filter(|s| show_all || owner.as_deref().map(|o| s.created_by == o).unwrap_or(false))
         .map(|s| redact_share_url(s, &identity))
         .collect();
     Json(json!(sessions))
