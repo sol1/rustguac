@@ -1141,6 +1141,7 @@
                         + '<div class="session-card-info"><div class="card-name">' + escapeHtml(name) + '</div>'
                         + '<div class="card-meta">' + typeBadge + ' <span>' + escapeHtml(s.username || '') + '</span></div></div>'
                         + (shareUrl ? '<div class="card-actions"><button type="button" class="btn-add" data-share-url="' + escapeAttr(shareUrl) + '" title="Copy a URL to let someone watch this session">Share</button></div>' : '');
+                    card.title = 'Click to open this session';
                     var shareBtn = card.querySelector('[data-share-url]');
                     if (shareBtn) {
                         shareBtn.addEventListener('click', function(ev) {
@@ -1149,24 +1150,15 @@
                         });
                     }
                     card.addEventListener('click', function() {
-                        if (s.address_book_entry) {
-                            // Reconnect via connections connect (creates new session to same target)
-                            var parts = s.address_book_entry.split('/');
-                            if (parts.length === 3) {
-                                fetch('/api/addressbook/folders/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]) + '/entries/' + encodeURIComponent(parts[2]) + '/connect', {
-                                    method: 'POST',
-                                    headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
-                                    credentials: 'same-origin',
-                                    body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
-                                }).then(function(res) { return res.json(); }).then(function(data) {
-                                    if (data.session_id) window.open('/client/' + data.session_id + '?name=' + encodeURIComponent(s.entry_display_name || ''), '_blank');
-                                    else showError(data.error || 'Failed to reconnect');
-                                }).catch(function(e) { showError('Reconnect failed: ' + e.message); });
-                                return;
-                            }
+                        // Active session: open the existing session's client URL.
+                        // We used to POST to /connect here which minted a fresh
+                        // session every click — caused duplicates when users
+                        // clicked back to an existing tab. Dormant VDI containers
+                        // below still need /connect since there's no live
+                        // session to attach to.
+                        if (s.client_url) {
+                            window.open(s.client_url, '_blank');
                         }
-                        // Fallback: open existing session URL (ad-hoc sessions)
-                        window.open(s.client_url, '_blank');
                     });
                     grid.appendChild(card);
                 });

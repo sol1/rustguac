@@ -130,6 +130,12 @@
                 if (data.role === 'admin') {
                     document.getElementById('admin-link').style.display = '';
                 }
+                if (level >= 3) {
+                    document.getElementById('reports-link').style.display = '';
+                } else {
+                    // Sessions is for poweruser+ only; hide for operator/viewer
+                    document.getElementById('sessions-link').style.display = 'none';
+                }
 
                 if (level < 2) {
                     // viewer — no token access
