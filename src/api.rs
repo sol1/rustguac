@@ -1738,6 +1738,8 @@ pub async fn ab_list_all(
         result.push(json!({
             "name": folder.name,
             "scope": folder.scope,
+            "path": folder.path,
+            "has_children": folder.has_children,
             "description": folder.description,
             "allowed_groups": config.as_ref().map(|c| &c.allowed_groups),
             "entries": entries,

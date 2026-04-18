@@ -3,88 +3,63 @@
 <head>
     <meta charset="UTF-8">
     <title>rustguac</title>
+    <link rel="stylesheet" href="/rustguac.css">
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #888; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1a3a2a; --type-ssh-fg: #5bc0be; --type-rdp-bg: #2a1a3a; --type-rdp-fg: #a78bfa; --type-vnc-bg: #3a2a1a; --type-vnc-fg: #f0c040; --type-web-bg: #1a2a3a; --type-web-fg: #60a5fa; --hop-bg: #1e3a5f; --hop-fg: #7ec8e3; --bg-pattern: none; }
-        body { font-family: monospace; background-color: var(--bg); background-image: var(--bg-pattern); background-attachment: fixed; min-height: 100vh; color: var(--text); padding: 2em; font-size: 18px; display: flex; flex-direction: column; align-items: center; }
-        h1 { color: var(--primary); }
-        #error { color: var(--primary); margin-top: 0.8em; }
-
-        .login-container { max-width: 360px; width: 100%; margin: 2em 0; }
-
-        #sso-section {
-            display: none;
-            margin-bottom: 1.5em;
-        }
+        body { display: flex; flex-direction: column; align-items: center; }
+        .login-container { max-width: 380px; width: 100%; margin: var(--s-4) 0; }
+        #sso-section { display: none; margin-bottom: var(--s-4); }
         #sso-btn {
             width: 100%;
-            padding: 0.8em;
+            height: var(--ctl-lg);
             background: var(--accent);
+            border-color: var(--accent);
             color: var(--bg);
-            border: none;
-            font-family: monospace;
-            font-size: 1.2em;
+            font-size: var(--fz-md);
             font-weight: bold;
-            border-radius: 6px;
-            cursor: pointer;
         }
-        #sso-btn:hover { background: var(--accent-hover); }
-
+        #sso-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
         .api-key-toggle {
             color: var(--text-muted);
-            font-size: 0.85em;
+            font-size: var(--fz-sm);
             cursor: pointer;
             user-select: none;
-            margin-top: 1em;
+            margin-top: var(--s-3);
             display: none;
         }
         .api-key-toggle:hover { color: var(--text); }
         .api-key-toggle .chevron {
             display: inline-block;
-            transition: transform 0.2s;
-            margin-right: 0.3em;
+            transition: transform .2s;
+            margin-right: var(--s-1);
         }
         .api-key-toggle .chevron.open { transform: rotate(90deg); }
-
         #login-form {
             background: var(--surface);
-            padding: 1.5em;
-            border-radius: 6px;
-            margin-top: 0.5em;
+            border: 1px solid var(--border);
+            padding: var(--s-4);
+            border-radius: var(--radius);
+            margin-top: var(--s-2);
         }
-        #login-form label { display: block; margin-top: 0.8em; color: var(--text-muted); font-size: 0.9em; }
         #login-form input {
             display: block;
             width: 100%;
-            padding: 0.4em;
-            margin-top: 0.2em;
-            background: var(--input);
-            border: 1px solid var(--border);
-            color: var(--text);
-            font-family: monospace;
-            font-size: 1em;
-            border-radius: 3px;
             box-sizing: border-box;
+            margin-top: var(--s-1);
         }
-        #login-form input:focus { outline: none; border-color: var(--primary); }
         #login-form button {
-            margin-top: 1.2em;
-            padding: 0.5em 1.5em;
-            background: var(--primary);
-            color: var(--text-on-primary);
-            border: none;
-            font-family: monospace;
-            font-size: 1em;
-            border-radius: 3px;
-            cursor: pointer;
+            margin-top: var(--s-4);
+            width: 100%;
+            height: var(--ctl-lg);
+            font-size: var(--fz-md);
         }
-        #login-form button:hover { background: var(--primary-hover); }
-        #login-form button:disabled { background: var(--btn-disabled); cursor: default; }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
 <body>
-    <img id="site-logo" src="/logo.svg" style="max-height:64px;margin-bottom:0.5em" alt="">
-    <h1>rustguac</h1>
+    <div class="brand-row">
+        <img id="site-logo" src="/logo.svg" alt="">
+        <h1>rustguac</h1>
+    </div>
 
     <div class="login-container">
         <div id="sso-section">

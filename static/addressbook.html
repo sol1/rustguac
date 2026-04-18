@@ -3,300 +3,162 @@
 <head>
     <meta charset="UTF-8">
     <title>rustguac - Address Book</title>
+    <link rel="stylesheet" href="/rustguac.css">
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #666; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1b4332; --type-ssh-fg: #52b788; --type-rdp-bg: #3d1f00; --type-rdp-fg: #f0a050; --type-vnc-bg: #2d1b4e; --type-vnc-fg: #b07ff0; --type-web-bg: #1a1a4e; --type-web-fg: #7b8ff0; --hop-bg: #1b4332; --hop-fg: #52b788; --bg-pattern: none; }
-        body { font-family: monospace; background-color: var(--bg); background-image: var(--bg-pattern); background-attachment: fixed; min-height: 100vh; color: var(--text); padding: 2em; font-size: 18px; }
-        h1 { color: var(--primary); }
-        a { color: var(--accent); }
-        nav { margin-top: 0.8em; margin-bottom: 1.5em; padding-bottom: 0.8em; border-bottom: 1px solid var(--border); font-size: 0.95em; }
-        nav a { margin-right: 1.5em; text-decoration: none; }
-        nav a:hover { text-decoration: underline; }
-        nav .active { color: var(--primary); font-weight: bold; }
-        #user-menu-wrapper { position: relative; float: right; }
-        #user-menu-btn { cursor: pointer; font-size: 1.3em; color: var(--text-muted); }
-        #user-menu-btn:hover { color: var(--text); }
-        #user-menu { display:none; position:absolute; right:0; top:1.8em; background:var(--surface); border:1px solid var(--border); border-radius:6px; min-width:220px; z-index:50; padding:0.4em 0; }
-        .um-section-label { padding:0.4em 0.9em; font-size:0.8em; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
-        .um-item { padding:0.5em 0.9em; cursor:pointer; display:flex; align-items:center; gap:0.6em; font-size:0.9em; }
-        .um-item:hover { background:var(--input); }
-        .um-item.active { color:var(--accent); }
-        .um-theme-info { display:flex; flex-direction:column; }
-        .um-theme-name { font-weight:bold; }
-        .um-theme-desc { font-size:0.8em; color:var(--text-dim); }
-        .um-swatch { display:inline-block; width:16px; height:16px; border-radius:50%; border:1px solid var(--border); flex-shrink:0; }
-        .um-divider { height:1px; background:var(--border); margin:0.3em 0; }
-        .um-logout { color:var(--text-muted); }
-        .um-logout:hover { color:var(--primary); background:var(--input); }
+        /* ============================================================
+           Address book — page-specific styles only. Shared design
+           system lives in /rustguac.css.
+           ============================================================ */
 
-        .layout { display: flex; gap: 2em; }
-        .sidebar { min-width: 220px; max-width: 280px; }
+        /* Two-column address book layout */
+        .layout { display: flex; gap: var(--s-5); align-items: flex-start; }
+        .sidebar {
+            min-width: 280px; max-width: 340px; flex-shrink: 0;
+            border-right: 1px solid var(--border);
+            padding-right: var(--s-4);
+        }
         .main { flex: 1; min-width: 0; }
 
-        .sidebar-header { display: flex; align-items: center; gap: 0.5em; margin-bottom: 0.5em; }
-        .sidebar-header strong { flex: 1; }
+        .sidebar-header {
+            display: flex; align-items: center; gap: var(--s-2);
+            margin-bottom: var(--s-3); padding-bottom: var(--s-2);
+            border-bottom: 1px solid var(--border);
+        }
+        .sidebar-header strong {
+            flex: 1; text-transform: uppercase; letter-spacing: 0.14em;
+            font-size: var(--fz-sm); color: var(--text-muted); font-weight: normal;
+        }
 
+        /* Folder tree */
         .folder-list { list-style: none; padding: 0; margin: 0; }
-        .folder-list li {
-            padding: 0.5em 0.8em;
-            cursor: pointer;
-            border-radius: 3px;
-            margin-bottom: 2px;
+        .folder-list ul { list-style: none; padding: 0; margin: 0; }
+        .folder-list li { cursor: pointer; margin-bottom: 1px; }
+        .folder-list li:hover > .folder-row { background: var(--surface); color: var(--text); }
+        .folder-list li.selected > .folder-row { background: var(--input); color: var(--text); border-left-color: var(--accent); }
+        .folder-row {
+            display: flex; align-items: center; gap: var(--s-2);
+            padding: var(--s-2) var(--s-2) var(--s-2) var(--s-1);
+            border-left: 3px solid transparent;
+            min-height: var(--ctl-md);
+            font-size: var(--fz-md);
+            transition: background .1s;
         }
-        .folder-list li:hover { background: var(--surface); }
-        .folder-list li.selected { background: var(--input); color: var(--accent); }
-        .folder-name-row { display: flex; align-items: center; gap: 0.5em; flex-wrap: wrap; }
-        .folder-scope { font-size: 0.7em; color: var(--text-dim); background: var(--input); padding: 0.1em 0.4em; border-radius: 2px; }
-        .folder-list li.selected .folder-scope { background: var(--surface); }
-        .folder-desc { font-size: 0.8em; color: var(--text-dim); display: block; margin-top: 0.15em; }
-        .folder-count { font-size: 0.7em; color: var(--text-dim); display: block; margin-top: 0.15em; }
+        .tree-chevron {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 32px; height: 32px; flex-shrink: 0;
+            color: var(--accent); user-select: none;
+            font-size: 20px; font-weight: bold;
+            border-radius: var(--radius); cursor: pointer;
+            transition: background .1s, color .1s;
+        }
+        .tree-chevron:hover { color: var(--primary); background: var(--input); }
+        .tree-chevron.expanded { color: var(--primary); }
+        .tree-chevron.leaf { visibility: hidden; cursor: default; }
+        .tree-children {
+            padding-left: var(--s-4) !important;
+            margin-left: 15px !important;
+            border-left: 1px dashed var(--border);
+        }
 
-        .entries-table { border-collapse: collapse; width: 100%; }
+        .folder-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; line-height: 1.3; }
+        .folder-name-row { display: flex; align-items: center; gap: var(--s-2); min-width: 0; }
+        .folder-name-row > span:first-child {
+            flex: 1 1 auto; min-width: 0;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            font-size: var(--fz-md);
+        }
+        .folder-scope {
+            flex-shrink: 0;
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 24px; height: 24px;
+            font-size: 20px; color: var(--accent);
+            line-height: 1; cursor: help;
+        }
+        .folder-scope::before { display: block; }
+        .folder-scope[data-scope="shared"]::before { content: "\2295"; }
+        .folder-scope[data-scope="instance"]::before { content: "\25A3"; }
+        .folder-list li.selected > .folder-row .folder-scope { color: var(--accent); }
+        .folder-count { font-size: var(--fz-xs); color: var(--text-dim); letter-spacing: 0.02em; }
+        .folder-count::before { content: "\203A  "; color: var(--border); }
+        .folder-desc {
+            font-size: var(--fz-xs); color: var(--text-dim);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+
+        /* Entries table */
+        .entries-table { border-collapse: collapse; width: 100%; margin-top: var(--s-3); border: 1px solid var(--border); }
         .entries-table th, .entries-table td {
-            text-align: left; padding: 0.4em 0.8em; border-bottom: 1px solid var(--border);
+            text-align: left;
+            padding: var(--s-3) var(--s-4);
+            border-bottom: 1px solid var(--border);
+            font-size: var(--fz-md);
+            vertical-align: middle;
         }
-        .entries-table th { color: var(--text-muted); font-size: 0.85em; }
-        .entries-table tr:hover { background: var(--surface); }
-        .type-badge {
-            display: inline-block;
-            padding: 0.1em 0.5em;
-            border-radius: 3px;
-            font-size: 0.85em;
-            font-weight: bold;
+        .entries-table th {
+            color: var(--text-muted); font-size: var(--fz-sm); font-weight: normal;
+            text-transform: uppercase; letter-spacing: 0.12em;
+            background: var(--surface); line-height: 1.6;
         }
-        .type-ssh { background: var(--type-ssh-bg); color: var(--type-ssh-fg); }
-        .type-rdp { background: var(--type-rdp-bg); color: var(--type-rdp-fg); }
-        .type-vnc { background: var(--type-vnc-bg); color: var(--type-vnc-fg); }
-        .type-web { background: var(--type-web-bg); color: var(--type-web-fg); }
-        .type-vdi { background: var(--type-vdi-bg); color: var(--type-vdi-fg); }
-
-        button {
-            padding: 0.4em 1em;
-            background: var(--primary);
-            color: var(--text-on-primary);
-            border: none;
-            font-family: monospace;
-            font-size: 0.9em;
-            border-radius: 3px;
-            cursor: pointer;
-        }
-        button:hover { background: var(--primary-hover); }
-        button:disabled { background: var(--btn-disabled); cursor: default; }
-        .btn-connect { background: var(--accent); color: var(--bg); font-weight: bold; }
-        .btn-connect:hover { background: var(--accent-hover); }
-        .btn-small {
-            background: none; border: none; color: var(--primary);
-            cursor: pointer; font-family: monospace; padding: 0; font-size: 0.9em;
-        }
-        .btn-small:hover { text-decoration: underline; }
-        .btn-add { background: var(--input); color: var(--accent); border: 1px solid var(--border); }
-        .btn-add:hover { background: var(--surface); }
-
-        .empty { color: var(--text-dim); margin: 2em 0; }
-        #global-error { color: var(--primary); margin-top: 0.8em; white-space: pre-wrap; }
-        .no-vault { color: var(--text-muted); margin: 2em 0; }
-
-        /* Empty state card */
-        .empty-state {
-            border: 2px dashed var(--border);
-            border-radius: 8px;
-            padding: 3em 2em;
-            text-align: center;
-            margin: 2em 0;
-        }
-        .empty-state h3 { color: var(--accent); margin-bottom: 0.5em; }
-        .empty-state p { color: #888; margin-bottom: 1.5em; }
-        .empty-state button { font-size: 1.1em; padding: 0.6em 1.5em; }
+        .entries-table tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+        .entries-table tbody tr:hover { background: var(--surface); }
+        .entries-table tbody tr:last-child td { border-bottom: none; }
+        .entries-table td:last-child { text-align: right; white-space: nowrap; }
 
         /* Folder action bar */
         .folder-actions {
-            display: flex; align-items: center; gap: 0.6em; margin-bottom: 1em;
+            display: flex; align-items: center; gap: var(--s-2);
+            margin-bottom: var(--s-4); padding-bottom: var(--s-3);
+            border-bottom: 1px solid var(--border);
             flex-wrap: wrap;
         }
-        .folder-actions strong { font-size: 1.1em; }
-        .folder-actions .desc { color: #666; font-size: 0.9em; }
-
-        /* Modal overlay */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 100;
-            justify-content: center;
-            align-items: center;
+        .folder-actions strong {
+            font-size: var(--fz-xl); color: var(--text);
+            font-weight: bold; letter-spacing: 0.02em; line-height: 1.3;
         }
-        .modal-overlay.active { display: flex; }
-        .modal {
-            background: var(--surface);
-            border-radius: 6px;
-            padding: 1.5em;
-            min-width: 400px;
-            max-width: 520px;
-            max-height: 85vh;
-            overflow-y: auto;
-        }
-        .modal h3 { color: var(--primary); margin-top: 0; }
-        .modal label { display: block; margin-top: 0.8em; color: var(--text-muted); font-size: 0.9em; }
-        .modal input, .modal select, .modal textarea {
-            display: block;
-            width: 100%;
-            padding: 0.4em;
-            margin-top: 0.2em;
-            background: var(--input);
-            border: 1px solid var(--border);
-            color: var(--text);
-            font-family: monospace;
-            font-size: 1em;
-            border-radius: 3px;
-            box-sizing: border-box;
-        }
-        .modal input:focus, .modal select:focus, .modal textarea:focus { outline: none; border-color: var(--primary); }
-        .modal-actions { margin-top: 1.2em; display: flex; gap: 0.8em; }
-        .modal-actions .btn-cancel { background: var(--border); }
-        .modal-actions .btn-cancel:hover { background: #444; }
-        #onboard-body code { background: var(--input); padding: 0.1em 0.4em; border-radius: 3px; font-size: 0.9em; }
-        .onboard-key { display:inline-block; background:var(--surface); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.45em; font-size:0.85em; color:var(--text); }
-        .onboard-hl { color: var(--accent); font-weight: bold; }
-
-        .field-hint { font-size: 0.8em; color: var(--text-dim); margin-top: 0.2em; }
-        .pw-wrap { position: relative; }
-        .pw-wrap input { padding-right: 2.2em; }
-        .pw-toggle { position: absolute; right: 0.4em; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.85em; padding: 0.2em; line-height: 1; width: auto; }
-        .pw-toggle:hover { color: var(--text); }
-
-        /* Hop cards */
-        .hop-card {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            margin-bottom: 0.6em;
-        }
-        .hop-card-header {
-            display: flex;
-            align-items: center;
-            gap: 0.5em;
-            padding: 0.4em 0.6em;
-            cursor: pointer;
-            font-size: 0.9em;
-        }
-        .hop-card-header:hover { background: var(--surface); }
-        .hop-card-header .hop-num {
-            color: var(--accent);
-            font-weight: bold;
-            min-width: 2em;
-        }
-        .hop-card-header .hop-hostname {
-            flex: 1;
-            color: var(--text);
-        }
-        .hop-card-header .hop-hostname input {
-            display: inline;
-            width: 100%;
-            padding: 0.2em 0.4em;
-            background: var(--input);
-            border: 1px solid var(--border);
-            color: var(--text);
-            font-family: monospace;
-            font-size: 1em;
-            border-radius: 3px;
-            box-sizing: border-box;
-        }
-        .hop-card-header .hop-remove {
-            color: var(--primary);
-            cursor: pointer;
-            font-size: 0.85em;
-            background: none;
-            border: none;
-            padding: 0.2em 0.4em;
-            font-family: monospace;
-        }
-        .hop-card-header .hop-remove:hover { text-decoration: underline; }
-        .hop-card-body {
-            padding: 0.4em 0.6em 0.6em 2.6em;
-            display: none;
-        }
-        .hop-card-body.expanded { display: block; }
-        .hop-card-body label { margin-top: 0.5em; }
-        .hop-card-body input, .hop-card-body textarea {
-            display: block;
-            width: 100%;
-            padding: 0.3em;
-            margin-top: 0.2em;
-            background: var(--input);
-            border: 1px solid var(--border);
-            color: var(--text);
-            font-family: monospace;
-            font-size: 0.95em;
-            border-radius: 3px;
-            box-sizing: border-box;
+        .folder-actions .desc {
+            color: var(--text-muted); font-size: var(--fz-md); font-style: italic;
         }
 
-        /* Flow diagram */
-        .flow-diagram {
-            display: flex;
-            align-items: center;
-            gap: 0;
-            flex-wrap: wrap;
-            margin-bottom: 0.8em;
-            font-size: 0.85em;
-        }
-        .flow-node {
-            display: inline-block;
-            padding: 0.2em 0.6em;
-            border-radius: 3px;
-            white-space: nowrap;
-        }
-        .flow-node-you { background: var(--input); color: var(--text-muted); }
-        .flow-node-hop { background: var(--hop-bg); color: var(--hop-fg); }
-        .flow-node-target { background: var(--input); color: var(--accent); font-weight: bold; }
-        .flow-arrow { color: var(--text-muted); margin: 0 0.3em; }
+        /* Active sessions strip */
+        .active-sessions { margin-bottom: var(--s-5); }
+        .session-grid { display: flex; gap: var(--s-3); overflow-x: auto; padding-bottom: var(--s-2); }
         .session-card {
-            flex: 0 0 auto;
-            width: 280px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            overflow: hidden;
-            cursor: pointer;
-            transition: border-color 0.2s;
+            flex: 0 0 auto; width: 280px;
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            overflow: hidden; cursor: pointer; transition: border-color .15s;
         }
         .session-card:hover { border-color: var(--accent); }
-        .session-card-thumb {
-            width: 100%;
-            height: 158px;
-            object-fit: cover;
-            background: #111;
-            display: block;
-        }
-        .session-card-info {
-            padding: 0.5em 0.8em;
-            font-size: 0.85em;
-        }
+        .session-card-thumb { width: 100%; height: 158px; object-fit: cover; background: #111; display: block; }
+        .session-card-info { padding: var(--s-2) var(--s-3); font-size: var(--fz-sm); }
         .session-card-info .card-name {
-            font-weight: bold;
-            color: var(--text);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            font-weight: bold; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .session-card-info .card-meta {
-            color: var(--text-muted);
-            font-size: 0.85em;
-            margin-top: 0.2em;
-            display: flex;
-            gap: 0.5em;
-            align-items: center;
+            color: var(--text-muted); font-size: var(--fz-xs);
+            margin-top: var(--s-1);
+            display: flex; gap: var(--s-1); align-items: center;
         }
-        .session-card-info .card-meta .type-badge {
-            font-size: 0.8em;
-        }
+        .session-card-info .card-meta .type-badge { font-size: 10px; min-width: 36px; }
         .session-card.dormant { opacity: 0.75; }
         .session-card.dormant .session-card-thumb { filter: brightness(0.7); }
+
+        /* Onboarding */
+        #onboard-body code { background: var(--input); padding: 1px var(--s-1); border-radius: var(--radius); font-size: 0.9em; }
+        .onboard-key {
+            display: inline-block; background: var(--surface);
+            border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 1px var(--s-1); font-size: 0.85em; color: var(--text);
+        }
+        .onboard-hl { color: var(--accent); font-weight: bold; }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
 <body>
-    <img id="site-logo" src="/logo.svg" style="max-height:40px;vertical-align:middle;margin-right:0.5em" alt=""><h1 style="display:inline;vertical-align:middle">rustguac</h1>
+    <div class="brand-row">
+        <img id="site-logo" src="/logo.svg" alt="">
+        <h1>rustguac</h1>
+    </div>
     <nav>
         <a href="/addressbook.html" class="active">Address Book</a>
         <a href="/sessions.html" id="sessions-link">Sessions</a>
@@ -305,7 +167,17 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
-        <span id="user-menu-wrapper"><a href="#" id="logout-item" style="color:var(--text-muted);text-decoration:none;margin-right:1em">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div><div class="um-divider"></div><div class="um-item" id="my-creds-item">&#128273; My Credentials</div><div class="um-item" id="show-tour-item">&#9432; Welcome Tour</div></div></span>
+        <span id="user-menu-wrapper">
+            <a href="#" id="logout-item">Logout</a>
+            <span id="user-menu-btn" title="Preferences">&#9881; Settings</span>
+            <div id="user-menu">
+                <div class="um-section-label">Theme</div>
+                <div id="um-theme-list"></div>
+                <div class="um-divider"></div>
+                <div class="um-item" id="my-creds-item">&#128273; My Credentials</div>
+                <div class="um-item" id="show-tour-item">&#9432; Welcome Tour</div>
+            </div>
+        </span>
     </nav>
 
     <div id="global-error"></div>
@@ -328,18 +200,18 @@
     </div>
 
     <div id="main-content" style="display:none">
-        <div id="active-sessions" style="display:none;margin-bottom:1.5em">
-            <div style="display:flex;align-items:center;gap:0.5em;margin-bottom:0.8em">
-                <strong style="color:var(--accent)">Active Sessions</strong>
-                <span id="active-sessions-count" style="color:var(--text-muted);font-size:0.85em"></span>
+        <div id="active-sessions" class="active-sessions" style="display:none">
+            <div class="section-head">
+                <strong>Active Sessions</strong>
+                <span id="active-sessions-count" class="section-count"></span>
             </div>
-            <div id="active-sessions-grid" style="display:flex;gap:1em;overflow-x:auto;padding-bottom:0.5em"></div>
+            <div id="active-sessions-grid" class="session-grid"></div>
         </div>
         <div class="layout">
             <div class="sidebar">
                 <div class="sidebar-header">
                     <strong>Folders</strong>
-                    <button class="btn-add admin-only" id="btn-new-folder" style="display:none;padding:0.2em 0.6em;font-size:0.85em" title="Create new folder">+ folder</button>
+                    <button class="btn-add admin-only" id="btn-new-folder" style="display:none" title="Create new folder">+ folder</button>
                 </div>
                 <ul class="folder-list" id="folder-list"></ul>
             </div>
@@ -349,7 +221,8 @@
                         <strong id="entries-title"></strong>
                         <span id="entries-desc" class="desc"></span>
                         <span style="flex:1"></span>
-                        <button class="btn-add admin-only" id="btn-new-entry" style="display:none;padding:0.3em 0.8em;font-size:0.9em">+ add entry</button>
+                        <button class="btn-add admin-only" id="btn-new-entry" style="display:none">+ add entry</button>
+                        <button class="btn-add admin-only" id="btn-new-subfolder" style="display:none" title="Create subfolder under this folder">+ subfolder</button>
                         <button class="btn-small admin-only" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
                         <button class="btn-small admin-only" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
                     </div>
@@ -657,7 +530,7 @@
                     <div class="field-hint" style="margin-bottom:0.5em">Route this connection through one or more SSH bastion hosts.</div>
                     <div id="em-flow-diagram" class="flow-diagram"></div>
                     <div id="em-hops-list"></div>
-                    <button type="button" class="btn-add" id="em-add-hop" style="margin-top:0.3em;padding:0.2em 0.8em;font-size:0.85em">+ Add Jump Host</button>
+                    <button type="button" class="btn-add" id="em-add-hop" style="margin-top:8px">+ Add Jump Host</button>
                 </div>
             </div>
             <div id="em-move-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
@@ -774,10 +647,14 @@
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
         var isAdmin = false;
         var currentUserRole = 'viewer';
-        var selectedFolder = null; // { name, scope, description }
-        var folders = [];
-        var folderEntryCounts = {}; // "scope/name" -> count
-        var folderEntries = {};    // "scope/name" -> entries array (from batch load)
+        var selectedFolder = null; // { name, scope, description, path, has_children }
+        var folders = []; // top-level folders from batch load
+        var folderEntryCounts = {}; // "scope|path" -> count
+        var folderEntries = {};    // "scope|path" -> entries array
+        var subfolderCache = {};   // "scope|path" -> [FolderInfo] (lazy-loaded children)
+        var expandedPaths = {};    // "scope|path" -> true (tree expansion state)
+        function folderKey(scope, path) { return scope + '|' + path; }
+        function folderPath(f) { return f.path || f.name; }
         var currentEntries = []; // entries for the currently selected folder
         var loginScriptsCache = null; // cached list from /api/login-scripts
 
@@ -1000,12 +877,18 @@
                 var allFolders = data.folders || [];
                 // Populate folder list and entry cache from batch response
                 folders = allFolders.map(function(f) {
-                    return { name: f.name, scope: f.scope, description: f.description || '' };
+                    return {
+                        name: f.name,
+                        scope: f.scope,
+                        description: f.description || '',
+                        path: f.path || f.name,
+                        has_children: !!f.has_children
+                    };
                 });
                 folderEntries = {};
                 folderEntryCounts = {};
                 allFolders.forEach(function(f) {
-                    var key = f.scope + '/' + f.name;
+                    var key = folderKey(f.scope, f.path || f.name);
                     folderEntries[key] = f.entries || [];
                     folderEntryCounts[key] = (f.entries || []).length;
                 });
@@ -1023,7 +906,7 @@
                     if (!selectedFolder && folders.length > 0) {
                         selectedFolder = folders[0];
                         renderFolders();
-                        loadEntries(folders[0].scope, folders[0].name);
+                        loadEntries(folders[0].scope, folderPath(folders[0]));
                     }
                 }
             })
@@ -1042,52 +925,173 @@
                 return;
             }
             folders.forEach(function(f) {
-                var li = document.createElement('li');
-                li.setAttribute('data-name', f.name);
-                li.setAttribute('data-scope', f.scope);
-                if (selectedFolder && selectedFolder.name === f.name && selectedFolder.scope === f.scope) {
-                    li.className = 'selected';
-                }
-                var row = document.createElement('div');
-                row.className = 'folder-name-row';
-                var nameSpan = document.createElement('span');
-                nameSpan.textContent = f.name;
-                row.appendChild(nameSpan);
-                var scopeBadge = document.createElement('span');
-                scopeBadge.className = 'folder-scope';
-                scopeBadge.textContent = f.scope;
-                row.appendChild(scopeBadge);
-                li.appendChild(row);
-                var countKey = f.scope + '/' + f.name;
-                if (folderEntryCounts[countKey] !== undefined) {
-                    var countSpan = document.createElement('span');
-                    countSpan.className = 'folder-count';
-                    countSpan.textContent = folderEntryCounts[countKey] + ' entries';
-                    li.appendChild(countSpan);
-                }
-                if (f.description) {
-                    var desc = document.createElement('span');
-                    desc.className = 'folder-desc';
-                    desc.textContent = f.description;
-                    li.appendChild(desc);
-                }
-                li.addEventListener('click', function() {
-                    selectedFolder = f;
-                    renderFolders();
-                    loadEntries(f.scope, f.name);
-                });
-                ul.appendChild(li);
+                ul.appendChild(buildFolderNode(f, true));
             });
         }
 
-        function loadEntries(scope, folder, forceRefresh) {
+        function buildFolderNode(f, showScope) {
+            var path = folderPath(f);
+            var key = folderKey(f.scope, path);
+            var li = document.createElement('li');
+            li.setAttribute('data-path', path);
+            li.setAttribute('data-scope', f.scope);
+            if (selectedFolder && selectedFolder.scope === f.scope && folderPath(selectedFolder) === path) {
+                li.className = 'selected';
+            }
+
+            var row = document.createElement('div');
+            row.className = 'folder-row';
+
+            var chevron = document.createElement('span');
+            chevron.className = 'tree-chevron';
+            var isExpanded = !!expandedPaths[key];
+            if (f.has_children) {
+                chevron.textContent = isExpanded ? '\u25BE' : '\u25B8';
+                if (isExpanded) chevron.classList.add('expanded');
+                chevron.addEventListener('click', function(ev) {
+                    ev.stopPropagation();
+                    toggleFolder(f);
+                });
+            } else {
+                chevron.classList.add('leaf');
+                chevron.textContent = '\u25B8';
+            }
+            row.appendChild(chevron);
+
+            var main = document.createElement('div');
+            main.className = 'folder-row-main';
+            var nameRow = document.createElement('div');
+            nameRow.className = 'folder-name-row';
+            var nameSpan = document.createElement('span');
+            nameSpan.textContent = f.name;
+            nameRow.appendChild(nameSpan);
+            if (showScope) {
+                var scopeBadge = document.createElement('span');
+                scopeBadge.className = 'folder-scope';
+                scopeBadge.setAttribute('data-scope', f.scope);
+                scopeBadge.title = f.scope === 'shared'
+                    ? 'Shared — visible across all rustguac instances'
+                    : 'Instance — this server only';
+                nameRow.appendChild(scopeBadge);
+            }
+            main.appendChild(nameRow);
+            if (folderEntryCounts[key] !== undefined) {
+                var countSpan = document.createElement('span');
+                countSpan.className = 'folder-count';
+                countSpan.textContent = folderEntryCounts[key] + ' entries';
+                main.appendChild(countSpan);
+            }
+            if (f.description) {
+                var desc = document.createElement('span');
+                desc.className = 'folder-desc';
+                desc.textContent = f.description;
+                main.appendChild(desc);
+            }
+            row.appendChild(main);
+
+            row.addEventListener('click', function() {
+                selectedFolder = f;
+                renderFolders();
+                loadEntries(f.scope, path);
+            });
+            li.appendChild(row);
+
+            if (f.has_children && isExpanded) {
+                var childrenUl = document.createElement('ul');
+                childrenUl.className = 'tree-children';
+                var kids = subfolderCache[key];
+                if (!kids) {
+                    var loadingLi = document.createElement('li');
+                    loadingLi.style.color = 'var(--text-dim)';
+                    loadingLi.style.cursor = 'default';
+                    loadingLi.style.padding = '0.3em 0.5em';
+                    loadingLi.textContent = 'Loading...';
+                    childrenUl.appendChild(loadingLi);
+                } else if (kids.length === 0) {
+                    var emptyLi = document.createElement('li');
+                    emptyLi.style.color = 'var(--text-dim)';
+                    emptyLi.style.cursor = 'default';
+                    emptyLi.style.padding = '0.3em 0.5em';
+                    emptyLi.style.fontSize = '0.85em';
+                    emptyLi.textContent = '(empty)';
+                    childrenUl.appendChild(emptyLi);
+                } else {
+                    kids.forEach(function(child) {
+                        childrenUl.appendChild(buildFolderNode(child, false));
+                    });
+                }
+                li.appendChild(childrenUl);
+            }
+
+            return li;
+        }
+
+        function toggleFolder(f) {
+            var path = folderPath(f);
+            var key = folderKey(f.scope, path);
+            if (expandedPaths[key]) {
+                delete expandedPaths[key];
+                renderFolders();
+            } else {
+                expandedPaths[key] = true;
+                renderFolders();
+                if (!subfolderCache[key]) {
+                    loadSubfolders(f.scope, path, function() { renderFolders(); });
+                }
+            }
+        }
+
+        function loadSubfolders(scope, path, cb) {
+            var key = folderKey(scope, path);
+            fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(path) + '/subfolders', {
+                headers: apiHeaders(),
+                credentials: 'same-origin'
+            })
+            .then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                return res.json();
+            })
+            .then(function(data) {
+                subfolderCache[key] = (data || []).map(function(sf) {
+                    return {
+                        name: sf.name,
+                        scope: sf.scope,
+                        description: sf.description || '',
+                        path: sf.path || (path + '/' + sf.name),
+                        has_children: !!sf.has_children
+                    };
+                });
+                if (cb) cb();
+            })
+            .catch(function(err) {
+                subfolderCache[key] = [];
+                showError('Failed to load subfolders: ' + err.message);
+                if (cb) cb();
+            });
+        }
+
+        function findFolder(scope, path) {
+            // Search top-level + subfolder cache for a folder object by scope/path.
+            for (var i = 0; i < folders.length; i++) {
+                if (folders[i].scope === scope && folderPath(folders[i]) === path) return folders[i];
+            }
+            for (var k in subfolderCache) {
+                var arr = subfolderCache[k];
+                for (var j = 0; j < arr.length; j++) {
+                    if (arr[j].scope === scope && folderPath(arr[j]) === path) return arr[j];
+                }
+            }
+            return null;
+        }
+
+        function loadEntries(scope, folderPath, forceRefresh) {
             var header = document.getElementById('entries-header');
             header.style.display = '';
-            document.getElementById('entries-title').textContent = folder;
-            var f = folders.find(function(x) { return x.name === folder && x.scope === scope; });
+            document.getElementById('entries-title').textContent = folderPath;
+            var f = findFolder(scope, folderPath);
             document.getElementById('entries-desc').textContent = f && f.description ? f.description : '';
 
-            var cacheKey = scope + '/' + folder;
+            var cacheKey = folderKey(scope, folderPath);
             var cached = folderEntries[cacheKey];
 
             // Use cache if available and not forcing refresh (e.g. after mutation)
@@ -1095,14 +1099,14 @@
                 currentEntries = cached;
                 folderEntryCounts[cacheKey] = cached.length;
                 renderFolders();
-                renderEntries(cached, scope, folder);
+                renderEntries(cached, scope, folderPath);
                 return;
             }
 
             var content = document.getElementById('entries-content');
             content.innerHTML = '<p class="empty">Loading...</p>';
 
-            fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries', {
+            fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folderPath) + '/entries', {
                 headers: apiHeaders(),
                 credentials: 'same-origin'
             })
@@ -1115,7 +1119,7 @@
                 folderEntries[cacheKey] = entries;
                 folderEntryCounts[cacheKey] = entries.length;
                 renderFolders(); // Update count badge
-                renderEntries(entries, scope, folder);
+                renderEntries(entries, scope, folderPath);
             })
             .catch(function(err) {
                 content.innerHTML = '<p class="empty">' + escapeHtml(err.message) + '</p>';
@@ -1372,10 +1376,12 @@
 
         // ── Folder modal ──
 
-        var folderEditMode = null; // null = create, {scope, name} = edit
+        var folderEditMode = null; // null = create, {scope, name, path} = edit
+        var subfolderParent = null; // null, or { scope, path } when creating a subfolder
 
         function openNewFolder() {
             folderEditMode = null;
+            subfolderParent = null;
             document.getElementById('folder-modal-title').textContent = 'New Folder';
             document.getElementById('fm-name').value = '';
             document.getElementById('fm-name').disabled = false;
@@ -1387,13 +1393,30 @@
             document.getElementById('folder-modal').classList.add('active');
         }
 
+        function openNewSubfolder() {
+            if (!selectedFolder) return;
+            folderEditMode = null;
+            subfolderParent = { scope: selectedFolder.scope, path: folderPath(selectedFolder) };
+            document.getElementById('folder-modal-title').textContent = 'New Subfolder in ' + subfolderParent.path;
+            document.getElementById('fm-name').value = '';
+            document.getElementById('fm-name').disabled = false;
+            document.getElementById('fm-desc').value = '';
+            document.getElementById('fm-groups').value = '';
+            document.getElementById('fm-scope').value = subfolderParent.scope;
+            document.getElementById('fm-scope').disabled = true;
+            document.getElementById('fm-error').textContent = '';
+            document.getElementById('folder-modal').classList.add('active');
+        }
+
         document.getElementById('btn-new-folder').addEventListener('click', openNewFolder);
         document.getElementById('btn-empty-create-folder').addEventListener('click', openNewFolder);
+        document.getElementById('btn-new-subfolder').addEventListener('click', openNewSubfolder);
 
         document.getElementById('btn-edit-folder').addEventListener('click', function() {
             if (!selectedFolder) return;
-            folderEditMode = { scope: selectedFolder.scope, name: selectedFolder.name };
-            document.getElementById('folder-modal-title').textContent = 'Edit Folder: ' + selectedFolder.name;
+            var selPath = folderPath(selectedFolder);
+            folderEditMode = { scope: selectedFolder.scope, name: selectedFolder.name, path: selPath };
+            document.getElementById('folder-modal-title').textContent = 'Edit Folder: ' + selPath;
             document.getElementById('fm-name').value = selectedFolder.name;
             document.getElementById('fm-name').disabled = true;
             document.getElementById('fm-desc').value = selectedFolder.description || '';
@@ -1402,7 +1425,7 @@
             document.getElementById('fm-error').textContent = '';
 
             // Load current config for groups
-            fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.name) + '/config', {
+            fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath) + '/config', {
                 headers: apiHeaders(),
                 credentials: 'same-origin'
             }).then(function(res) {
@@ -1440,7 +1463,7 @@
             saveBtn.textContent = 'Saving...';
 
             if (folderEditMode) {
-                fetch('/api/addressbook/folders/' + encodeURIComponent(folderEditMode.scope) + '/' + encodeURIComponent(folderEditMode.name), {
+                fetch('/api/addressbook/folders/' + encodeURIComponent(folderEditMode.scope) + '/' + encodeURIComponent(folderEditMode.path || folderEditMode.name), {
                     method: 'PUT',
                     headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'same-origin',
@@ -1456,18 +1479,36 @@
                 .catch(function(err) { errEl.textContent = err.message; })
                 .finally(function() { saveBtn.disabled = false; saveBtn.textContent = 'Save'; });
             } else {
+                var fullPath = subfolderParent ? subfolderParent.path + '/' + name : name;
+                var postScope = subfolderParent ? subfolderParent.scope : scope;
                 fetch('/api/addressbook/folders', {
                     method: 'POST',
                     headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'same-origin',
-                    body: JSON.stringify({ name: name, allowed_groups: groups, description: desc, scope: scope })
+                    body: JSON.stringify({ name: fullPath, allowed_groups: groups, description: desc, scope: postScope })
                 })
                 .then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
                     document.getElementById('folder-modal').classList.remove('active');
-                    // Auto-select the new folder
-                    selectedFolder = { name: name, scope: scope, description: desc };
-                    loadFolders();
+                    if (subfolderParent) {
+                        // Expand parent so the new child shows, then invalidate cache and reload.
+                        var parentScope = subfolderParent.scope;
+                        var parentPath = subfolderParent.path;
+                        var parentKey = folderKey(parentScope, parentPath);
+                        expandedPaths[parentKey] = true;
+                        delete subfolderCache[parentKey];
+                        var parent = findFolder(parentScope, parentPath);
+                        if (parent) parent.has_children = true;
+                        selectedFolder = { name: name, scope: postScope, description: desc, path: fullPath, has_children: false };
+                        subfolderParent = null;
+                        loadSubfolders(parentScope, parentPath, function() {
+                            renderFolders();
+                            loadEntries(selectedFolder.scope, fullPath, true);
+                        });
+                    } else {
+                        selectedFolder = { name: name, scope: scope, description: desc, path: name, has_children: false };
+                        loadFolders();
+                    }
                 })
                 .catch(function(err) { errEl.textContent = err.message; })
                 .finally(function() { saveBtn.disabled = false; saveBtn.textContent = 'Save'; });
@@ -1476,14 +1517,16 @@
 
         document.getElementById('btn-delete-folder').addEventListener('click', function() {
             if (!selectedFolder) return;
-            if (!confirm('Delete folder "' + selectedFolder.name + '" and ALL its entries? This cannot be undone.')) return;
-            fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.name), {
+            var selPath = folderPath(selectedFolder);
+            if (!confirm('Delete folder "' + selPath + '" and ALL its entries? This cannot be undone.')) return;
+            fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath), {
                 method: 'DELETE',
                 headers: apiHeaders(),
                 credentials: 'same-origin'
             }).then(function(res) {
                 if (!res.ok) return res.text().then(function(t) { showError(t); });
                 selectedFolder = null;
+                subfolderCache = {}; // drop all cached subfolder listings; they may reference the deleted path
                 document.getElementById('entries-header').style.display = 'none';
                 document.getElementById('entries-content').innerHTML = '<p class="empty">Select a folder to view entries.</p>';
                 loadFolders();
@@ -1895,7 +1938,7 @@
         function openNewEntry() {
             if (!selectedFolder) return;
             entryEditMode = null;
-            document.getElementById('entry-modal-title').textContent = 'New Entry in ' + selectedFolder.name;
+            document.getElementById('entry-modal-title').textContent = 'New Entry in ' + folderPath(selectedFolder);
             document.getElementById('em-name').value = '';
             document.getElementById('em-name').disabled = false;
             document.getElementById('em-display-name').value = '';
@@ -1996,18 +2039,23 @@
                 entryTypeSelect.dispatchEvent(new Event('change'));
             }
 
-            // Populate move-to-folder dropdown
+            // Populate move-to-folder dropdown (includes top-level + any loaded subfolders)
             var moveSelect = document.getElementById('em-move-target');
             moveSelect.innerHTML = '<option value="">(keep in current folder)</option>';
-            folders.forEach(function(f) {
-                if (f.name !== folder || f.scope !== scope) {
-                    var opt = document.createElement('option');
-                    opt.value = f.scope + '/' + f.name;
-                    opt.textContent = f.name + ' (' + f.scope + ')';
-                    moveSelect.appendChild(opt);
-                }
+            var moveCandidates = [];
+            folders.forEach(function(f) { moveCandidates.push(f); });
+            for (var ck in subfolderCache) {
+                subfolderCache[ck].forEach(function(f) { moveCandidates.push(f); });
+            }
+            moveCandidates.forEach(function(f) {
+                var p = folderPath(f);
+                if (p === folder && f.scope === scope) return;
+                var opt = document.createElement('option');
+                opt.value = f.scope + '|' + p;
+                opt.textContent = p + ' (' + f.scope + ')';
+                moveSelect.appendChild(opt);
             });
-            document.getElementById('em-move-section').style.display = folders.length > 1 ? '' : 'none';
+            document.getElementById('em-move-section').style.display = moveCandidates.length > 1 ? '' : 'none';
 
             // Pre-fill with existing entry data from the loaded entries
             var entryData = null;
@@ -2297,7 +2345,7 @@
 
             errEl.textContent = '';
             var scope = selectedFolder.scope;
-            var folder = selectedFolder.name;
+            var folder = folderPath(selectedFolder);
 
             var saveBtn = document.getElementById('em-save');
             saveBtn.disabled = true;
@@ -2322,9 +2370,9 @@
                 updatePromise.then(function() {
                     if (moveTarget) {
                         // Move = create in new folder + delete from old
-                        var parts = moveTarget.split('/');
-                        var targetScope = parts[0];
-                        var targetFolder = parts.slice(1).join('/');
+                        var sep = moveTarget.indexOf('|');
+                        var targetScope = sep >= 0 ? moveTarget.slice(0, sep) : moveTarget;
+                        var targetFolder = sep >= 0 ? moveTarget.slice(sep + 1) : '';
                         var body = { name: entryEditMode.name };
                         for (var k in entry) body[k] = entry[k];
 
@@ -2343,14 +2391,14 @@
                             });
                         }).then(function() {
                             // Switch to the target folder
-                            selectedFolder = folders.find(function(f) { return f.scope === targetScope && f.name === targetFolder; }) || selectedFolder;
+                            selectedFolder = findFolder(targetScope, targetFolder) || selectedFolder;
                         });
                     }
                 })
                 .then(function() {
                     document.getElementById('entry-modal').classList.remove('active');
                     entryTypeSelect.disabled = false;
-                    loadEntries(selectedFolder.scope, selectedFolder.name, true);
+                    loadEntries(selectedFolder.scope, folderPath(selectedFolder), true);
                 })
                 .catch(function(err) { errEl.textContent = err.message; })
                 .finally(function() { saveBtn.disabled = false; saveBtn.textContent = 'Save'; });

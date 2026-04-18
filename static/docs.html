@@ -3,47 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <title>rustguac - Docs</title>
+    <link rel="stylesheet" href="/rustguac.css">
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #666; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1b4332; --type-ssh-fg: #52b788; --type-rdp-bg: #3d1f00; --type-rdp-fg: #f0a050; --type-vnc-bg: #2d1b4e; --type-vnc-fg: #b07ff0; --type-web-bg: #1a1a4e; --type-web-fg: #7b8ff0; --hop-bg: #1b4332; --hop-fg: #52b788; --bg-pattern: none; }
-        body { font-family: monospace; background-color: var(--bg); background-image: var(--bg-pattern); background-attachment: fixed; min-height: 100vh; color: var(--text); padding: 2em; font-size: 18px; }
-        h1 { color: var(--primary); }
-        nav { margin-top: 0.8em; margin-bottom: 1.5em; padding-bottom: 0.8em; border-bottom: 1px solid var(--border); font-size: 0.95em; }
-        nav a { margin-right: 1.5em; text-decoration: none; color: var(--accent); }
-        nav a:hover { text-decoration: underline; }
-        nav .active { color: var(--primary); font-weight: bold; }
-        #user-menu-wrapper { position: relative; float: right; }
-        #user-menu-btn { cursor: pointer; font-size: 1.3em; color: var(--text-muted); }
-        #user-menu-btn:hover { color: var(--text); }
-        #user-menu { display:none; position:absolute; right:0; top:1.8em; background:var(--surface); border:1px solid var(--border); border-radius:6px; min-width:220px; z-index:50; padding:0.4em 0; }
-        .um-section-label { padding:0.4em 0.9em; font-size:0.8em; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
-        .um-item { padding:0.5em 0.9em; cursor:pointer; display:flex; align-items:center; gap:0.6em; font-size:0.9em; }
-        .um-item:hover { background:var(--input); }
-        .um-item.active { color:var(--accent); }
-        .um-theme-info { display:flex; flex-direction:column; }
-        .um-theme-name { font-weight:bold; }
-        .um-theme-desc { font-size:0.8em; color:var(--text-dim); }
-        .um-swatch { display:inline-block; width:16px; height:16px; border-radius:50%; border:1px solid var(--border); flex-shrink:0; }
-        .um-divider { height:1px; background:var(--border); margin:0.3em 0; }
-        .um-logout { color:var(--text-muted); }
-        .um-logout:hover { color:var(--primary); background:var(--input); }
-
-        /* Layout */
-        .docs-layout { display: flex; min-height: calc(100vh - 160px); border-top: 1px solid var(--border); margin-top: 1em; }
-
-        /* Sidebar */
+        .docs-layout {
+            display: flex;
+            min-height: calc(100vh - 180px);
+            border-top: 1px solid var(--border);
+            margin-top: var(--s-3);
+        }
         .sidebar {
-            width: 220px;
-            min-width: 220px;
+            width: 240px; min-width: 240px;
             border-right: 1px solid var(--border);
-            padding: 1em 0;
+            padding: var(--s-3) 0;
             overflow-y: auto;
         }
         .sidebar a {
             display: block;
-            padding: 0.5em 1.2em;
+            padding: var(--s-2) var(--s-4);
             color: var(--text-muted);
             text-decoration: none;
-            font-size: 0.9em;
+            font-size: var(--fz-sm);
             border-left: 3px solid transparent;
         }
         .sidebar a:hover { color: var(--text); background: var(--surface); }
@@ -53,66 +32,67 @@
             background: var(--surface);
             font-weight: bold;
         }
-
-        /* Content area */
         .content {
             flex: 1;
             overflow-y: auto;
-            padding: 2em 2.5em;
-            max-width: 900px;
+            padding: var(--s-4) var(--s-5);
+            max-width: 960px;
         }
-        .content h1 { color: var(--primary); font-size: 1.5em; margin-bottom: 0.8em; }
-        .content h2 { color: var(--primary); font-size: 1.15em; margin-top: 2em; margin-bottom: 0.5em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
-        .content h3 { color: var(--accent); font-size: 1em; margin-top: 1.5em; margin-bottom: 0.4em; }
-        .content h4 { color: var(--accent); font-size: 0.95em; margin-top: 1.2em; margin-bottom: 0.3em; }
-        .content p { margin: 0.6em 0; line-height: 1.6; }
-        .content ul, .content ol { margin: 0.5em 0 0.5em 1.5em; line-height: 1.6; }
-        .content li { margin: 0.2em 0; }
+        .content h1 { color: var(--primary); font-size: var(--fz-xl); margin-bottom: var(--s-3); }
+        .content h2 {
+            color: var(--primary); font-size: var(--fz-lg);
+            margin-top: var(--s-5); margin-bottom: var(--s-2);
+            border-bottom: 1px solid var(--border); padding-bottom: var(--s-2);
+        }
+        .content h3 { color: var(--accent); font-size: var(--fz-md); margin-top: var(--s-4); margin-bottom: var(--s-1); }
+        .content h4 { color: var(--accent); font-size: var(--fz-sm); margin-top: var(--s-3); margin-bottom: var(--s-1); }
+        .content p { margin: var(--s-2) 0; line-height: 1.65; }
+        .content ul, .content ol { margin: var(--s-2) 0 var(--s-2) var(--s-4); line-height: 1.65; }
+        .content li { margin: var(--s-1) 0; }
         .content a { color: var(--accent); }
         .content a:hover { text-decoration: underline; }
         .content code {
             background: var(--surface);
-            padding: 0.15em 0.4em;
-            border-radius: 3px;
+            padding: 2px var(--s-1);
+            border-radius: var(--radius);
             font-size: 0.9em;
         }
         .content pre {
             background: var(--surface);
             border: 1px solid var(--border);
-            padding: 1em;
-            border-radius: 6px;
+            padding: var(--s-3);
+            border-radius: var(--radius);
             overflow-x: auto;
             line-height: 1.5;
-            margin: 0.8em 0;
+            margin: var(--s-2) 0;
         }
-        .content pre code {
-            background: none;
-            padding: 0;
-            border-radius: 0;
-            font-size: 0.85em;
+        .content pre code { background: none; padding: 0; border-radius: 0; font-size: var(--fz-sm); }
+        .content table { border-collapse: collapse; width: 100%; margin: var(--s-2) 0; }
+        .content th, .content td {
+            text-align: left; padding: var(--s-2) var(--s-3);
+            border-bottom: 1px solid var(--border); font-size: var(--fz-sm);
         }
-        .content table { border-collapse: collapse; width: 100%; margin: 0.8em 0; }
-        .content th, .content td { text-align: left; padding: 0.4em 0.8em; border-bottom: 1px solid var(--border); }
-        .content th { color: var(--text-muted); font-size: 0.85em; }
+        .content th { color: var(--text-muted); text-transform: none; letter-spacing: 0; background: transparent; }
         .content blockquote {
             border-left: 3px solid var(--accent);
-            margin: 0.8em 0;
-            padding: 0.4em 1em;
+            margin: var(--s-2) 0;
+            padding: var(--s-1) var(--s-3);
             color: var(--text-muted);
         }
-        .content hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
-
-        .loading { padding: 2em; color: var(--text-muted); }
-
+        .content hr { border: none; border-top: 1px solid var(--border); margin: var(--s-5) 0; }
+        .loading { padding: var(--s-4); color: var(--text-muted); }
         @media (max-width: 700px) {
-            .sidebar { width: 160px; min-width: 160px; }
-            .content { padding: 1em; }
+            .sidebar { width: 180px; min-width: 180px; }
+            .content { padding: var(--s-3); }
         }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
 <body>
-    <img id="site-logo" src="/logo.svg" style="max-height:40px;vertical-align:middle;margin-right:0.5em" alt=""><h1 style="display:inline;vertical-align:middle">rustguac</h1>
+    <div class="brand-row">
+        <img id="site-logo" src="/logo.svg" alt="">
+        <h1>rustguac</h1>
+    </div>
     <nav>
             <a href="/addressbook.html">Address Book</a>
             <a href="/sessions.html" id="sessions-link">Sessions</a>
@@ -121,7 +101,7 @@
             <a href="/docs.html" class="active">Docs</a>
             <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
             <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
-            <span id="user-menu-wrapper"><a href="#" id="logout-item" style="color:var(--text-muted);text-decoration:none;margin-right:1em">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
+            <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
         </nav>
 
     <div class="docs-layout">

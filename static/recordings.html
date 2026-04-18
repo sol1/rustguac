@@ -3,90 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <title>rustguac - Recordings</title>
+    <link rel="stylesheet" href="/rustguac.css">
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #666; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1b4332; --type-ssh-fg: #52b788; --type-rdp-bg: #3d1f00; --type-rdp-fg: #f0a050; --type-vnc-bg: #2d1b4e; --type-vnc-fg: #b07ff0; --type-web-bg: #1a1a4e; --type-web-fg: #7b8ff0; --type-vdi-bg: #0e2a2a; --type-vdi-fg: #2dd4bf; --hop-bg: #1b4332; --hop-fg: #52b788; --bg-pattern: none; }
-        body { font-family: monospace; background-color: var(--bg); background-image: var(--bg-pattern); background-attachment: fixed; min-height: 100vh; color: var(--text); padding: 2em; font-size: 18px; }
-        h1 { color: var(--primary); }
-        a { color: var(--accent); }
-        nav { margin-top: 0.8em; margin-bottom: 1.5em; padding-bottom: 0.8em; border-bottom: 1px solid var(--border); font-size: 0.95em; }
-        nav a { margin-right: 1.5em; text-decoration: none; }
-        nav a:hover { text-decoration: underline; }
-        nav .active { color: var(--primary); font-weight: bold; }
-        #user-menu-wrapper { position: relative; float: right; }
-        #user-menu-btn { cursor: pointer; font-size: 1.3em; color: var(--text-muted); }
-        #user-menu-btn:hover { color: var(--text); }
-        #user-menu { display:none; position:absolute; right:0; top:1.8em; background:var(--surface); border:1px solid var(--border); border-radius:6px; min-width:220px; z-index:50; padding:0.4em 0; }
-        .um-section-label { padding:0.4em 0.9em; font-size:0.8em; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
-        .um-item { padding:0.5em 0.9em; cursor:pointer; display:flex; align-items:center; gap:0.6em; font-size:0.9em; }
-        .um-item:hover { background:var(--input); }
-        .um-item.active { color:var(--accent); }
-        .um-theme-info { display:flex; flex-direction:column; }
-        .um-theme-name { font-weight:bold; }
-        .um-theme-desc { font-size:0.8em; color:var(--text-dim); }
-        .um-swatch { display:inline-block; width:16px; height:16px; border-radius:50%; border:1px solid var(--border); flex-shrink:0; }
-        .um-divider { height:1px; background:var(--border); margin:0.3em 0; }
-        .um-logout { color:var(--text-muted); }
-        .um-logout:hover { color:var(--primary); background:var(--input); }
-
-        table { border-collapse: collapse; width: 100%; max-width: 1200px; }
-        th, td { text-align: left; padding: 0.4em 0.8em; border-bottom: 1px solid var(--border); }
-        th { color: var(--text-muted); font-size: 0.85em; }
-        .btn-small {
-            background: none; border: none; color: var(--accent);
-            cursor: pointer; font-family: monospace; padding: 0; font-size: 0.9em;
-        }
-        .btn-small:hover { text-decoration: underline; }
-        .btn-delete { color: var(--primary); }
-        .empty { color: var(--text-dim); margin: 2em 0; }
-
         #player-section {
             display: none;
-            margin: 1em 0 1.5em 0;
+            margin: var(--s-3) 0 var(--s-4) 0;
             background: var(--surface);
-            border-radius: 6px;
-            padding: 1em;
-            max-width: 1100px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: var(--s-3);
+            max-width: 1200px;
         }
         #player-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 0.5em;
+            margin-bottom: var(--s-2);
         }
-        #player-title { color: var(--text-muted); font-size: 0.9em; }
+        #player-title {
+            color: var(--text-muted);
+            font-size: var(--fz-sm);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
         #player-close {
-            background: none; border: none; color: #888; cursor: pointer;
-            font-family: monospace; font-size: 1.1em;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-family: monospace;
+            font-size: var(--fz-lg);
+            padding: 0 var(--s-2);
+            height: var(--ctl-sm);
+            font-weight: normal;
         }
-        #player-close:hover { color: var(--primary); }
+        #player-close:hover { color: var(--primary); background: none; border-color: transparent; }
         #player-display {
             background: #000;
             overflow: auto;
             max-height: 70vh;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
         }
         #player-controls {
             display: flex;
             align-items: center;
-            gap: 0.8em;
-            margin-top: 0.5em;
-            padding: 0.4em 0;
+            gap: var(--s-3);
+            margin-top: var(--s-2);
+            padding: var(--s-2) 0;
         }
         #play-btn {
-            background: var(--primary); color: #fff; border: none;
-            font-family: monospace; font-size: 0.9em; padding: 0.3em 1em;
-            border-radius: 3px; cursor: pointer; min-width: 60px;
+            min-width: 90px;
+            height: var(--ctl-sm);
+            font-size: var(--fz-sm);
         }
-        #play-btn:hover { background: var(--primary-hover); }
         #seek-container {
             position: relative;
             flex: 1;
-            height: 32px;
+            height: 36px;
         }
         #histogram {
             position: absolute;
             top: 0; left: 0;
             width: 100%; height: 100%;
-            border-radius: 3px;
+            border-radius: var(--radius);
         }
         #seek-slider {
             position: absolute;
@@ -101,25 +81,27 @@
         }
         #seek-slider::-webkit-slider-runnable-track {
             height: 4px;
-            background: rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.12);
             border-radius: 2px;
         }
         #seek-slider::-moz-range-track {
             height: 4px;
-            background: rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.12);
             border-radius: 2px;
         }
         #seek-slider::-webkit-slider-thumb {
             -webkit-appearance: none;
-            width: 12px; height: 12px;
+            width: 14px; height: 14px;
             background: var(--accent); border-radius: 50%; cursor: pointer;
-            margin-top: -4px;
+            margin-top: -5px;
         }
         #seek-slider::-moz-range-thumb {
-            width: 12px; height: 12px;
+            width: 14px; height: 14px;
             background: var(--accent); border-radius: 50%; cursor: pointer; border: none;
         }
-        #player-time { color: var(--text-muted); font-size: 0.85em; white-space: nowrap; }
+        #player-time { color: var(--text-muted); font-size: var(--fz-sm); white-space: nowrap; }
+        .btn-delete { color: var(--primary); }
+        .btn-delete:hover { color: var(--primary-hover); }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 
@@ -159,7 +141,10 @@
     <script src="/guac/SessionRecording.js"></script>
 </head>
 <body>
-    <img id="site-logo" src="/logo.svg" style="max-height:40px;vertical-align:middle;margin-right:0.5em" alt=""><h1 style="display:inline;vertical-align:middle">rustguac</h1>
+    <div class="brand-row">
+        <img id="site-logo" src="/logo.svg" alt="">
+        <h1>rustguac</h1>
+    </div>
     <nav>
         <a href="/addressbook.html">Address Book</a>
         <a href="/sessions.html" id="sessions-link">Sessions</a>
@@ -168,10 +153,10 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
-        <span id="user-menu-wrapper"><a href="#" id="logout-item" style="color:var(--text-muted);text-decoration:none;margin-right:1em">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
+        <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
 
-    <strong>Recordings</strong>
+    <h2>Recordings</h2>
 
     <div id="player-section">
         <div id="player-header">
