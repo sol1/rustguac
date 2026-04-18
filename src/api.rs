@@ -358,6 +358,95 @@ pub async fn get_session_thumbnail(
     }
 }
 
+/// POST /api/sessions/:id/shadow — Mint a short-lived viewer token
+/// that lets the caller join another user's active session without that
+/// user's cooperation. Admin-only. The raw token is returned once and a
+/// `token_audit_log` entry is written. Tokens expire after 10 minutes.
+pub async fn shadow_session(
+    State(manager): State<AppState>,
+    Extension(database): Extension<Db>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let id_inner = match identity {
+        Some(Extension(ref id)) if id.has_role("admin") => id.clone(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response();
+        }
+    };
+
+    let info = match manager.get_session(id).await {
+        Some(i) => i,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "session not found"})),
+            )
+                .into_response();
+        }
+    };
+
+    let admin_email = id_inner.display_name().to_string();
+    let (raw, expires_at) = match manager.mint_shadow_token(id, &admin_email).await {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "session not found"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Audit: record that an admin shadowed a session.
+    let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
+    let ip = client_ip(&headers, addr.ip(), &proxies).to_string();
+    let details = format!(
+        "session_id={}, owner={}, expires_at={}",
+        id,
+        info.created_by,
+        expires_at.to_rfc3339()
+    );
+    let db_clone = database.clone();
+    let admin_for_audit = admin_email.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Err(e) = db::log_token_event(
+            &db_clone,
+            None,
+            None,
+            &admin_for_audit,
+            "shadow_session",
+            Some(&ip),
+            Some(&details),
+        ) {
+            tracing::warn!(error = %e, "failed to write shadow audit log");
+        }
+    })
+    .await;
+
+    tracing::info!(
+        admin = %admin_email,
+        session_id = %id,
+        owner = %info.created_by,
+        "Admin minted shadow token"
+    );
+
+    let url = format!("/client/{}?token={}", id, raw);
+    Json(json!({
+        "url": url,
+        "expires_at": expires_at.to_rfc3339(),
+        "ttl_seconds": 600,
+    }))
+    .into_response()
+}
+
 /// GET /api/vdi/containers — List running VDI containers for the current user.
 /// Returns containers with metadata for the "Active Desktops" UI.
 pub async fn list_vdi_containers(

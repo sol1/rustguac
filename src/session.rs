@@ -203,6 +203,24 @@ pub struct Session {
     pub max_recordings: Option<u32>,
     /// Login script task handle (aborted on session cleanup).
     pub login_script_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Short-lived admin-issued viewer tokens (Shadow — plan in
+    /// project_shadow_sessions_plan.md). Stores only a sha256 hex of the
+    /// raw token, the admin that issued it, and expiry. Validated
+    /// alongside share_token in validate_share_token; expired entries
+    /// are pruned when new tokens are minted.
+    pub shadow_tokens: Vec<ShadowToken>,
+}
+
+/// A short-lived viewer token issued by an admin to shadow an active session.
+/// The raw token is handed to the admin once; only the hash is persisted in
+/// memory so the token can't be lifted from a runtime snapshot.
+#[derive(Debug, Clone)]
+pub struct ShadowToken {
+    pub token_hash: String,
+    /// Kept for future logging/listing of active shadow sessions.
+    #[allow(dead_code)]
+    pub issued_by: String,
+    pub expires_at: DateTime<Utc>,
 }
 
 fn generate_share_token() -> String {
@@ -1111,6 +1129,7 @@ impl SessionManager {
             entry_display_name: req.entry_display_name,
             max_recordings: req.max_recordings,
             login_script_handle,
+            shadow_tokens: Vec::new(),
         };
 
         let info = session.info();
@@ -1273,18 +1292,68 @@ impl SessionManager {
     }
 
     /// Validate a share token for a session (constant-time comparison).
+    /// Accepts either the owner's `share_token` or any non-expired
+    /// admin-minted shadow token.
     pub async fn validate_share_token(&self, id: Uuid, token: &str) -> bool {
         use sha2::{Digest, Sha256};
         use subtle::ConstantTimeEq;
         let sessions = self.sessions.read().await;
-        if let Some(session) = sessions.get(&id) {
-            let session = session.lock().await;
-            let expected = Sha256::digest(session.share_token.as_bytes());
-            let provided = Sha256::digest(token.as_bytes());
-            expected.ct_eq(&provided).into()
-        } else {
-            false
+        let Some(session) = sessions.get(&id) else {
+            return false;
+        };
+        let session = session.lock().await;
+        let provided = Sha256::digest(token.as_bytes());
+
+        // 1. Owner's long-lived share token.
+        let expected = Sha256::digest(session.share_token.as_bytes());
+        if bool::from(expected.ct_eq(&provided)) {
+            return true;
         }
+
+        // 2. Short-lived admin shadow tokens (sha256 compared to the
+        //    pre-hashed hex stored on the session).
+        let provided_hex = hex::encode(provided);
+        let now = Utc::now();
+        for t in &session.shadow_tokens {
+            if t.expires_at <= now {
+                continue;
+            }
+            if t.token_hash.len() == provided_hex.len()
+                && t.token_hash.as_bytes().ct_eq(provided_hex.as_bytes()).into()
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Mint a new short-lived (10 min) shadow token for a session.
+    /// Returns the raw token (hand to admin once) and its expiry.
+    /// Expired tokens on the session are pruned on mint.
+    pub async fn mint_shadow_token(
+        &self,
+        id: Uuid,
+        issued_by: &str,
+    ) -> Option<(String, DateTime<Utc>)> {
+        use sha2::{Digest, Sha256};
+        let sessions = self.sessions.read().await;
+        let session = sessions.get(&id)?;
+        let mut session = session.lock().await;
+
+        let now = Utc::now();
+        session.shadow_tokens.retain(|t| t.expires_at > now);
+
+        let mut rng = rand::rng();
+        let bytes: [u8; 16] = rng.random();
+        let raw = hex::encode(bytes);
+        let hash = hex::encode(Sha256::digest(raw.as_bytes()));
+        let expires_at = now + chrono::Duration::minutes(10);
+        session.shadow_tokens.push(ShadowToken {
+            token_hash: hash,
+            issued_by: issued_by.to_string(),
+            expires_at,
+        });
+        Some((raw, expires_at))
     }
 
     /// Decrement active connection count when a WebSocket disconnects.

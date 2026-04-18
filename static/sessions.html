@@ -25,6 +25,13 @@
         #sessions { margin-top: var(--s-5); }
         #sessions a { text-decoration: none; font-size: var(--fz-sm); }
         #sessions a:hover { text-decoration: underline; }
+        #sessions a.shadow-link {
+            color: var(--status-pending);
+            font-weight: bold;
+            letter-spacing: 0.04em;
+        }
+        #sessions a.shadow-link:hover { color: var(--primary); }
+        #sessions a.shadow-link-busy { opacity: 0.6; pointer-events: none; }
         .btn-add-hop {
             background: transparent;
             color: var(--accent);
@@ -190,6 +197,8 @@
 
         // Check auth and role
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
+        var myName = null;
+        var myRole = null;
         function checkRole() {
             fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
@@ -199,6 +208,8 @@
             })
             .then(function(data) {
                 if (!data) return;
+                myName = data.name || null;
+                myRole = data.role || null;
                 var level = roleLevel[data.role] || 0;
                 if (level < 3) {
                     window.location.href = '/connections.html';
@@ -220,10 +231,16 @@
         }
         if (apiKey) {
             // API key users are always admin
+            myRole = 'admin';
             document.getElementById('session-form').style.display = '';
             document.getElementById('admin-link').style.display = '';
             document.getElementById('tokens-link').style.display = '';
             document.getElementById('reports-link').style.display = '';
+            // Fetch /api/me anyway to learn our display_name for own-session checks.
+            fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(d) { if (d && d.name) myName = d.name; })
+                .catch(function() {});
         } else {
             checkRole();
         }
@@ -589,8 +606,20 @@
                     tr.appendChild(h('td', String(s.active_connections)));
 
                     var isActive = s.status === 'active';
+                    var isOwn = myName && s.created_by === myName;
+                    var canShadow = isActive && !isOwn && myRole === 'admin';
+
                     var tdOpen = document.createElement('td');
-                    if (isActive) tdOpen.appendChild(h('a', 'open', { href: s.client_url, target: '_blank' }));
+                    if (isActive && isOwn) {
+                        tdOpen.appendChild(h('a', 'open', { href: s.client_url, target: '_blank' }));
+                    } else if (canShadow) {
+                        tdOpen.appendChild(h('a', 'shadow', {
+                            href: '#',
+                            'class': 'shadow-link',
+                            'data-shadow': s.session_id,
+                            title: 'Join this session as a read-only viewer (10 min token, audit-logged)'
+                        }));
+                    }
                     tr.appendChild(tdOpen);
 
                     var tdDel = document.createElement('td');
@@ -607,6 +636,33 @@
                 var id = e.target.getAttribute('data-delete');
                 fetch('/api/sessions/' + id, { method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin' })
                 .then(function() { refreshSessions(); });
+            }
+            if (e.target.getAttribute('data-shadow')) {
+                e.preventDefault();
+                var id = e.target.getAttribute('data-shadow');
+                var link = e.target;
+                var originalText = link.textContent;
+                link.textContent = 'minting...';
+                link.classList.add('shadow-link-busy');
+                fetch('/api/sessions/' + id + '/shadow', {
+                    method: 'POST',
+                    headers: apiHeaders(),
+                    credentials: 'same-origin'
+                })
+                .then(function(res) {
+                    if (!res.ok) return res.text().then(function(t) { throw new Error(t || 'shadow failed'); });
+                    return res.json();
+                })
+                .then(function(data) {
+                    if (data.url) window.open(data.url, '_blank');
+                })
+                .catch(function(err) {
+                    document.getElementById('error').textContent = 'Shadow failed: ' + err.message;
+                })
+                .finally(function() {
+                    link.textContent = originalText;
+                    link.classList.remove('shadow-link-busy');
+                });
             }
         });
 
