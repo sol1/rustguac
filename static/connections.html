@@ -142,6 +142,42 @@
         .session-card-info .card-meta .type-badge { font-size: 10px; min-width: 36px; }
         .session-card.dormant { opacity: 0.75; }
         .session-card.dormant .session-card-thumb { filter: brightness(0.7); }
+        .card-actions {
+            display: flex;
+            gap: var(--s-1);
+            padding: 0 var(--s-3) var(--s-2);
+            margin-top: var(--s-1);
+        }
+        .card-actions button {
+            height: 28px;
+            padding: 0 var(--s-2);
+            font-size: var(--fz-xs);
+            font-weight: normal;
+        }
+
+        /* Share URL display in the share modal */
+        .share-url-box {
+            display: flex;
+            align-items: stretch;
+            gap: var(--s-2);
+            margin-top: var(--s-1);
+        }
+        .share-url-box code {
+            flex: 1;
+            min-width: 0;
+            padding: var(--s-2) var(--s-3);
+            background: var(--input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: var(--fz-sm);
+            word-break: break-all;
+            user-select: all;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        .share-url-box button {
+            flex-shrink: 0;
+        }
 
         /* Chip-based group picker */
         .chip-picker {
@@ -658,6 +694,25 @@
         </div>
     </div>
 
+    <!-- Share session modal -->
+    <div class="modal-overlay" id="share-modal">
+        <div class="modal">
+            <h3>Share Session</h3>
+            <p style="color:var(--text-muted);font-size:var(--fz-sm);margin:0 0 var(--s-3) 0">
+                Send this URL to someone to let them join your session as a read-only viewer.
+            </p>
+            <label>Share URL</label>
+            <div class="share-url-box">
+                <code id="share-modal-url"></code>
+                <button type="button" id="share-modal-copy" class="btn-add">Copy</button>
+            </div>
+            <div class="field-hint">Anyone with this link and network access to this server can watch the session until it ends.</div>
+            <div class="modal-actions">
+                <button class="btn-cancel" id="share-modal-close">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Onboarding wizard -->
     <div class="modal-overlay" id="onboarding-modal">
         <div class="modal" style="max-width:520px;min-width:380px">
@@ -980,6 +1035,61 @@
             });
         }
 
+        // ── Share session modal ─────────────────────────────
+        function openShareModal(url) {
+            var box = document.getElementById('share-modal-url');
+            box.textContent = url;
+            document.getElementById('share-modal').classList.add('active');
+            // Auto-select the URL so Ctrl-C just works
+            try {
+                var range = document.createRange();
+                range.selectNodeContents(box);
+                var sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            } catch (e) {}
+        }
+        function closeShareModal() {
+            document.getElementById('share-modal').classList.remove('active');
+        }
+        function copyToClipboard(text, onOk, onFail) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(onOk).catch(function() { fallback(); });
+            } else {
+                fallback();
+            }
+            function fallback() {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                var ok = false;
+                try { ok = document.execCommand('copy'); } catch (e) {}
+                document.body.removeChild(ta);
+                if (ok) onOk(); else if (onFail) onFail();
+            }
+        }
+        (function wireShareModal() {
+            var copyBtn = document.getElementById('share-modal-copy');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', function() {
+                    var url = document.getElementById('share-modal-url').textContent;
+                    copyToClipboard(url, function() {
+                        copyBtn.textContent = 'Copied';
+                        setTimeout(function() { copyBtn.textContent = 'Copy'; }, 2000);
+                    });
+                });
+            }
+            var closeBtn = document.getElementById('share-modal-close');
+            if (closeBtn) closeBtn.addEventListener('click', closeShareModal);
+            var overlay = document.getElementById('share-modal');
+            if (overlay) overlay.addEventListener('click', function(ev) {
+                if (ev.target === overlay) closeShareModal();
+            });
+        })();
+
         function loadActiveSessions() {
             // Fetch active sessions and dormant VDI containers in parallel
             var sessionsP = fetch('/api/sessions', { headers: apiHeaders(), credentials: 'same-origin' }).then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; });
@@ -1026,9 +1136,18 @@
                     var thumbUrl = s.thumbnail_url || '';
                     var name = s.entry_display_name || s.hostname || s.url || '?';
                     var typeBadge = '<span class="type-badge type-' + escapeHtml(s.session_type) + '">' + escapeHtml(s.session_type) + '</span>';
+                    var shareUrl = s.share_url ? (window.location.origin + s.share_url) : '';
                     card.innerHTML = '<img class="session-card-thumb" src="' + escapeHtml(thumbUrl) + (thumbUrl ? '?t=' + Date.now() : '') + '" onerror="this.style.display=\'none\'" alt="">'
                         + '<div class="session-card-info"><div class="card-name">' + escapeHtml(name) + '</div>'
-                        + '<div class="card-meta">' + typeBadge + ' <span>' + escapeHtml(s.username || '') + '</span></div></div>';
+                        + '<div class="card-meta">' + typeBadge + ' <span>' + escapeHtml(s.username || '') + '</span></div></div>'
+                        + (shareUrl ? '<div class="card-actions"><button type="button" class="btn-add" data-share-url="' + escapeAttr(shareUrl) + '" title="Copy a URL to let someone watch this session">Share</button></div>' : '');
+                    var shareBtn = card.querySelector('[data-share-url]');
+                    if (shareBtn) {
+                        shareBtn.addEventListener('click', function(ev) {
+                            ev.stopPropagation();
+                            openShareModal(shareBtn.getAttribute('data-share-url'));
+                        });
+                    }
                     card.addEventListener('click', function() {
                         if (s.address_book_entry) {
                             // Reconnect via connections connect (creates new session to same target)

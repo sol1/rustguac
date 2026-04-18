@@ -25,7 +25,6 @@
         #sessions { margin-top: var(--s-5); }
         #sessions a { text-decoration: none; font-size: var(--fz-sm); }
         #sessions a:hover { text-decoration: underline; }
-        .btn-share { color: var(--accent); }
         .btn-add-hop {
             background: transparent;
             color: var(--accent);
@@ -37,15 +36,6 @@
             font-weight: normal;
         }
         .btn-add-hop:hover { background: var(--surface); border-color: var(--accent); }
-        .share-url {
-            background: var(--input);
-            padding: var(--s-2) var(--s-3);
-            border-radius: var(--radius);
-            font-size: var(--fz-sm);
-            word-break: break-all;
-            display: none;
-            margin-top: var(--s-1);
-        }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -180,7 +170,7 @@
         <h2>Sessions</h2>
         <table>
             <thead><tr>
-                <th>ID</th><th>Type</th><th>Host</th><th>User</th><th>Owner</th><th>Status</th><th>Viewers</th><th></th><th></th><th></th>
+                <th>ID</th><th>Type</th><th>Host</th><th>User</th><th>Owner</th><th>Status</th><th>Viewers</th><th></th><th></th>
             </tr></thead>
             <tbody id="session-list"></tbody>
         </table>
@@ -563,7 +553,6 @@
             });
         });
 
-        var expandedShares = {};
 
         function h(tag, text, attrs) {
             var el = document.createElement(tag);
@@ -585,8 +574,6 @@
                 sessions.forEach(function(s) {
                     var tr = document.createElement('tr');
                     var shortId = s.session_id.substring(0, 8);
-                    var shareFullUrl = s.share_url ? (window.location.origin + s.share_url) : '';
-                    var rowId = 'share-' + s.session_id;
                     var hostCol = s.session_type === 'web' ? (s.url || '') : s.hostname;
 
                     var tdId = document.createElement('td');
@@ -606,28 +593,11 @@
                     if (isActive) tdOpen.appendChild(h('a', 'open', { href: s.client_url, target: '_blank' }));
                     tr.appendChild(tdOpen);
 
-                    var tdShare = document.createElement('td');
-                    if (isActive && shareFullUrl) tdShare.appendChild(h('button', 'share', { 'class': 'btn-small btn-share', 'data-url': shareFullUrl, 'data-row': rowId }));
-                    tr.appendChild(tdShare);
-
                     var tdDel = document.createElement('td');
                     tdDel.appendChild(h('button', 'delete', { 'class': 'btn-small', 'data-delete': s.session_id }));
                     tr.appendChild(tdDel);
 
                     tbody.appendChild(tr);
-
-                    var shareTr = document.createElement('tr');
-                    shareTr.id = rowId;
-                    shareTr.style.display = expandedShares[rowId] ? '' : 'none';
-                    var shareTd = document.createElement('td');
-                    shareTd.colSpan = 10;
-                    var shareDiv = h('div', null, { 'class': 'share-url', style: 'display:block' });
-                    shareDiv.appendChild(h('span', shareFullUrl));
-                    shareDiv.appendChild(document.createTextNode(' '));
-                    shareDiv.appendChild(h('button', 'copy', { 'class': 'btn-small btn-copy', 'data-copy-url': shareFullUrl }));
-                    shareTd.appendChild(shareDiv);
-                    shareTr.appendChild(shareTd);
-                    tbody.appendChild(shareTr);
                 });
             });
         }
@@ -637,48 +607,6 @@
                 var id = e.target.getAttribute('data-delete');
                 fetch('/api/sessions/' + id, { method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin' })
                 .then(function() { refreshSessions(); });
-            }
-            if (e.target.getAttribute('data-copy-url')) {
-                var url = e.target.getAttribute('data-copy-url');
-                var copyBtn = e.target;
-                function onCopied() {
-                    copyBtn.textContent = 'copied!';
-                    setTimeout(function() { copyBtn.textContent = 'copy'; }, 2000);
-                }
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(url).then(onCopied).catch(function() {
-                        // Fallback for insecure contexts
-                        var ta = document.createElement('textarea');
-                        ta.value = url;
-                        ta.style.position = 'fixed';
-                        ta.style.opacity = '0';
-                        document.body.appendChild(ta);
-                        ta.select();
-                        document.execCommand('copy');
-                        document.body.removeChild(ta);
-                        onCopied();
-                    });
-                } else {
-                    var ta = document.createElement('textarea');
-                    ta.value = url;
-                    ta.style.position = 'fixed';
-                    ta.style.opacity = '0';
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(ta);
-                    onCopied();
-                }
-                return;
-            }
-            if (e.target.classList.contains('btn-share')) {
-                var rowId = e.target.getAttribute('data-row');
-                var row = document.getElementById(rowId);
-                if (row) {
-                    var show = row.style.display === 'none';
-                    row.style.display = show ? '' : 'none';
-                    expandedShares[rowId] = show;
-                }
             }
         });
 
