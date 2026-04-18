@@ -166,6 +166,12 @@ pub struct AddressBookEntry {
     /// Override idle timeout for VDI container in minutes. Uses global default if unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_idle_timeout_mins: Option<u64>,
+    /// Allow users to generate a Share URL for sessions from this entry.
+    /// Default: false (admin must opt in per entry). Gates the Share
+    /// button in the Connections Active Sessions card — when `false`,
+    /// `SessionInfo.share_url` is serialised as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_sharing: Option<bool>,
 }
 
 impl AddressBookEntry {
@@ -277,6 +283,10 @@ pub struct EntryInfo {
     /// Idle timeout for VDI container in minutes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_idle_timeout_mins: Option<u64>,
+    /// Whether users can generate Share URLs for sessions of this entry.
+    /// Defaults to false — admin must opt in per entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_sharing: Option<bool>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -331,6 +341,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             enable_h264: e.enable_h264,
             container_image: e.container_image.clone(),
             container_idle_timeout_mins: e.container_idle_timeout_mins,
+            allow_sharing: e.allow_sharing,
         }
     }
 }

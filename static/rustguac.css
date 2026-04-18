@@ -449,6 +449,29 @@ tbody tr:last-child td { border-bottom: none; }
     letter-spacing: 0;
 }
 .modal textarea { height: auto; padding: var(--s-2); }
+/* Checkboxes / radios live inside labels and shouldn't take the full
+   44px input height — keep native size, inline, next to the label text. */
+.modal input[type="checkbox"],
+.modal input[type="radio"] {
+    display: inline-block;
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin: 0 var(--s-1) 0 0;
+    vertical-align: middle;
+    box-shadow: none;
+}
+.modal label:has(> input[type="checkbox"]),
+.modal label:has(> input[type="radio"]) {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: var(--fz-sm);
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+}
 .modal input:focus, .modal select:focus, .modal textarea:focus {
     outline: none;
     border-color: var(--primary);

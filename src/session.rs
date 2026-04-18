@@ -115,6 +115,11 @@ pub struct CreateSessionRequest {
     pub container_env: Option<std::collections::HashMap<String, String>>,
     /// Override idle timeout for VDI container in minutes.
     pub container_idle_timeout_mins: Option<u64>,
+    /// Allow the owner to generate a Share URL for this session.
+    /// Default false. For entry-derived sessions this is populated from
+    /// the entry's `allow_sharing` flag; ad-hoc sessions are never
+    /// shareable (per GitHub-less admin gating requirement).
+    pub allow_sharing: Option<bool>,
 }
 
 /// Session status in the lifecycle.
@@ -209,6 +214,12 @@ pub struct Session {
     /// alongside share_token in validate_share_token; expired entries
     /// are pruned when new tokens are minted.
     pub shadow_tokens: Vec<ShadowToken>,
+    /// Admin-controlled: does this session allow user-initiated
+    /// sharing? Copied from the source entry's `allow_sharing` at
+    /// creation. When false, `SessionInfo.share_url` is `None` — the
+    /// Connections card hides its Share button. Does not block admin
+    /// shadow (`/shadow`), which has its own audit trail.
+    pub share_allowed: bool,
 }
 
 /// A short-lived viewer token issued by an admin to shadow an active session.
@@ -288,7 +299,11 @@ impl Session {
             status: self.status.clone(),
             created_at: self.created_at,
             client_url: format!("/client/{}", self.id),
-            share_url: Some(format!("/client/{}?token={}", self.id, self.share_token)),
+            share_url: if self.share_allowed {
+                Some(format!("/client/{}?token={}", self.id, self.share_token))
+            } else {
+                None
+            },
             ws_url: format!("/ws/{}", self.id),
             hostname: self.hostname.clone(),
             username: self.username.clone(),
@@ -1101,6 +1116,16 @@ impl SessionManager {
                 None
             };
 
+        // Gate:
+        //  - If the request explicitly sets allow_sharing, honour it.
+        //  - Otherwise: entry-derived sessions default off (admin opt-in
+        //    per entry via allow_sharing), ad-hoc sessions default on
+        //    (preserves the long-standing API-key session-creation
+        //    behaviour where share_url is expected in the response).
+        let share_allowed = req
+            .allow_sharing
+            .unwrap_or(req.address_book_entry.is_none());
+
         let session = Session {
             id: session_id,
             session_type: req.session_type,
@@ -1130,6 +1155,7 @@ impl SessionManager {
             max_recordings: req.max_recordings,
             login_script_handle,
             shadow_tokens: Vec::new(),
+            share_allowed,
         };
 
         let info = session.info();

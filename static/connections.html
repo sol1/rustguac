@@ -690,6 +690,16 @@
                     <button type="button" class="btn-add" id="em-add-hop" style="margin-top:8px">+ Add Jump Host</button>
                 </div>
             </div>
+            <div id="em-sharing-section" style="margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
+                <label style="text-transform:none;letter-spacing:0;cursor:pointer">
+                    <input type="checkbox" id="em-allow-sharing" style="display:inline;width:auto;margin-right:0.5em">
+                    Allow session sharing
+                </label>
+                <div class="field-hint">
+                    When enabled, users can generate a read-only Share URL for active sessions of this entry.
+                    Off by default — admins opt in per entry.
+                </div>
+            </div>
             <div id="em-move-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label>Move to folder
                     <select id="em-move-target">
@@ -2442,6 +2452,7 @@
             document.getElementById('em-video-perf-arrow').innerHTML = '&#9654;';
             document.getElementById('em-disable-copy').checked = false;
             document.getElementById('em-disable-paste').checked = false;
+            document.getElementById('em-allow-sharing').checked = false;
             document.getElementById('em-enable-drive').checked = false;
             document.getElementById('em-drive-warning').style.display = 'none';
             document.getElementById('em-remote-app').value = '';
@@ -2621,6 +2632,8 @@
                 // Populate clipboard settings
                 document.getElementById('em-disable-copy').checked = !!entryData.disable_copy;
                 document.getElementById('em-disable-paste').checked = !!entryData.disable_paste;
+                // Populate per-entry sharing flag
+                document.getElementById('em-allow-sharing').checked = !!entryData.allow_sharing;
                 // Populate hop list from jump_hosts array
                 if (entryData.jump_hosts && entryData.jump_hosts.length > 0) {
                     hopList = entryData.jump_hosts.map(function(h) {
@@ -2772,6 +2785,10 @@
             // Clipboard settings (all types)
             if (document.getElementById('em-disable-copy').checked) entry.disable_copy = true;
             if (document.getElementById('em-disable-paste').checked) entry.disable_paste = true;
+
+            // Per-entry sharing (admin opt-in; gates the Share button on
+            // Connections active-session cards)
+            if (document.getElementById('em-allow-sharing').checked) entry.allow_sharing = true;
 
             // Tunnel / jump host settings — multi-hop (all types)
             if (type === 'ssh' || type === 'rdp' || type === 'vnc' || type === 'web') {
