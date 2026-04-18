@@ -32,6 +32,9 @@
         }
         #sessions a.shadow-link:hover { color: var(--primary); }
         #sessions a.shadow-link-busy { opacity: 0.6; pointer-events: none; }
+        /* Owner column cues so admins can scan own vs others' sessions */
+        #sessions td.owner-self { color: var(--text-muted); }
+        #sessions td.owner-other { color: var(--accent); font-weight: bold; }
         .btn-add-hop {
             background: transparent;
             color: var(--accent);
@@ -174,13 +177,17 @@
     </form>
 
     <div id="sessions">
-        <h2>Sessions</h2>
+        <div class="section-head">
+            <strong>Sessions</strong>
+            <span class="section-count" id="session-counts"></span>
+        </div>
         <table>
             <thead><tr>
                 <th>ID</th><th>Type</th><th>Host</th><th>User</th><th>Owner</th><th>Status</th><th>Viewers</th><th></th><th></th>
             </tr></thead>
             <tbody id="session-list"></tbody>
         </table>
+        <p id="session-empty" class="empty" style="display:none"></p>
     </div>
 
     <script>
@@ -587,11 +594,24 @@
             })
             .then(function(sessions) {
                 var tbody = document.getElementById('session-list');
+                var empty = document.getElementById('session-empty');
+                var counts = document.getElementById('session-counts');
                 tbody.innerHTML = '';
+
+                var activeCount = 0;
+                var ownActiveCount = 0;
+
                 sessions.forEach(function(s) {
                     var tr = document.createElement('tr');
                     var shortId = s.session_id.substring(0, 8);
                     var hostCol = s.session_type === 'web' ? (s.url || '') : s.hostname;
+                    var isActive = s.status === 'active';
+                    var isOwn = myName && s.created_by === myName;
+                    var canShadow = isActive && !isOwn && myRole === 'admin';
+
+                    if (isActive) activeCount++;
+                    if (isActive && isOwn) ownActiveCount++;
+                    if (!isOwn) tr.classList.add('row-other');
 
                     var tdId = document.createElement('td');
                     var idLink = h('a', shortId, { href: s.client_url, target: '_blank' });
@@ -601,13 +621,9 @@
                     tr.appendChild(h('td', s.session_type));
                     tr.appendChild(h('td', hostCol));
                     tr.appendChild(h('td', s.username));
-                    tr.appendChild(h('td', s.created_by || ''));
+                    tr.appendChild(h('td', s.created_by || '', { 'class': isOwn ? 'owner-self' : 'owner-other' }));
                     tr.appendChild(h('td', s.status, { 'class': 'status-' + s.status }));
                     tr.appendChild(h('td', String(s.active_connections)));
-
-                    var isActive = s.status === 'active';
-                    var isOwn = myName && s.created_by === myName;
-                    var canShadow = isActive && !isOwn && myRole === 'admin';
 
                     var tdOpen = document.createElement('td');
                     if (isActive && isOwn) {
@@ -622,12 +638,33 @@
                     }
                     tr.appendChild(tdOpen);
 
+                    // Delete: owner can always delete own; admin can delete any.
+                    var canDelete = isOwn || myRole === 'admin';
                     var tdDel = document.createElement('td');
-                    tdDel.appendChild(h('button', 'delete', { 'class': 'btn-small', 'data-delete': s.session_id }));
+                    if (canDelete) {
+                        tdDel.appendChild(h('button', 'delete', { 'class': 'btn-small', 'data-delete': s.session_id }));
+                    }
                     tr.appendChild(tdDel);
 
                     tbody.appendChild(tr);
                 });
+
+                // Count indicator: "12 active · 3 yours" for admins seeing others,
+                // "3 active" when caller only sees their own.
+                if (activeCount === 0) {
+                    empty.style.display = '';
+                    empty.textContent = myRole === 'admin'
+                        ? 'No active sessions.'
+                        : 'No active sessions. Use Connections to connect to a saved entry, or the form above to start an ad-hoc session.';
+                    counts.textContent = '';
+                } else {
+                    empty.style.display = 'none';
+                    if (myRole === 'admin' && activeCount !== ownActiveCount) {
+                        counts.textContent = activeCount + ' active · ' + ownActiveCount + ' yours';
+                    } else {
+                        counts.textContent = activeCount + ' active';
+                    }
+                }
             });
         }
 
