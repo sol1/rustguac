@@ -2,7 +2,7 @@
 
 Guide to optimizing RDP video quality and frame rate through rustguac, particularly for video monitoring workloads.
 
-## Address Book Settings
+## Connections Settings
 
 Three per-entry settings control RDP video behaviour:
 
@@ -12,7 +12,7 @@ Three per-entry settings control RDP video behaviour:
 
 - **Force Lossless** — Forces PNG-only encoding (no JPEG/WebP lossy compression). Better for text-heavy workloads where visual fidelity matters. Uses significantly more bandwidth — not recommended for video content.
 
-These settings appear in the address book entry editor for RDP entries under "Video Performance".
+These settings appear in the connections entry editor for RDP entries under "Video Performance".
 
 ## Windows RDP Server Tuning
 

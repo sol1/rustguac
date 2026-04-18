@@ -11,7 +11,7 @@ Internet
    |
 [HAProxy] ── TLS termination, rate limiting, Knocknoc ACL
    |
-[rustguac] ── session management, WebSocket proxy, address book
+[rustguac] ── session management, WebSocket proxy, connections
    |
 [guacd] ── protocol translation (SSH, RDP, VNC)
    |
@@ -181,7 +181,7 @@ The script runs in three phases:
 
 Run `bash setup-xrdp-gfx.sh --help` for all options, or `bash setup-xrdp-gfx.sh --diagnose` to troubleshoot after setup.
 
-In the rustguac address book, enable these settings on the RDP entry:
+In the rustguac connections, enable these settings on the RDP entry:
 - **Enable Graphics Pipeline (GFX)** -- checked
 - **H.264 Passthrough** -- checked
 - **Enable Desktop Composition** -- not needed for Linux (Windows-only DWM setting)
@@ -247,9 +247,9 @@ Once OIDC is working and you have an admin user, remove the initial API key:
 
 API keys are powerful (full admin, no MFA). For day-to-day use, OIDC with group-based roles is more secure. If you need programmatic API access, create scoped [user API tokens](roles-and-access-control.md) instead.
 
-## Step 6: Set Up the Address Book (Vault)
+## Step 6: Set Up the Connections (Vault)
 
-The address book stores connection entries in HashiCorp Vault or OpenBao. Credentials stay server-side — they never reach the browser.
+The connections stores connection entries in HashiCorp Vault or OpenBao. Credentials stay server-side — they never reach the browser.
 
 ```toml
 [vault]
@@ -365,7 +365,7 @@ Back up these paths:
 - `/opt/rustguac/env` — secrets (Vault secret ID, OIDC client secret)
 - `/opt/rustguac/recordings/` — session recordings (if needed for compliance)
 
-The address book is in Vault — back up Vault separately.
+The connections is in Vault — back up Vault separately.
 
 ### Security checklist
 

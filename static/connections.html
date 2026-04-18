@@ -2,15 +2,15 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>rustguac - Address Book</title>
+    <title>rustguac - Connections</title>
     <link rel="stylesheet" href="/rustguac.css">
     <style>
         /* ============================================================
-           Address book — page-specific styles only. Shared design
+           Connections — page-specific styles only. Shared design
            system lives in /rustguac.css.
            ============================================================ */
 
-        /* Two-column address book layout */
+        /* Two-column connections layout */
         .layout { display: flex; gap: var(--s-5); align-items: flex-start; }
         .sidebar {
             min-width: 280px; max-width: 340px; flex-shrink: 0;
@@ -143,6 +143,92 @@
         .session-card.dormant { opacity: 0.75; }
         .session-card.dormant .session-card-thumb { filter: brightness(0.7); }
 
+        /* Chip-based group picker */
+        .chip-picker {
+            margin-top: var(--s-1);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--input);
+            padding: var(--s-2);
+            display: flex;
+            flex-direction: column;
+            gap: var(--s-2);
+        }
+        .chip-list { display: flex; flex-wrap: wrap; gap: var(--s-1); min-height: 0; }
+        .chip-list:empty { display: none; }
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--s-1);
+            padding: 2px var(--s-2);
+            background: var(--surface);
+            border: 1px solid var(--accent);
+            border-radius: var(--radius);
+            color: var(--accent);
+            font-size: var(--fz-sm);
+            letter-spacing: 0.04em;
+        }
+        .chip-remove {
+            background: none; border: none; padding: 0 0 0 var(--s-1);
+            color: var(--text-muted); cursor: pointer;
+            font-family: monospace; font-size: var(--fz-md);
+            font-weight: normal; line-height: 1; height: auto;
+        }
+        .chip-remove:hover { color: var(--primary); background: none; border-color: transparent; }
+        .chip-input-wrap {
+            display: flex;
+            gap: var(--s-2);
+            align-items: center;
+        }
+        .chip-input-wrap .combo { flex: 1; position: relative; }
+        .chip-input-wrap .combo input {
+            width: 100%;
+            margin-top: 0;
+            height: var(--ctl-sm);
+            background: var(--bg);
+            text-transform: none;
+            letter-spacing: 0;
+            box-sizing: border-box;
+        }
+        .combo-menu {
+            display: none;
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: calc(var(--ctl-sm) + 2px);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            max-height: 240px;
+            overflow-y: auto;
+            z-index: 120;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        .combo.open .combo-menu { display: block; }
+        .combo-item {
+            padding: var(--s-2) var(--s-3);
+            font-size: var(--fz-sm);
+            color: var(--text);
+            cursor: pointer;
+            line-height: 1.3;
+        }
+        .combo-item:hover,
+        .combo-item.active {
+            background: var(--input);
+            color: var(--accent);
+        }
+        .combo-item.empty {
+            color: var(--text-dim);
+            cursor: default;
+            font-style: italic;
+        }
+        .combo-item.empty:hover { background: transparent; color: var(--text-dim); }
+        .combo-item .combo-hint {
+            color: var(--text-dim);
+            font-size: var(--fz-xs);
+            margin-left: var(--s-2);
+        }
+
         /* Onboarding */
         #onboard-body code { background: var(--input); padding: 1px var(--s-1); border-radius: var(--radius); font-size: 0.9em; }
         .onboard-key {
@@ -160,7 +246,7 @@
         <h1>rustguac</h1>
     </div>
     <nav>
-        <a href="/addressbook.html" class="active">Address Book</a>
+        <a href="/connections.html" class="active">Connections</a>
         <a href="/sessions.html" id="sessions-link">Sessions</a>
         <a href="/recordings.html">Recordings</a>
         <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
@@ -183,12 +269,12 @@
     <div id="global-error"></div>
 
     <div id="no-vault" class="no-vault" style="display:none">
-        Address book is not configured. A Vault/OpenBao backend is required.<br>
+        Connections is not configured. A Vault/OpenBao backend is required.<br>
         See <a href="/docs.html">Docs</a> for setup instructions.
     </div>
 
     <div id="vault-unavailable" class="no-vault" style="display:none">
-        <strong>Address book is temporarily unavailable.</strong><br>
+        <strong>Connections is temporarily unavailable.</strong><br>
         Cannot reach the Vault server. The service will retry automatically every 30 seconds.<br>
         Check the rustguac logs for details: <code>journalctl -u rustguac -f</code>
     </div>
@@ -245,10 +331,18 @@
             <label>Description
                 <input type="text" id="fm-desc" placeholder="e.g. Infrastructure servers">
             </label>
-            <label>Allowed groups (comma-separated)
-                <input type="text" id="fm-groups" placeholder="e.g. sysadmins,devops">
-            </label>
-            <div class="field-hint">OIDC groups that can see this folder. Leave empty for admin-only access.</div>
+            <label>Allowed groups</label>
+            <div class="chip-picker" id="fm-groups-picker">
+                <div class="chip-list" id="fm-groups-chips"></div>
+                <div class="chip-input-wrap">
+                    <div class="combo" id="fm-groups-combo">
+                        <input type="text" id="fm-groups-input" placeholder="Type or pick a group..." autocomplete="off" spellcheck="false">
+                        <div class="combo-menu" id="fm-groups-menu" role="listbox"></div>
+                    </div>
+                    <button type="button" class="btn-add" id="fm-groups-add">Add</button>
+                </div>
+            </div>
+            <div class="field-hint">OIDC groups that can see this folder. Leave empty for admin-only access. Type to filter known groups or enter a custom one; Enter or Add to attach; &times; on a chip to remove.</div>
             <label>Scope
                 <select id="fm-scope">
                     <option value="shared">shared (all instances)</option>
@@ -552,9 +646,9 @@
     <div class="modal-overlay" id="my-creds-modal">
         <div class="modal" style="max-width:500px">
             <h3>My Credentials</h3>
-            <p style="color:var(--text-muted);font-size:0.85em;margin-top:0">Store your credentials securely in Vault. Address book entries that use credential variables will auto-fill from these values.</p>
+            <p style="color:var(--text-muted);font-size:0.85em;margin-top:0">Store your credentials securely in Vault. Connections entries that use credential variables will auto-fill from these values.</p>
             <div id="my-creds-loading" style="color:var(--text-muted)">Loading...</div>
-            <div id="my-creds-empty" style="display:none;color:var(--text-muted);font-style:italic;margin:1em 0">No credential variables configured in address book entries yet.</div>
+            <div id="my-creds-empty" style="display:none;color:var(--text-muted);font-style:italic;margin:1em 0">No credential variables configured in connections entries yet.</div>
             <div id="my-creds-list"></div>
             <div id="my-creds-error" style="color:var(--primary);margin-top:0.5em"></div>
             <div class="modal-actions">
@@ -617,7 +711,7 @@
         var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
         var _driveConfigured = false;
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
-            if(d.site_title){document.title=d.site_title+' - Address Book';document.querySelector('h1').textContent=d.site_title;}
+            if(d.site_title){document.title=d.site_title+' - Connections';document.querySelector('h1').textContent=d.site_title;}
             _driveConfigured = !!d.drive_configured;
             initTheme(d.theme);
         });
@@ -657,6 +751,143 @@
         function folderPath(f) { return f.path || f.name; }
         var currentEntries = []; // entries for the currently selected folder
         var loginScriptsCache = null; // cached list from /api/login-scripts
+        var knownGroupsCache = null;  // cached list from /api/auth/known-groups
+        var fmGroups = [];            // allowed_groups being edited in the folder modal
+
+        function loadKnownGroups(cb) {
+            if (knownGroupsCache !== null) { if (cb) cb(); return; }
+            fetch('/api/auth/known-groups', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : { groups: [] }; })
+                .then(function(data) {
+                    knownGroupsCache = (data && data.groups) ? data.groups : [];
+                    if (cb) cb();
+                })
+                .catch(function() { knownGroupsCache = []; if (cb) cb(); });
+        }
+
+        function renderFmGroupChips() {
+            var list = document.getElementById('fm-groups-chips');
+            list.innerHTML = '';
+            fmGroups.forEach(function(g) {
+                var chip = document.createElement('span');
+                chip.className = 'chip';
+                chip.textContent = g;
+                var rm = document.createElement('button');
+                rm.type = 'button';
+                rm.className = 'chip-remove';
+                rm.textContent = '\u00D7';
+                rm.title = 'Remove';
+                rm.addEventListener('click', function() {
+                    fmGroups = fmGroups.filter(function(x) { return x !== g; });
+                    renderFmGroupChips();
+                    populateFmGroupOptions();
+                });
+                chip.appendChild(rm);
+                list.appendChild(chip);
+            });
+        }
+
+        var fmComboActive = -1; // active combo-menu index for keyboard nav
+
+        function fmGroupOptionsFiltered() {
+            var q = (document.getElementById('fm-groups-input').value || '').trim().toLowerCase();
+            return (knownGroupsCache || []).filter(function(g) {
+                if (fmGroups.indexOf(g) !== -1) return false; // already selected
+                if (!q) return true;
+                return g.toLowerCase().indexOf(q) !== -1;
+            });
+        }
+
+        function populateFmGroupOptions() {
+            var menu = document.getElementById('fm-groups-menu');
+            menu.innerHTML = '';
+            var opts = fmGroupOptionsFiltered();
+            var q = (document.getElementById('fm-groups-input').value || '').trim();
+            fmComboActive = opts.length > 0 ? 0 : -1;
+
+            if (opts.length === 0 && !q) {
+                var empty = document.createElement('div');
+                empty.className = 'combo-item empty';
+                empty.textContent = (knownGroupsCache && knownGroupsCache.length === 0)
+                    ? 'No known groups yet — type a group name.'
+                    : 'All known groups already selected.';
+                menu.appendChild(empty);
+                return;
+            }
+
+            opts.forEach(function(g, i) {
+                var item = document.createElement('div');
+                item.className = 'combo-item' + (i === fmComboActive ? ' active' : '');
+                item.setAttribute('role', 'option');
+                item.textContent = g;
+                item.addEventListener('mousedown', function(ev) {
+                    ev.preventDefault(); // keep input focused
+                    pickFmGroup(g);
+                });
+                item.addEventListener('mouseenter', function() {
+                    fmComboActive = i;
+                    updateFmComboActive();
+                });
+                menu.appendChild(item);
+            });
+
+            if (q && opts.indexOf(q) === -1 && fmGroups.indexOf(q) === -1) {
+                // Show "+ add custom" row so user knows Enter will create a custom group
+                var custom = document.createElement('div');
+                custom.className = 'combo-item';
+                custom.innerHTML = '+ Add "<strong>' + escapeHtml(q) + '</strong>" <span class="combo-hint">(custom)</span>';
+                custom.addEventListener('mousedown', function(ev) {
+                    ev.preventDefault();
+                    pickFmGroup(q);
+                });
+                menu.appendChild(custom);
+            }
+        }
+
+        function updateFmComboActive() {
+            var items = document.querySelectorAll('#fm-groups-menu .combo-item');
+            for (var i = 0; i < items.length; i++) {
+                items[i].classList.toggle('active', i === fmComboActive);
+            }
+        }
+
+        function openFmCombo() {
+            document.getElementById('fm-groups-combo').classList.add('open');
+            populateFmGroupOptions();
+        }
+        function closeFmCombo() {
+            document.getElementById('fm-groups-combo').classList.remove('open');
+        }
+
+        function pickFmGroup(g) {
+            g = (g || '').trim();
+            if (!g) return;
+            if (fmGroups.indexOf(g) === -1) fmGroups.push(g);
+            var inp = document.getElementById('fm-groups-input');
+            inp.value = '';
+            renderFmGroupChips();
+            populateFmGroupOptions();
+            inp.focus();
+        }
+
+        function addFmGroupFromInput() {
+            var inp = document.getElementById('fm-groups-input');
+            var raw = (inp.value || '').trim();
+            if (!raw) {
+                // Enter with nothing typed: pick the active combo item if any
+                var opts = fmGroupOptionsFiltered();
+                if (fmComboActive >= 0 && fmComboActive < opts.length) pickFmGroup(opts[fmComboActive]);
+                return;
+            }
+            // Allow comma-separated bulk paste
+            raw.split(',').forEach(function(part) {
+                var g = part.trim();
+                if (g && fmGroups.indexOf(g) === -1) fmGroups.push(g);
+            });
+            inp.value = '';
+            renderFmGroupChips();
+            populateFmGroupOptions();
+        }
 
         function populateLoginScriptDropdown(selectedValue) {
             var sel = document.getElementById('em-login-script');
@@ -800,7 +1031,7 @@
                         + '<div class="card-meta">' + typeBadge + ' <span>' + escapeHtml(s.username || '') + '</span></div></div>';
                     card.addEventListener('click', function() {
                         if (s.address_book_entry) {
-                            // Reconnect via address book connect (creates new session to same target)
+                            // Reconnect via connections connect (creates new session to same target)
                             var parts = s.address_book_entry.split('/');
                             if (parts.length === 3) {
                                 fetch('/api/addressbook/folders/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]) + '/entries/' + encodeURIComponent(parts[2]) + '/connect', {
@@ -833,7 +1064,7 @@
                         + '<div class="card-meta"><span class="type-badge type-vdi">vdi</span> <span>dormant</span></div></div>';
                     if (c.entry_key) {
                         card.addEventListener('click', function() {
-                            // Reconnect via address book connect
+                            // Reconnect via connections connect
                             var parts = c.entry_key.split('/');
                             if (parts.length === 3) {
                                 var scope = parts[0], folder = parts[1], entry = parts[2];
@@ -1386,10 +1617,13 @@
             document.getElementById('fm-name').value = '';
             document.getElementById('fm-name').disabled = false;
             document.getElementById('fm-desc').value = '';
-            document.getElementById('fm-groups').value = '';
             document.getElementById('fm-scope').value = 'shared';
             document.getElementById('fm-scope').disabled = false;
             document.getElementById('fm-error').textContent = '';
+            document.getElementById('fm-groups-input').value = '';
+            fmGroups = [];
+            renderFmGroupChips();
+            loadKnownGroups(populateFmGroupOptions);
             document.getElementById('folder-modal').classList.add('active');
         }
 
@@ -1401,10 +1635,13 @@
             document.getElementById('fm-name').value = '';
             document.getElementById('fm-name').disabled = false;
             document.getElementById('fm-desc').value = '';
-            document.getElementById('fm-groups').value = '';
             document.getElementById('fm-scope').value = subfolderParent.scope;
             document.getElementById('fm-scope').disabled = true;
             document.getElementById('fm-error').textContent = '';
+            document.getElementById('fm-groups-input').value = '';
+            fmGroups = [];
+            renderFmGroupChips();
+            loadKnownGroups(populateFmGroupOptions);
             document.getElementById('folder-modal').classList.add('active');
         }
 
@@ -1424,7 +1661,11 @@
             document.getElementById('fm-scope').disabled = true;
             document.getElementById('fm-error').textContent = '';
 
-            // Load current config for groups
+            // Reset chip state and kick off known-groups load, then fetch current config.
+            document.getElementById('fm-groups-input').value = '';
+            fmGroups = [];
+            renderFmGroupChips();
+            loadKnownGroups(populateFmGroupOptions);
             fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath) + '/config', {
                 headers: apiHeaders(),
                 credentials: 'same-origin'
@@ -1432,12 +1673,13 @@
                 if (res.ok) return res.json();
                 return null;
             }).then(function(data) {
-                if (data && data.allowed_groups) {
-                    document.getElementById('fm-groups').value = data.allowed_groups.join(', ');
+                if (data && Array.isArray(data.allowed_groups)) {
+                    fmGroups = data.allowed_groups.slice();
+                    renderFmGroupChips();
+                    populateFmGroupOptions();
                 }
             }).catch(function() {});
 
-            document.getElementById('fm-groups').value = '';
             document.getElementById('folder-modal').classList.add('active');
         });
 
@@ -1445,10 +1687,42 @@
             document.getElementById('folder-modal').classList.remove('active');
         });
 
+        document.getElementById('fm-groups-add').addEventListener('click', addFmGroupFromInput);
+        (function wireFmCombo() {
+            var inp = document.getElementById('fm-groups-input');
+            inp.addEventListener('focus', openFmCombo);
+            inp.addEventListener('input', populateFmGroupOptions);
+            inp.addEventListener('keydown', function(ev) {
+                var opts = fmGroupOptionsFiltered();
+                if (ev.key === 'ArrowDown') {
+                    ev.preventDefault();
+                    openFmCombo();
+                    if (fmComboActive < opts.length - 1) fmComboActive++;
+                    updateFmComboActive();
+                } else if (ev.key === 'ArrowUp') {
+                    ev.preventDefault();
+                    if (fmComboActive > 0) fmComboActive--;
+                    updateFmComboActive();
+                } else if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    addFmGroupFromInput();
+                } else if (ev.key === 'Escape') {
+                    closeFmCombo();
+                    inp.blur();
+                }
+            });
+            document.addEventListener('mousedown', function(ev) {
+                var combo = document.getElementById('fm-groups-combo');
+                if (combo && !combo.contains(ev.target)) closeFmCombo();
+            });
+        })();
+
         document.getElementById('fm-save').addEventListener('click', function() {
             var name = document.getElementById('fm-name').value.trim();
             var desc = document.getElementById('fm-desc').value.trim();
-            var groups = document.getElementById('fm-groups').value.split(',').map(function(g) { return g.trim(); }).filter(Boolean);
+            // Include anything still typed in the group input but not chipped yet
+            addFmGroupFromInput();
+            var groups = fmGroups.slice();
             var scope = document.getElementById('fm-scope').value;
             var errEl = document.getElementById('fm-error');
 
@@ -2600,7 +2874,7 @@
             },
             { title: 'Navigation', minRole: 1, body:
                 'The nav bar at the top links to:' +
-                '<br>&bull; <span class="onboard-hl">Address Book</span> &mdash; your connection entries' +
+                '<br>&bull; <span class="onboard-hl">Connections</span> &mdash; your connection entries' +
                 '<br>&bull; <span class="onboard-hl">Sessions</span> &mdash; active and recent sessions' +
                 '<br>&bull; <span class="onboard-hl">Recordings</span> &mdash; session playback' +
                 '<br>&bull; <span class="onboard-hl">Docs</span> &mdash; built-in documentation' +
@@ -2611,7 +2885,7 @@
                 '<br><br>Click <span class="onboard-hl">Settings</span> &rarr; <span class="onboard-hl">My Credentials</span> to fill in your values. They are stored securely in Vault and applied automatically when you connect.'
             },
             { title: 'Connect vs Login', minRole: 2, body:
-                'Address book entries have two connection modes:' +
+                'Connections entries have two connection modes:' +
                 '<br><br>&bull; <span class="onboard-hl">Connect</span> &mdash; launches the session directly using the saved settings.' +
                 '<br>&bull; <span class="onboard-hl">Login</span> &mdash; runs an automated login script after connecting (e.g. filling in a web login form). If an entry shows Login, the admin has configured an auto-login workflow for it.'
             },
@@ -2625,10 +2899,10 @@
                 '<br><br>Toggle the file panel with <span class="onboard-key">Ctrl</span>+<span class="onboard-key">Alt</span>+<span class="onboard-key">F</span>.'
             },
             { title: 'Ad-hoc Sessions', minRole: 3, body:
-                'As a power user, you can create one-off sessions from the <span class="onboard-hl">Sessions</span> page &mdash; useful for quick connections that aren\'t in the address book.' +
+                'As a power user, you can create one-off sessions from the <span class="onboard-hl">Sessions</span> page &mdash; useful for quick connections that aren\'t in the connections.' +
                 '<br><br>Choose SSH, RDP, VNC, or Web and enter connection details directly.'
             },
-            { title: 'Managing the Address Book', minRole: 4, body:
+            { title: 'Managing the Connections', minRole: 4, body:
                 'As an admin, you can:' +
                 '<br>&bull; Create and edit <span class="onboard-hl">folders</span> with OIDC group permissions' +
                 '<br>&bull; Add, edit, clone, and delete <span class="onboard-hl">entries</span>' +

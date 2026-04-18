@@ -6,9 +6,9 @@ rustguac implements a 4-tier role hierarchy:
 
 | Role | Level | Description |
 |------|-------|-------------|
-| **admin** | 4 | Full access — manage users, address book, recordings, sessions, group mappings, all API tokens |
-| **poweruser** | 3 | Ad-hoc session creation + address book connect + self-service API tokens |
-| **operator** | 2 | Address book connect only (no ad-hoc sessions); can view own API tokens |
+| **admin** | 4 | Full access — manage users, connections, recordings, sessions, group mappings, all API tokens |
+| **poweruser** | 3 | Ad-hoc session creation + connections connect + self-service API tokens |
+| **operator** | 2 | Connections connect only (no ad-hoc sessions); can view own API tokens |
 | **viewer** | 1 | Read-only — view sessions and recordings; no API token access |
 
 Roles are hierarchical: each role includes all permissions of lower roles. For example, a poweruser can do everything an operator can, plus create ad-hoc sessions.
@@ -54,13 +54,13 @@ OIDC users are assigned a role through three mechanisms (in order of precedence)
 | `GET /api/sessions/:id` | operator | View session details |
 | `DELETE /api/sessions/:id` | operator | Non-admins can only delete their own sessions |
 
-### Address book
+### Connections
 
 | Endpoint | Required role | Notes |
 |----------|--------------|-------|
 | `GET /api/addressbook/folders` | operator | Filtered by OIDC group membership |
 | `GET /api/addressbook/folders/:scope/:folder/entries` | operator | Requires folder group access |
-| `POST .../entries/:entry/connect` | operator | Creates session from address book entry |
+| `POST .../entries/:entry/connect` | operator | Creates session from connections entry |
 | `POST /api/addressbook/folders` | admin | Create folders |
 | `PUT /api/addressbook/folders/:scope/:folder` | admin | Update folder config |
 | `DELETE /api/addressbook/folders/:scope/:folder` | admin | Delete folders |
@@ -125,7 +125,7 @@ Operators can view their tokens (created by an admin on their behalf) but cannot
 
 ## Folder access control
 
-Address book folders have group-based access control. Each folder has an `allowed_groups` list stored in its `.config` entry in Vault.
+Connections folders have group-based access control. Each folder has an `allowed_groups` list stored in its `.config` entry in Vault.
 
 - **Admins** bypass group checks and see all folders
 - **Operators and powerusers** see only folders where their OIDC groups intersect with the folder's `allowed_groups`

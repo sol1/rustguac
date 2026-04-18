@@ -13,7 +13,7 @@ The top of the reports page shows four summary metrics:
 
 ## Session history
 
-A searchable, sortable table of all past and current sessions. Each row includes the user who created the session, the address book entry and folder (if applicable), session type (SSH, RDP, VNC, Web), hostname, start time, duration, status, and a link to the recording if one exists.
+A searchable, sortable table of all past and current sessions. Each row includes the user who created the session, the connections entry and folder (if applicable), session type (SSH, RDP, VNC, Web), hostname, start time, duration, status, and a link to the recording if one exists.
 
 The table supports:
 
@@ -63,7 +63,7 @@ All endpoints require authentication (API key, user token, or OIDC session cooki
 | Parameter | Description |
 |-----------|-------------|
 | `user` | Filter by username (partial match) |
-| `entry` | Filter by address book entry name (partial match) |
+| `entry` | Filter by connections entry name (partial match) |
 | `type` | Filter by session type: `ssh`, `rdp`, `vnc`, `web` |
 | `from` | Start date filter (ISO 8601, e.g. `2025-01-01T00:00:00Z`) |
 | `to` | End date filter (ISO 8601) |

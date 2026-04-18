@@ -119,7 +119,7 @@ Enables OpenID Connect authentication. When configured, the web UI shows a login
 
 ## `[vault]` section
 
-Enables the Vault-backed address book. Requires `VAULT_SECRET_ID` environment variable.
+Enables the Vault-backed connections. Requires `VAULT_SECRET_ID` environment variable.
 
 | Key | Default | Description |
 |-----|---------|-------------|

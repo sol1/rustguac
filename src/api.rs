@@ -130,21 +130,51 @@ fn redact_share_url(
     info
 }
 
-/// GET /api/sessions — List all sessions. All authenticated roles.
+#[derive(Deserialize, Default)]
+pub struct ListSessionsQuery {
+    /// When `true`, admins receive all active sessions instead of only
+    /// their own. Ignored for non-admins. Used by the Sessions
+    /// management page; the Address Book keeps the owner-only default.
+    #[serde(default)]
+    pub all: bool,
+}
+
+/// GET /api/sessions — List active sessions.
+/// Default behaviour (GitHub #102): callers see only sessions they
+/// created. The Sessions management page passes `?all=true` to let
+/// admins see everyone.
 pub async fn list_sessions(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
+    axum::extract::Query(q): axum::extract::Query<ListSessionsQuery>,
 ) -> impl IntoResponse {
+    let is_admin = identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false);
+    let owner = identity
+        .as_ref()
+        .map(|Extension(id)| id.display_name().to_string());
+    let show_all = q.all && is_admin;
+
     let sessions: Vec<_> = manager
         .list_sessions()
         .await
         .into_iter()
+        .filter(|s| {
+            show_all
+                || owner
+                    .as_deref()
+                    .map(|o| s.created_by == o)
+                    .unwrap_or(false)
+        })
         .map(|s| redact_share_url(s, &identity))
         .collect();
     Json(json!(sessions))
 }
 
-/// GET /api/sessions/:id — Get session info. All authenticated roles.
+/// GET /api/sessions/:id — Get session info.
+/// Non-admins can only inspect their own sessions (GitHub #102).
 pub async fn get_session(
     State(manager): State<AppState>,
     Path(id): Path<Uuid>,
@@ -152,6 +182,21 @@ pub async fn get_session(
 ) -> impl IntoResponse {
     match manager.get_session(id).await {
         Some(info) => {
+            let is_admin = identity
+                .as_ref()
+                .map(|Extension(id)| id.has_role("admin"))
+                .unwrap_or(false);
+            let is_owner = identity
+                .as_ref()
+                .map(|Extension(id)| info.created_by == id.display_name())
+                .unwrap_or(false);
+            if !is_admin && !is_owner {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "session not found" })),
+                )
+                    .into_response();
+            }
             let info = redact_share_url(info, &identity);
             (StatusCode::OK, Json(json!(info))).into_response()
         }
@@ -227,13 +272,27 @@ pub async fn delete_session(
 
 /// PUT /api/sessions/:id/thumbnail — Upload a session thumbnail (JPEG).
 /// Called by the client periodically to update the session preview.
+/// Only the session owner (or an admin) can upload.
 pub async fn put_session_thumbnail(
     State(manager): State<AppState>,
     Path(id): Path<Uuid>,
+    identity: Option<Extension<AuthIdentity>>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     // Validate: session must exist
-    if manager.get_session(id).await.is_none() {
+    let Some(info) = manager.get_session(id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // Authorise: owner or admin only (privacy — GitHub #102)
+    let is_admin = identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false);
+    let is_owner = identity
+        .as_ref()
+        .map(|Extension(id)| info.created_by == id.display_name())
+        .unwrap_or(false);
+    if !is_admin && !is_owner {
         return StatusCode::NOT_FOUND.into_response();
     }
     // Reject oversized thumbnails (100KB max)
@@ -262,10 +321,28 @@ pub async fn put_session_thumbnail(
 }
 
 /// GET /api/sessions/:id/thumbnail — Serve a session thumbnail (JPEG).
+/// Only the session owner (or an admin) can read. Returns 404 for
+/// non-owners so we don't leak session existence.
 pub async fn get_session_thumbnail(
     State(manager): State<AppState>,
     Path(id): Path<Uuid>,
+    identity: Option<Extension<AuthIdentity>>,
 ) -> impl IntoResponse {
+    let Some(info) = manager.get_session(id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let is_admin = identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false);
+    let is_owner = identity
+        .as_ref()
+        .map(|Extension(id)| info.created_by == id.display_name())
+        .unwrap_or(false);
+    if !is_admin && !is_owner {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     let path = manager.thumbnail_path(id);
     match tokio::fs::read(&path).await {
         Ok(data) => (
@@ -1345,6 +1422,36 @@ pub async fn list_group_mappings(
     }
 }
 
+/// GET /api/auth/known-groups — List known OIDC groups (union of role
+/// mappings + groups ever seen in a user's login claims). Admin only;
+/// used by the folder modal to populate the allowed_groups picker.
+pub async fn list_known_groups(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> impl IntoResponse {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "admin role required"})),
+        )
+            .into_response();
+    }
+
+    let db_clone = database.clone();
+    match tokio::task::spawn_blocking(move || db::list_known_groups(&db_clone)).await {
+        Ok(Ok(groups)) => Json(json!({ "groups": groups })).into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to list groups"})),
+        )
+            .into_response(),
+    }
+}
+
 /// POST /api/admin/group-mappings — Create a group-to-role mapping. Admin only.
 pub async fn create_group_mapping(
     identity: Option<Extension<AuthIdentity>>,
@@ -2150,6 +2257,49 @@ pub async fn ab_update_folder(
 
     match vault.put_folder_config(&scope, &folder, &config).await {
         Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/addressbook/folders/:scope/:folder/config — Read the stored
+/// FolderConfig (allowed_groups, description). Admin only — used by the
+/// folder modal to prefill the allowed-groups picker on edit.
+pub async fn ab_get_folder_config(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(vault): Extension<VaultState>,
+    Path((scope, folder)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let vault = match require_vault(&vault).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "admin role required"})),
+        )
+            .into_response();
+    }
+
+    match vault.get_folder_config(&scope, &folder).await {
+        Ok(cfg) => Json(json!({
+            "allowed_groups": cfg.allowed_groups,
+            "description": cfg.description,
+        }))
+        .into_response(),
+        Err(crate::vault::VaultError::NotFound) => Json(json!({
+            "allowed_groups": Vec::<String>::new(),
+            "description": "",
+        }))
+        .into_response(),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": e.to_string()})),

@@ -297,6 +297,14 @@ pub async fn callback(
     let groups = extract_groups_from_jwt(&id_token.to_string(), &oidc.config.groups_claim);
     if !groups.is_empty() {
         tracing::info!(email = %email, groups = ?groups, "OIDC groups extracted");
+        let db_for_seen = database.clone();
+        let groups_for_seen = groups.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = db::upsert_seen_groups(&db_for_seen, &groups_for_seen) {
+                tracing::warn!(error = %e, "failed to persist seen OIDC groups");
+            }
+        })
+        .await;
     }
 
     // Resolve role from group-to-role mappings (highest matching wins).

@@ -32,13 +32,13 @@ sudo systemctl enable --now rustguac
 
 This starts both `rustguac-guacd` (the protocol daemon) and `rustguac` (the web proxy).
 
-4. **(Recommended) Set up the address book with Vault / OpenBao:**
+4. **(Recommended) Set up the connections with Vault / OpenBao:**
 
-The address book is rustguac's primary way to manage connections. It stores SSH, RDP, VNC, and web session entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are stored server-side and never sent to the browser.
+The connections is rustguac's primary way to manage connections. It stores SSH, RDP, VNC, and web session entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are stored server-side and never sent to the browser.
 
-Without Vault, rustguac can still create ad-hoc sessions via the API, but the address book UI (the main user-facing feature) will not be available.
+Without Vault, rustguac can still create ad-hoc sessions via the API, but the connections UI (the main user-facing feature) will not be available.
 
-See [Vault / OpenBao Address Book](integrations.md#vault--openbao-address-book) for full setup instructions, including Vault policy, AppRole configuration, and the `[vault]` config section.
+See [Vault / OpenBao Connections](integrations.md#vault--openbao-address-book) for full setup instructions, including Vault policy, AppRole configuration, and the `[vault]` config section.
 
 6. **(Optional) Set up encrypted drive storage:**
 

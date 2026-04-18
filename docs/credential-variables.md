@@ -1,12 +1,12 @@
 # Credential Variables
 
-Credential variables let address book entries reference shared credentials by name instead of storing passwords directly. Users maintain their own credential values in Vault via the **My Credentials** dialog (gear menu). When a session launches, rustguac substitutes the variables from the user's saved values.
+Credential variables let connections entries reference shared credentials by name instead of storing passwords directly. Users maintain their own credential values in Vault via the **My Credentials** dialog (gear menu). When a session launches, rustguac substitutes the variables from the user's saved values.
 
 This gives a similar experience to LDAP credential passthrough in Apache Guacamole — users log in once and sessions just work — without rustguac needing to bind to LDAP. Credentials stay in Vault, never on disk or in the browser.
 
 ## How it works
 
-1. **Admin** creates address book entries with variable references like `$corp_username` and `$corp_password` in the credential fields
+1. **Admin** creates connections entries with variable references like `$corp_username` and `$corp_password` in the credential fields
 2. **Users** open **My Credentials** from the gear menu and fill in their values (stored per-user in Vault)
 3. **At connect time**, rustguac substitutes the variables. If all are set, the session launches silently. If any are missing, the user is prompted.
 
@@ -27,7 +27,7 @@ The `<domain>` is a logical name chosen by the admin to group related credential
 
 ## Example
 
-An admin creates two address book entries:
+An admin creates two connections entries:
 
 - **Production SSH** — username: `$corp_username`, password: `$corp_password`
 - **Staging SSH** — username: `$corp_username`, password: `$corp_password`
@@ -38,7 +38,7 @@ An entry can also mix variables with static values. For example, an RDP entry mi
 
 ## My Credentials dialog
 
-Access via the gear icon in the top-right corner of the address book page. The dialog:
+Access via the gear icon in the top-right corner of the connections page. The dialog:
 
 - Shows all credential variables used across entries the user has access to
 - Groups variables by domain prefix
@@ -64,7 +64,7 @@ Each user gets a single Vault secret containing all their credential key-value p
 
 ### Required Vault policy
 
-In addition to the existing address book policy, add:
+In addition to the existing connections policy, add:
 
 ```hcl
 # User credential variables (read/write own credentials)

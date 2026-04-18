@@ -37,7 +37,7 @@ chmod 600 /opt/rustguac/env
 rustguac extracts group memberships from the OIDC ID token. The claim name is configurable (default: `groups`). Groups are used for:
 
 - **Automatic role assignment** via group-to-role mappings (see [Roles and Access Control](roles-and-access-control.md))
-- **Address book folder access** — folders can be restricted to specific OIDC groups
+- **Connections folder access** — folders can be restricted to specific OIDC groups
 
 If your provider requires additional scopes to include groups in the token, add them to `extra_scopes`:
 
@@ -112,9 +112,9 @@ Create groups in Authentik (e.g., `rustguac-admins`, `rustguac-operators`) and a
 
 ---
 
-## Vault / OpenBao Address Book
+## Vault / OpenBao Connections
 
-The address book stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser.
+The connections stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser.
 
 ### Vault setup
 
@@ -128,13 +128,13 @@ vault secrets enable -path=secret kv-v2
 
 ```bash
 vault policy write rustguac - <<'EOF'
-# Address book entries: create, read, update, soft-delete
+# Connections entries: create, read, update, soft-delete
 path "secret/data/rustguac/*" {
   capabilities = ["create", "read", "update", "delete"]
 }
 
 # Folder/entry listing and permanent deletion
-# - "list" + "read": browse the address book
+# - "list" + "read": browse the connections
 # - "delete": permanently remove entries and folders
 #   (KV v2 permanent deletes go through the metadata/ path, not data/)
 path "secret/metadata/rustguac/*" {
@@ -239,7 +239,7 @@ This allows a fleet of rustguac instances to share common entries while maintain
 
 ### Entry types
 
-Address book entries can be SSH, RDP, VNC, or Web connections. Each entry stores:
+Connections entries can be SSH, RDP, VNC, or Web connections. Each entry stores:
 
 - Connection type and target (hostname, port, URL)
 - Credentials (username, password, private key)
@@ -259,7 +259,7 @@ Folder and entry names are validated: alphanumeric characters, hyphens, undersco
 
 ### Credential prompting
 
-Address book entries can be configured to prompt users for credentials at connect time. This is useful for:
+Connections entries can be configured to prompt users for credentials at connect time. This is useful for:
 
 - **Entries without stored credentials** — e.g., RDP servers where each user has their own AD account. The admin creates the entry with just hostname/port, and users supply their own credentials when connecting.
 - **Entries with stored credentials but prompt enabled** — e.g., a jump host where the stored credentials are a fallback, but users should normally use their own.
@@ -294,9 +294,9 @@ The chain is set up sequentially (each hop must connect before the next starts) 
 
 ### Configuration
 
-#### Address book entries
+#### Connections entries
 
-Admins configure jump hosts per entry in the address book editor. Click "Add Jump Host" to add hops to the chain. Each hop has its own credentials (username + password or private key). A visual flow diagram shows the tunnel path.
+Admins configure jump hosts per entry in the connections editor. Click "Add Jump Host" to add hops to the chain. Each hop has its own credentials (username + password or private key). A visual flow diagram shows the tunnel path.
 
 Jump host credentials are stored in Vault alongside the entry's other credentials and are never sent to the browser. When editing an entry, existing hop passwords and keys are preserved if the edit form omits them (per-hop credential merge by index).
 
@@ -365,7 +365,7 @@ FreeRDP's WinPR layer implements Windows SSPI on top of the system's MIT Kerbero
 
 ### Per-entry configuration
 
-These settings are configured per address book entry in the admin UI:
+These settings are configured per connections entry in the admin UI:
 
 | Setting | Values | Description |
 |---------|--------|-------------|
@@ -423,7 +423,7 @@ FreeRDP/libkrb5 finds the KDC in this order of priority:
 
 **Option 1: KDC Proxy URL (simplest for remote networks)**
 
-Set the **KDC URL** field on the address book entry to your KDC Proxy endpoint (e.g., `https://dc.example.com/KdcProxy`). This bypasses DNS SRV and krb5.conf entirely. Windows Server's KDC Proxy Service can serve this role.
+Set the **KDC URL** field on the connections entry to your KDC Proxy endpoint (e.g., `https://dc.example.com/KdcProxy`). This bypasses DNS SRV and krb5.conf entirely. Windows Server's KDC Proxy Service can serve this role.
 
 **Option 2: DNS SRV records (simplest for on-network)**
 
@@ -469,7 +469,7 @@ The **Domain** field should be the AD domain name (e.g., `EXAMPLE.COM`).
 
 ### Example: Kerberos RDP entry
 
-Create an address book entry with:
+Create an connections entry with:
 
 - **Type**: RDP
 - **Hostname**: `fileserver.corp.example.com` (must be FQDN)

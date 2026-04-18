@@ -4,7 +4,7 @@
 
 rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, web browser sessions, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
 
-rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication, session recording, VDI container orchestration, and an optional Vault-backed address book.
+rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication, session recording, VDI container orchestration, and an optional Vault-backed connections.
 
 ## Why not Apache Guacamole?
 
@@ -14,7 +14,7 @@ Apache Guacamole is a mature, feature-rich platform. rustguac is a purpose-built
 - **Security-first design** — CIDR allowlists, TLS everywhere, LUKS-encrypted file transfer, Vault integration, rate limiting, audit logging.
 - **Simpler deployment** — one binary + guacd. Install with a single script or Docker image.
 - **VDI desktops** — ephemeral Docker containers give each user an isolated Linux desktop on demand. No VM infrastructure required.
-- **Address book in Vault** — connection credentials stored in HashiCorp Vault / OpenBao KV v2. Credentials never reach the browser.
+- **Connections in Vault** — connection credentials stored in HashiCorp Vault / OpenBao KV v2. Credentials never reach the browser.
 - **Zero-trust integration** — works with [Knocknoc](https://knocknoc.io) for identity-aware network access control at the HAProxy layer.
 
 ## Similarities to Apache Guacamole
@@ -113,7 +113,7 @@ Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reac
 
 Spawns an ephemeral Docker container running xrdp and a Linux desktop, then connects guacd via RDP to the container. Each user gets a dedicated container named `rustguac-vdi-{username}`. Containers persist after disconnect for reconnection and are automatically cleaned up after an idle timeout.
 
-VDI sessions support persistent home directories, per-entry resource limits and idle timeouts, session thumbnails, and active session previews in the address book. See [VDI Desktop Containers](vdi.md) for configuration and image requirements.
+VDI sessions support persistent home directories, per-entry resource limits and idle timeouts, session thumbnails, and active session previews in the connections. See [VDI Desktop Containers](vdi.md) for configuration and image requirements.
 
 ## SSH tunnel / jump hosts
 
@@ -126,10 +126,10 @@ You -> bastion-1:22 -> bastion-2:22 -> target:3389 RDP
 ```
 
 Jump hosts can be configured:
-- **Per address book entry** — admins configure the tunnel chain in the entry editor
+- **Per connections entry** — admins configure the tunnel chain in the entry editor
 - **Per ad-hoc session** — powerusers add jump hosts when creating sessions from the Sessions page
 
-Each hop supports independent credentials (username + password or private key). Jump host credentials are stored in Vault alongside the address book entry and are never sent to the browser.
+Each hop supports independent credentials (username + password or private key). Jump host credentials are stored in Vault alongside the connections entry and are never sent to the browser.
 
 ## Ports
 
@@ -186,7 +186,7 @@ scripts/           Utility scripts (drive-setup.sh)
 
 ### Integrations
 - [Integrations](integrations.md) -- OIDC, Vault, SSH tunnels, Kerberos, HAProxy, Knocknoc, drive/LUKS
-- [NetBox](netbox.md) -- address book sync via custom fields and webhooks
+- [NetBox](netbox.md) -- connections sync via custom fields and webhooks
 - [Migration from Apache Guacamole](migration.md) -- MySQL/MariaDB to Vault
 
 ### Reference

@@ -11,20 +11,20 @@ Go to **Customization > Custom Fields** and create the following fields. Assign 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `console_enabled` | Boolean | false | Opt-in: enables remote console links on the device page |
-| `console_mode` | Selection: `addressbook`, `adhoc` | — | How to connect: via address book entry (Vault credentials) or ad-hoc (direct to IP) |
-| `remote_protocol` | Selection: `ssh`, `rdp`, `vnc`, `web` | — | Protocol for ad-hoc connections (address book entries have their own) |
+| `console_mode` | Selection: `addressbook`, `adhoc` | — | How to connect: via connections entry (Vault credentials) or ad-hoc (direct to IP) |
+| `remote_protocol` | Selection: `ssh`, `rdp`, `vnc`, `web` | — | Protocol for ad-hoc connections (connections entries have their own) |
 | `remote_port` | Integer | — | Port override for ad-hoc connections (leave blank for protocol default) |
 
 The `console_enabled` field is the master switch — no links appear until it's checked. The `console_mode` field controls which link is shown:
 
-- **`addressbook`** — connects via a Vault address book entry. Credentials are managed in Vault and never appear in the URL. Requires a matching entry name (lowercase device name). Minimum role: **operator**.
+- **`addressbook`** — connects via a Vault connections entry. Credentials are managed in Vault and never appear in the URL. Requires a matching entry name (lowercase device name). Minimum role: **operator**.
 - **`adhoc`** — connects directly to the device's primary IP. No stored credentials — the user sees guacd's login prompt. Minimum role: **poweruser**.
 
 ## Custom Links
 
 Create **two** Custom Links in **Customization > Custom Links**. Each link only renders when `console_mode` matches its mode, so only one appears per device.
 
-### Link 1: Address Book Console (green)
+### Link 1: Connections Console (green)
 
 | Setting | Value |
 |---------|-------|
@@ -43,7 +43,7 @@ Create **two** Custom Links in **Customization > Custom Links**. Each link only 
 https://console.example.com/api/connect?scope=shared&folder=production&entry={{ object.name | lower }}
 ```
 
-Replace `production` with your address book folder name. The entry name must match the lowercase device name in Vault.
+Replace `production` with your connections folder name. The entry name must match the lowercase device name in Vault.
 
 ### Link 2: Ad-hoc SSH (blue outline)
 
@@ -78,12 +78,12 @@ Use NetBox's **bulk edit** to enable across multiple devices at once.
 
 | Mode | Minimum role | Description |
 |------|-------------|-------------|
-| Address book | operator | Connects via Vault entry (credentials from Vault) |
+| Connections | operator | Connects via Vault entry (credentials from Vault) |
 | Ad-hoc | poweruser | Creates session directly to hostname |
 
-## Webhook-Driven Address Book Sync
+## Webhook-Driven Connections Sync
 
-Automatically sync NetBox devices to rustguac's Vault-backed address book using Event Rules and Webhooks. This keeps address book entries in sync with NetBox — when a device is created or updated, the corresponding entry is created in Vault.
+Automatically sync NetBox devices to rustguac's Vault-backed connections using Event Rules and Webhooks. This keeps connections entries in sync with NetBox — when a device is created or updated, the corresponding entry is created in Vault.
 
 ### Filtering: control what syncs
 
@@ -205,5 +205,5 @@ Both NetBox and rustguac support OIDC authentication. When configured with the s
 3. Create the four custom fields (`console_enabled`, `console_mode`, `remote_protocol`, `remote_port`)
 4. Create the two Custom Links (Console green, Quick SSH blue)
 5. On devices you want to enable: check `console_enabled`, set `console_mode`
-6. For address book mode: ensure matching entries exist in Vault (manually or via webhook sync)
+6. For connections mode: ensure matching entries exist in Vault (manually or via webhook sync)
 7. Users click the button on a device page and land in a session

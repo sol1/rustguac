@@ -41,9 +41,9 @@ Xvnc (virtual display :100–:199)
 
 ## Quick start
 
-### Address book entry
+### Connections entry
 
-Create a web entry in the address book with at minimum:
+Create a web entry in the connections with at minimum:
 
 | Field | Value |
 |-------|-------|
@@ -89,7 +89,7 @@ When the user clicks on a login form, Chromium shows its familiar autofill dropd
 
 ### Configuring autofill
 
-The `autofill` field on an address book entry is a JSON string containing an array of credential objects:
+The `autofill` field on an connections entry is a JSON string containing an array of credential objects:
 
 ```json
 [
@@ -142,15 +142,15 @@ This is Chromium's own obfuscation layer for the headless Linux case (no keyring
 
 ### UI
 
-In the address book entry editor, the **Autofill** section provides a visual builder. Click **"Add site"** to add credential rows. The URL field auto-populates with the entry's target URL. Save the entry and the UI serialises the rows to JSON.
+In the connections entry editor, the **Autofill** section provides a visual builder. Click **"Add site"** to add credential rows. The URL field auto-populates with the entry's target URL. Save the entry and the UI serialises the rows to JSON.
 
 ## Domain allowlisting
 
-Each address book entry can specify an `allowed_domains` list to restrict which websites the browser can reach. This is enforced inside Chromium via the `--host-rules` flag, which blocks DNS resolution for non-allowed domains.
+Each connections entry can specify an `allowed_domains` list to restrict which websites the browser can reach. This is enforced inside Chromium via the `--host-rules` flag, which blocks DNS resolution for non-allowed domains.
 
 ### Configuring allowed domains
 
-In the address book entry editor, expand the **Allowed Domains** section and add domain names:
+In the connections entry editor, expand the **Allowed Domains** section and add domain names:
 
 ```
 example.com
@@ -166,14 +166,14 @@ There are two separate mechanisms that control what a web session can access:
 | Layer | Config | Applied | Scope |
 |-------|--------|---------|-------|
 | **`web_allowed_networks`** | `config.toml` (global) | Server-side, at session creation | CIDR ranges — controls which IPs rustguac will connect to |
-| **`allowed_domains`** | Address book entry | Client-side, inside Chromium at runtime | Domain names — controls which sites the user can navigate to |
+| **`allowed_domains`** | Connections entry | Client-side, inside Chromium at runtime | Domain names — controls which sites the user can navigate to |
 
 They don't conflict — both can be active simultaneously for defense in depth:
 
 - `web_allowed_networks` prevents rustguac from initiating connections to disallowed networks (SSRF protection)
 - `allowed_domains` prevents the user from navigating to sites outside the allowlist within an already-running session
 
-**Example:** Your config allows `10.0.0.0/8` for web sessions (server-side). An address book entry for the internal wiki sets `allowed_domains: ["wiki.internal.example.com"]`. The session can only reach the wiki — even though the server-side allowlist permits the entire `10.0.0.0/8` range.
+**Example:** Your config allows `10.0.0.0/8` for web sessions (server-side). An connections entry for the internal wiki sets `allowed_domains: ["wiki.internal.example.com"]`. The session can only reach the wiki — even though the server-side allowlist permits the entire `10.0.0.0/8` range.
 
 ### API
 
@@ -196,7 +196,7 @@ A login script is a server-side executable that connects to the already-running 
 
 ### How it works
 
-1. The address book entry specifies a `login_script` filename (e.g., `portal-login.js`)
+1. The connections entry specifies a `login_script` filename (e.g., `portal-login.js`)
 2. When the session starts, Chromium is launched with `--remote-debugging-port={cdp_port}`
 3. After Chromium is ready, rustguac spawns the script as a child process
 4. The script connects to Chromium via CDP, performs automation, then exits
@@ -366,7 +366,7 @@ main().catch((err) => {
 1. Save it to `/opt/rustguac/scripts/login-example.js`
 2. Make it executable: `chmod +x /opt/rustguac/scripts/login-example.js`
 3. Install Playwright: `cd /opt/rustguac/scripts && npm install playwright-core`
-4. Set the `login_script` field on an address book entry to `login-example.js`
+4. Set the `login_script` field on an connections entry to `login-example.js`
 
 ### Example: Shell script with curl
 
@@ -422,7 +422,7 @@ The autofill database is written before Chromium launches, and the login script 
 
 ## Clipboard control
 
-Clipboard copy and paste can be independently disabled per address book entry. This uses guacd's native `disable-copy` and `disable-paste` parameters.
+Clipboard copy and paste can be independently disabled per connections entry. This uses guacd's native `disable-copy` and `disable-paste` parameters.
 
 | Field | Effect |
 |-------|--------|
@@ -511,9 +511,9 @@ POST /api/sessions
 | `disable_paste` | boolean | No | Disable clipboard paste (default: false) |
 | `jump_hosts` | array | No | SSH tunnel hops (see [SSH tunnels](#ssh-tunnels-for-web-sessions)) |
 
-### Address book entry fields
+### Connections entry fields
 
-When creating entries via the Vault address book (UI or API), the same fields are available:
+When creating entries via the Vault connections (UI or API), the same fields are available:
 
 ```json
 {

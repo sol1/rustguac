@@ -46,7 +46,7 @@ guacd (C, from guacamole-server)
 - **OIDC single sign-on** — Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
 - **4-tier role system** — admin, poweruser, operator, viewer with OIDC group mapping
 - **API key auth** — SHA-256 hashed keys with IP allowlists and expiry
-- **Vault-backed address book** — credentials in HashiCorp Vault / OpenBao KV v2, never reach the browser
+- **Vault-backed connections** — credentials in HashiCorp Vault / OpenBao KV v2, never reach the browser
 - **TLS everywhere** — HTTPS for clients, TLS between rustguac and guacd
 - **CIDR allowlists** — per-protocol network restrictions for session targets
 - **Per-entry clipboard control** — disable copy and/or paste for data loss prevention
@@ -58,21 +58,21 @@ guacd (C, from guacamole-server)
 - **Multi-hop SSH tunnels** — chain jump hosts/bastions to reach isolated networks (all session types)
 - **Session sharing** — share tokens for read-only or collaborative access
 - **Encrypted file transfer** — LUKS-encrypted per-session drive storage (RDP), SFTP (SSH)
-- **Credential variables** — shared credentials across address book entries
+- **Credential variables** — shared credentials across connections entries
 
 ### VDI desktop containers
 
 - **Docker-based** — one container per user, deterministic naming, BYO image
 - **Persist after disconnect** — reconnect to the same desktop within idle timeout
 - **Logout detection** — desktop logout stops the container, tab close preserves it
-- **Session thumbnails** — live preview in the address book, click to reconnect
+- **Session thumbnails** — live preview in the connections, click to reconnect
 - **Persistent home directories** — bind-mounted user data survives container restarts
-- **Per-entry resource limits** — CPU, memory, idle timeout per address book entry
+- **Per-entry resource limits** — CPU, memory, idle timeout per connections entry
 - **VdiDriver trait** — extensible for downstream forks (Nomad, Proxmox, cloud)
 
 ### UI
 
-- **Address book** with folder-based organisation and OIDC group access control
+- **Connections** with folder-based organisation and OIDC group access control
 - **Active Sessions** section with live thumbnail previews
 - **Session ended overlay** with Reconnect/Close buttons
 - **8 built-in themes** with CSS gradient backgrounds, or configure your own
@@ -126,7 +126,7 @@ sudo usermod -aG docker rustguac
 sudo systemctl restart rustguac
 ```
 
-Add `[vdi]` to your config and create a VDI entry in the address book. See [VDI Desktop Containers](docs/vdi.md) for image requirements and configuration.
+Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI Desktop Containers](docs/vdi.md) for image requirements and configuration.
 
 ## Documentation
 
@@ -145,7 +145,7 @@ Add `[vdi]` to your config and create a VDI entry in the address book. See [VDI 
 
 ### Integration & reference
 - [Integrations](docs/integrations.md) — Vault, LUKS drives, SSH tunnels, Kerberos, HAProxy, Knocknoc
-- [NetBox](docs/netbox.md) — address book sync via custom fields and webhooks
+- [NetBox](docs/netbox.md) — connections sync via custom fields and webhooks
 - [Security](docs/security.md) — TLS, rate limiting, headers, audit logging, hardening
 - [API Reference](docs/api.md) — REST API endpoints
 - [Migration from Apache Guacamole](docs/migration.md) — MySQL/MariaDB to Vault

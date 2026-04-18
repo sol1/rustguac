@@ -89,13 +89,13 @@
 
         // If already logged in via API key, redirect
         if (sessionStorage.getItem('rustguac_api_key')) {
-            window.location.href = '/addressbook.html';
+            window.location.href = '/connections.html';
         }
 
         // Check if already authenticated via cookie
         fetch('/api/me', { credentials: 'same-origin' })
         .then(function(res) {
-            if (res.ok) window.location.href = '/addressbook.html';
+            if (res.ok) window.location.href = '/connections.html';
         });
 
         function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
@@ -150,7 +150,7 @@
             .then(function(res) {
                 if (!res.ok) throw new Error('Invalid API key');
                 sessionStorage.setItem('rustguac_api_key', key);
-                window.location.href = '/addressbook.html';
+                window.location.href = '/connections.html';
             })
             .catch(function(err) {
                 errorEl.textContent = err.message;

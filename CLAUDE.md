@@ -25,10 +25,10 @@ rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp.
 - `src/config.rs` — TOML config loading with defaults
 - `src/auth.rs` — API key auth middleware (SHA-256, IP allowlists, expiry), role system
 - `src/oidc.rs` — OIDC authentication (login, callback, logout, group extraction)
-- `src/vault.rs` — Vault/OpenBao KV v2 client for address book (AppRole auth, token renewal)
+- `src/vault.rs` — Vault/OpenBao KV v2 client for connections (AppRole auth, token renewal)
 - `src/db.rs` — SQLite admin database (rusqlite, bundled)
 - `static/client.html` — Guacamole JS client with auto-scaling display
-- `static/addressbook.html` — Vault-backed address book UI (folder/entry management, connect)
+- `static/connections.html` — Vault-backed connections UI (folder/entry management, connect)
 - `static/recordings.html` — recording playback with auto-scaling
 - `static/sessions.html` — session management dashboard
 - `dev.sh` — development script (build guacd, run, deps)
@@ -39,9 +39,9 @@ rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp.
 
 TOML config file (`config.local.toml` for dev, `--config` flag for production). Key settings: `listen_addr`, `guacd_addr`, `recording_path`, `static_path`, `db_path`, `xvnc_path`, `chromium_path`, `display_range_start/end`.
 
-### Vault / Address Book
+### Vault / Connections
 
-Optional `[vault]` section enables the Vault-backed address book. Connection entries (SSH/RDP/Web) are stored in Vault KV v2 — credentials never touch disk or the browser.
+Optional `[vault]` section enables the Vault-backed connections. Connection entries (SSH/RDP/Web) are stored in Vault KV v2 — credentials never touch disk or the browser.
 
 ```toml
 [vault]
@@ -67,9 +67,9 @@ Optional `[oidc]` section enables OpenID Connect authentication. Key settings: `
 ### Roles
 
 4-tier role hierarchy: `admin` (4) > `poweruser` (3) > `operator` (2) > `viewer` (1).
-- **admin**: full access, address book folder/entry management
-- **poweruser**: ad-hoc session creation + address book connect
-- **operator**: address book connect only (no ad-hoc sessions)
+- **admin**: full access, connections folder/entry management
+- **poweruser**: ad-hoc session creation + connections connect
+- **operator**: connections connect only (no ad-hoc sessions)
 - **viewer**: read-only
 
 ## Deployment
@@ -114,7 +114,7 @@ Ephemeral per-user Docker desktop containers. `VdiDriver` trait in `src/vdi/mod.
 - Credentials: auto-generated per session (username from OIDC, random hex password), `chpasswd` updates on reuse
 - BYO image: any Docker image with xrdp on port 3389 accepting `VDI_USERNAME`/`VDI_PASSWORD` env vars
 - Test image: `contrib/vdi-test-image/` (Debian trixie + xrdp + xorgxrdp + xfce4)
-- Thumbnails: client captures display screenshot every 10s, shown in address book "Active Sessions"
+- Thumbnails: client captures display screenshot every 10s, shown in connections "Active Sessions"
 - Config: `[vdi]` section — `enabled`, `docker_socket`, `default_cpu_limit`, `default_memory_limit`, `ready_timeout_secs`, `idle_timeout_mins`, `allowed_images`, `home_base`
 - Requires: `rustguac` user in `docker` group for socket access
 

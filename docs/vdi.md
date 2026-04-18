@@ -4,7 +4,7 @@ rustguac can spawn ephemeral Docker desktop containers on demand. Each user gets
 
 ## How it works
 
-1. An admin creates a VDI entry in the address book, specifying a Docker image
+1. An admin creates a VDI entry in the connections, specifying a Docker image
 2. When a user clicks Connect, rustguac creates a Docker container from that image
 3. The container runs xrdp on port 3389, and guacd connects to it via RDP
 4. The user sees a full Linux desktop in their browser
@@ -87,9 +87,9 @@ xrdp-sesman --nodaemon &
 exec xrdp --nodaemon
 ```
 
-## Address book setup
+## Connections setup
 
-1. Create a folder in the address book (or use an existing one)
+1. Create a folder in the connections (or use an existing one)
 2. Add a new entry with type **VDI (Docker)**
 3. Set the **Container Image** (e.g. `rustguac-vdi-test:latest`)
 4. Optionally set CPU limit, memory limit, environment variables, idle timeout
@@ -121,13 +121,13 @@ Each user gets `{home_base}/{username}` mounted as `/home/{username}` inside the
 
 ## Active Sessions
 
-The address book shows an **Active Sessions** section with thumbnail previews of running sessions. Thumbnails are captured every 10 seconds from the browser display. Click a thumbnail to reconnect.
+The connections shows an **Active Sessions** section with thumbnail previews of running sessions. Thumbnails are captured every 10 seconds from the browser display. Click a thumbnail to reconnect.
 
 Dormant VDI containers (running but no active browser session) also appear with their last captured thumbnail.
 
 ## Per-entry settings
 
-Each VDI address book entry can override:
+Each VDI connections entry can override:
 
 - **CPU limit** (cores) — overrides `default_cpu_limit`
 - **Memory limit** (MB) — overrides `default_memory_limit`

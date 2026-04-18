@@ -177,7 +177,7 @@ Additionally, user API token operations are logged to a persistent `token_audit_
 
 ## Clipboard control
 
-Clipboard copy (server → client) and paste (client → server) can be independently disabled per address book entry. This uses guacd's native `disable-copy` and `disable-paste` parameters, which work for all session types (SSH, RDP, VNC, and web browser sessions).
+Clipboard copy (server → client) and paste (client → server) can be independently disabled per connections entry. This uses guacd's native `disable-copy` and `disable-paste` parameters, which work for all session types (SSH, RDP, VNC, and web browser sessions).
 
 Use cases:
 - **Disable copy** — prevents users from copying data out of sensitive sessions (data loss prevention)
@@ -210,7 +210,7 @@ Policies applied:
 
 ### Per-entry domain allowlisting
 
-Address book entries can specify an `allowed_domains` list. When set, Chromium can only reach those domains (plus localhost). All other domains are blocked via Chromium's `--host-rules` flag, which prevents DNS resolution for non-allowed hosts.
+Connections entries can specify an `allowed_domains` list. When set, Chromium can only reach those domains (plus localhost). All other domains are blocked via Chromium's `--host-rules` flag, which prevents DNS resolution for non-allowed hosts.
 
 Subdomains are automatically included — adding `example.com` allows `*.example.com` as well.
 
@@ -243,7 +243,7 @@ All database queries use parameterised statements via rusqlite's `params!` macro
 
 ## Path traversal protection
 
-Recording file access validates filenames to block path traversal (`/`, `\`, `..`). The Vault address book also validates entry and folder names (alphanumeric, hyphens, underscores, dots only; length 1-64).
+Recording file access validates filenames to block path traversal (`/`, `\`, `..`). The Vault connections also validates entry and folder names (alphanumeric, hyphens, underscores, dots only; length 1-64).
 
 ## XSS protection
 
@@ -263,8 +263,8 @@ trusted_proxies = ["127.0.0.1/32"]
 
 ## Credential handling
 
-- **Vault credentials** — address book entries are read server-side from Vault. Connection passwords and private keys are never sent to the browser.
-- **SSH tunnel credentials** — jump host passwords and private keys are stored in Vault alongside the address book entry. They are read server-side when establishing the tunnel chain and are never sent to the browser. For ad-hoc sessions, jump host credentials are provided in the session creation request and exist only in memory during tunnel setup.
+- **Vault credentials** — connections entries are read server-side from Vault. Connection passwords and private keys are never sent to the browser.
+- **SSH tunnel credentials** — jump host passwords and private keys are stored in Vault alongside the connections entry. They are read server-side when establishing the tunnel chain and are never sent to the browser. For ad-hoc sessions, jump host credentials are provided in the session creation request and exist only in memory during tunnel setup.
 - **API keys** — only the SHA-256 hash is stored. The plaintext key is shown once at creation and cannot be retrieved.
 - **User API tokens** — same SHA-256 hash storage as admin API keys. The `rgu_` prefix enables secret scanning. Plaintext shown once at creation only.
 - **OIDC client secret** — can be provided via `OIDC_CLIENT_SECRET` environment variable instead of the config file.

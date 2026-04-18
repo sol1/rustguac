@@ -622,7 +622,7 @@ async fn run_server(config: Config, database: Db) {
         // Disk-served HTML pages
         for name in &[
             "index.html",
-            "addressbook.html",
+            "connections.html",
             "sessions.html",
             "recordings.html",
             "reports.html",
@@ -879,6 +879,7 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/users/{email}/enable", post(api::enable_user))
         .route("/api/admin/group-mappings", get(api::list_group_mappings))
         .route("/api/admin/group-mappings", post(api::create_group_mapping))
+        .route("/api/auth/known-groups", get(api::list_known_groups))
         .route(
             "/api/admin/group-mappings/{id}",
             put(api::update_group_mapping),
@@ -921,6 +922,10 @@ async fn run_server(config: Config, database: Db) {
         .route(
             "/api/addressbook/folders/{scope}/{folder}",
             delete(api::ab_delete_folder),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/config",
+            get(api::ab_get_folder_config),
         )
         .route(
             "/api/addressbook/folders/{scope}/{folder}/subfolders",
@@ -1004,9 +1009,16 @@ async fn run_server(config: Config, database: Db) {
     let html_routes = Router::new()
         .route("/", get(serve_branded_page))
         .route("/index.html", get(serve_branded_page))
-        .route("/addressbook.html", get(serve_branded_page))
+        .route("/connections.html", get(serve_branded_page))
+        // Legacy path — the page was renamed from Address Book → Connections.
+        // Permanent redirect so bookmarks keep working.
+        .route(
+            "/addressbook.html",
+            get(|| async { axum::response::Redirect::permanent("/connections.html") }),
+        )
         .route("/sessions.html", get(serve_branded_page))
         .route("/recordings.html", get(serve_branded_page))
+        .route("/reports.html", get(serve_branded_page))
         .route("/admin.html", get(serve_branded_page))
         .route("/tokens.html", get(serve_branded_page))
         .route("/docs.html", get(serve_branded_page));

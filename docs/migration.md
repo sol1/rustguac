@@ -1,6 +1,6 @@
 # Migrating from Apache Guacamole
 
-rustguac can import connections from an Apache Guacamole MySQL/MariaDB database into its Vault-backed address book.
+rustguac can import connections from an Apache Guacamole MySQL/MariaDB database into its Vault-backed connections.
 
 ## Prerequisites
 
@@ -67,15 +67,15 @@ rustguac --config /opt/rustguac/config.toml \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--file` | (required) | Path to the mysqldump SQL file |
-| `--folder` | `imported` | Target folder in the address book |
+| `--folder` | `imported` | Target folder in the connections |
 | `--scope` | `shared` | `shared` (visible to all instances) or `instance` (this instance only) |
 | `--dry-run` | off | Preview without writing to Vault |
 
 ## What gets imported
 
-The importer maps Guacamole connection parameters to rustguac address book fields:
+The importer maps Guacamole connection parameters to rustguac connections fields:
 
-| Guacamole parameter | Address book field |
+| Guacamole parameter | Connections field |
 |--------------------|--------------------|
 | `hostname` | `hostname` |
 | `port` | `port` |
@@ -113,7 +113,7 @@ Guacamole's connection group hierarchy is flattened into entry name prefixes. Fo
 
 ## After import
 
-Once imported, connections appear in the address book UI. You can:
+Once imported, connections appear in the connections UI. You can:
 
 - Edit entries to add features not available in Guacamole (login scripts, autofill, domain allowlists)
 - Move entries between folders

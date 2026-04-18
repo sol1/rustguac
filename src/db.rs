@@ -115,6 +115,12 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS seen_groups (
+            name       TEXT PRIMARY KEY,
+            first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+            last_seen  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS user_api_tokens (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id       INTEGER NOT NULL REFERENCES users(id),
@@ -667,6 +673,46 @@ pub fn delete_group_mapping(db: &Db, id: i64) -> rusqlite::Result<bool> {
     let conn = db.lock().unwrap();
     let changed = conn.execute("DELETE FROM group_role_mappings WHERE id = ?1", params![id])?;
     Ok(changed > 0)
+}
+
+/// Upsert OIDC groups observed in a login token, updating last_seen.
+pub fn upsert_seen_groups(db: &Db, groups: &[String]) -> rusqlite::Result<()> {
+    if groups.is_empty() {
+        return Ok(());
+    }
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO seen_groups (name) VALUES (?1)
+             ON CONFLICT(name) DO UPDATE SET last_seen = datetime('now')",
+        )?;
+        for g in groups {
+            let trimmed = g.trim();
+            if !trimmed.is_empty() {
+                stmt.execute(params![trimmed])?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// List all known OIDC groups — union of configured role-mappings and groups
+/// ever seen in a user's login claims. Sorted case-insensitively.
+pub fn list_known_groups(db: &Db) -> rusqlite::Result<Vec<String>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT g FROM (
+            SELECT oidc_group AS g FROM group_role_mappings
+            UNION
+            SELECT name AS g FROM seen_groups
+         )
+         WHERE g IS NOT NULL AND g <> ''
+         ORDER BY g COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    rows.collect()
 }
 
 // ── User API tokens ──

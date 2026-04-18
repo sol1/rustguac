@@ -18,7 +18,7 @@ Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Cr
 
     /api/connect?hostname=10.0.1.50&protocol=ssh
 
-**Address book mode** (operator+):
+**Connections mode** (operator+):
 
     /api/connect?scope=shared&folder=production&entry=web-server-01
 
@@ -29,16 +29,16 @@ Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Cr
 | `port` | integer | Target port (uses protocol default if omitted) |
 | `username` | string | Username (optional) |
 | `url` | string | Target URL (web sessions) |
-| `scope` | string | Address book scope: `shared` or `instance` |
-| `folder` | string | Address book folder name |
-| `entry` | string | Address book entry name |
+| `scope` | string | Connections scope: `shared` or `instance` |
+| `folder` | string | Connections folder name |
+| `entry` | string | Connections entry name |
 | `width` | integer | Display width in pixels |
 | `height` | integer | Display height in pixels |
 | `dpi` | integer | Display DPI |
 
-When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the address book (credentials from Vault). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode — if the target requires authentication, the user will see guacd's login prompt.
+When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the connections (credentials from Vault). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode — if the target requires authentication, the user will see guacd's login prompt.
 
-If the address book entry has `prompt_credentials: true` or has no stored password/key, the endpoint returns an inline credential form instead of creating the session immediately. The user enters credentials, which are POSTed to the connect endpoint and used for that session only (never stored).
+If the connections entry has `prompt_credentials: true` or has no stored password/key, the endpoint returns an inline credential form instead of creating the session immediately. The user enters credentials, which are POSTed to the connect endpoint and used for that session only (never stored).
 
 See [NetBox Integration](netbox.md) for usage with NetBox Custom Links.
 
@@ -348,7 +348,7 @@ Update a mapping.
 
 Delete a mapping.
 
-## Address Book (requires Vault)
+## Connections (requires Vault)
 
 ### `GET /api/addressbook/folders`
 
@@ -360,7 +360,7 @@ List entries in a folder. Scope is `shared` or `instance`. Requires folder group
 
 ### `POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect`
 
-Create a session from an address book entry. Reads credentials (including jump host credentials) from Vault server-side and creates a session. Requires **operator** role and folder group access.
+Create a session from an connections entry. Reads credentials (including jump host credentials) from Vault server-side and creates a session. Requires **operator** role and folder group access.
 
 Optional body to override or supply credentials at connect time:
 
@@ -422,7 +422,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 }
 ```
 
-**Address book entry fields:**
+**Connections entry fields:**
 
 | Field | Type | Used by | Description |
 |-------|------|---------|-------------|

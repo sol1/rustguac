@@ -55,7 +55,7 @@
         <h1>rustguac</h1>
     </div>
     <nav>
-        <a href="/addressbook.html">Address Book</a>
+        <a href="/connections.html">Connections</a>
         <a href="/sessions.html" class="active" id="sessions-link">Sessions</a>
         <a href="/recordings.html">Recordings</a>
         <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
@@ -66,7 +66,7 @@
     </nav>
 
     <div id="adhoc-notice" style="display:none;background:var(--surface);padding:1em 1.5em;border-radius:6px;max-width:400px;margin:1.5em 0;color:var(--text-muted);">
-        Use the <a href="/addressbook.html">Address Book</a> to connect to saved entries.
+        Use the <a href="/connections.html">Connections</a> to connect to saved entries.
     </div>
 
     <form id="session-form" style="display:none">
@@ -211,7 +211,7 @@
                 if (!data) return;
                 var level = roleLevel[data.role] || 0;
                 if (level < 3) {
-                    window.location.href = '/addressbook.html';
+                    window.location.href = '/connections.html';
                     return;
                 }
                 if (data.role === 'admin') {
@@ -573,7 +573,8 @@
         }
 
         function refreshSessions() {
-            fetch('/api/sessions', { headers: apiHeaders(), credentials: 'same-origin' })
+            // Admins get everyone's sessions; non-admins see only their own (see #102).
+            fetch('/api/sessions?all=true', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (!res.ok) throw new Error('auth');
                 return res.json();
