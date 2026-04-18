@@ -154,6 +154,15 @@
             font-size: var(--fz-xs);
             font-weight: normal;
         }
+        .card-actions .btn-danger {
+            color: var(--primary);
+            border-color: var(--border);
+        }
+        .card-actions .btn-danger:hover {
+            color: var(--text-on-primary);
+            background: var(--primary);
+            border-color: var(--primary);
+        }
 
         /* Share URL display in the share modal */
         .share-url-box {
@@ -177,6 +186,24 @@
         }
         .share-url-box button {
             flex-shrink: 0;
+        }
+        .share-warning {
+            margin-top: var(--s-3);
+            padding: var(--s-2) var(--s-3);
+            border: 1px solid var(--status-pending);
+            border-left-width: 3px;
+            border-radius: var(--radius);
+            color: var(--status-pending);
+            font-size: var(--fz-sm);
+            line-height: 1.4;
+            display: flex;
+            align-items: flex-start;
+            gap: var(--s-2);
+        }
+        .share-warning-icon {
+            font-size: var(--fz-md);
+            flex-shrink: 0;
+            line-height: 1.4;
         }
 
         /* Chip-based group picker */
@@ -706,7 +733,10 @@
                 <code id="share-modal-url"></code>
                 <button type="button" id="share-modal-copy" class="btn-add">Copy</button>
             </div>
-            <div class="field-hint">Anyone with this link and network access to this server can watch the session until it ends.</div>
+            <div class="share-warning">
+                <span class="share-warning-icon">&#9888;</span>
+                Anyone with this link and network access to this server can watch the session until it ends.
+            </div>
             <div class="modal-actions">
                 <button class="btn-cancel" id="share-modal-close">Close</button>
             </div>
@@ -1137,16 +1167,45 @@
                     var name = s.entry_display_name || s.hostname || s.url || '?';
                     var typeBadge = '<span class="type-badge type-' + escapeHtml(s.session_type) + '">' + escapeHtml(s.session_type) + '</span>';
                     var shareUrl = s.share_url ? (window.location.origin + s.share_url) : '';
+                    var actionsHtml = '<div class="card-actions">';
+                    if (shareUrl) {
+                        actionsHtml += '<button type="button" class="btn-add" data-share-url="' + escapeAttr(shareUrl) + '" title="Copy a URL to let someone watch this session">Share</button>';
+                    }
+                    actionsHtml += '<button type="button" class="btn-add btn-danger" data-terminate="' + escapeAttr(s.session_id) + '" data-name="' + escapeAttr(name) + '" title="End this session now">Terminate</button>';
+                    actionsHtml += '</div>';
                     card.innerHTML = '<img class="session-card-thumb" src="' + escapeHtml(thumbUrl) + (thumbUrl ? '?t=' + Date.now() : '') + '" onerror="this.style.display=\'none\'" alt="">'
                         + '<div class="session-card-info"><div class="card-name">' + escapeHtml(name) + '</div>'
                         + '<div class="card-meta">' + typeBadge + ' <span>' + escapeHtml(s.username || '') + '</span></div></div>'
-                        + (shareUrl ? '<div class="card-actions"><button type="button" class="btn-add" data-share-url="' + escapeAttr(shareUrl) + '" title="Copy a URL to let someone watch this session">Share</button></div>' : '');
+                        + actionsHtml;
                     card.title = 'Click to open this session';
                     var shareBtn = card.querySelector('[data-share-url]');
                     if (shareBtn) {
                         shareBtn.addEventListener('click', function(ev) {
                             ev.stopPropagation();
                             openShareModal(shareBtn.getAttribute('data-share-url'));
+                        });
+                    }
+                    var termBtn = card.querySelector('[data-terminate]');
+                    if (termBtn) {
+                        termBtn.addEventListener('click', function(ev) {
+                            ev.stopPropagation();
+                            var sid = termBtn.getAttribute('data-terminate');
+                            var label = termBtn.getAttribute('data-name') || sid;
+                            if (!confirm('Terminate session "' + label + '"? Any unsaved work will be lost.')) return;
+                            termBtn.disabled = true;
+                            termBtn.textContent = 'Ending...';
+                            fetch('/api/sessions/' + sid, {
+                                method: 'DELETE',
+                                headers: apiHeaders(),
+                                credentials: 'same-origin'
+                            }).then(function(res) {
+                                if (!res.ok) return res.text().then(function(t) { throw new Error(t || 'terminate failed'); });
+                                loadActiveSessions();
+                            }).catch(function(err) {
+                                termBtn.disabled = false;
+                                termBtn.textContent = 'Terminate';
+                                showError('Terminate failed: ' + err.message);
+                            });
                         });
                     }
                     card.addEventListener('click', function() {
