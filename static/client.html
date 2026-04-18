@@ -350,8 +350,9 @@
                 clipboardPanel.style.cssText = 'display:none;position:fixed;top:0;left:0;bottom:0;width:380px;background:var(--bg);border-right:2px solid var(--primary);z-index:3000;font-family:monospace;color:var(--text);flex-direction:column;';
 
                 clipboardPanel.innerHTML =
-                    '<div style="display:flex;align-items:center;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
-                        '<h3 style="margin:0;flex:1;color:var(--primary);font-size:1.1em;">Clipboard</h3>' +
+                    '<div style="display:flex;align-items:center;gap:0.6em;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
+                        '<h3 style="margin:0;flex:1;color:var(--primary);font-size:1.1em;">Session</h3>' +
+                        '<button id="cp-home" style="background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.9em;padding:0.35em 0.8em;border-radius:3px;cursor:pointer;" title="Return to the Connections page">&#127968; Home</button>' +
                         '<button id="cp-close" style="background:none;border:none;color:var(--text-dim);font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
                     '</div>' +
                     '<div style="flex:1;display:flex;flex-direction:column;padding:1em;gap:0.8em;overflow-y:auto;min-height:0;">' +
@@ -372,6 +373,14 @@
 
                 document.getElementById('cp-close').addEventListener('click', function() {
                     toggleClipboardPanel();
+                });
+                document.getElementById('cp-home').addEventListener('click', function() {
+                    // Provides the escape hatch for users whose only entry
+                    // has auto_open_if_singleton set — navigates this tab
+                    // back to Connections. Session may keep running until
+                    // socket closes; user can explicitly terminate from
+                    // Connections' active-session card.
+                    window.location.href = '/connections.html';
                 });
                 document.getElementById('cp-send').addEventListener('click', function() {
                     if (clipboardTextarea.value) sendClipboardToRemote(clipboardTextarea.value);

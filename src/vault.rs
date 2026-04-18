@@ -172,6 +172,12 @@ pub struct AddressBookEntry {
     /// `SessionInfo.share_url` is serialised as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_sharing: Option<bool>,
+    /// GitHub #103: when true and this is the calling user's ONLY visible
+    /// entry, the Connections page auto-connects to it on first load.
+    /// Admin opt-in per entry. No effect for users with more than one
+    /// visible entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_open_if_singleton: Option<bool>,
 }
 
 impl AddressBookEntry {
@@ -287,6 +293,9 @@ pub struct EntryInfo {
     /// Defaults to false — admin must opt in per entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_sharing: Option<bool>,
+    /// Auto-open on login when this is the user's only visible entry (#103).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_open_if_singleton: Option<bool>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -342,6 +351,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             container_image: e.container_image.clone(),
             container_idle_timeout_mins: e.container_idle_timeout_mins,
             allow_sharing: e.allow_sharing,
+            auto_open_if_singleton: e.auto_open_if_singleton,
         }
     }
 }

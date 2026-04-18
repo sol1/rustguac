@@ -115,6 +115,7 @@ pub async fn cmd_import_guacamole(
             container_env: None,
             container_idle_timeout_mins: None,
             allow_sharing: None,
+            auto_open_if_singleton: None,
         };
 
         // Build entry name: group prefix + sanitized connection name
@@ -658,6 +659,7 @@ mod tests {
             container_env: None,
             container_idle_timeout_mins: None,
             allow_sharing: None,
+            auto_open_if_singleton: None,
         };
         let mut entries = vec![
             ("web".into(), entry()),

@@ -699,6 +699,15 @@
                     When enabled, users can generate a read-only Share URL for active sessions of this entry.
                     Off by default — admins opt in per entry.
                 </div>
+                <label style="text-transform:none;letter-spacing:0;cursor:pointer;margin-top:0.8em">
+                    <input type="checkbox" id="em-auto-open-singleton" style="display:inline;width:auto;margin-right:0.5em">
+                    Auto-open when this is the user's only entry
+                </label>
+                <div class="field-hint">
+                    On first visit to Connections, if the user has exactly one visible entry and
+                    this box is ticked, connect automatically (replaces the current tab — browsers
+                    block new-tab popups without a click). Kiosk-style single-purpose accounts.
+                </div>
             </div>
             <div id="em-move-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label>Move to folder
@@ -965,15 +974,16 @@
             inp.focus();
         }
 
+        // Adds whatever is currently typed in the group input as one or
+        // more chips. Returns silently if the input is empty — the Save
+        // handler calls this to flush pending typing, and must not
+        // silently add the combo's highlighted suggestion (that caused a
+        // bug where editing any folder tacked on the first unselected
+        // known group).
         function addFmGroupFromInput() {
             var inp = document.getElementById('fm-groups-input');
             var raw = (inp.value || '').trim();
-            if (!raw) {
-                // Enter with nothing typed: pick the active combo item if any
-                var opts = fmGroupOptionsFiltered();
-                if (fmComboActive >= 0 && fmComboActive < opts.length) pickFmGroup(opts[fmComboActive]);
-                return;
-            }
+            if (!raw) return;
             // Allow comma-separated bulk paste
             raw.split(',').forEach(function(part) {
                 var g = part.trim();
@@ -982,6 +992,72 @@
             inp.value = '';
             renderFmGroupChips();
             populateFmGroupOptions();
+        }
+
+        // Explicit handler for when the user presses Enter with nothing
+        // typed: pick the currently highlighted combo suggestion.
+        function pickFmGroupFromCombo() {
+            var opts = fmGroupOptionsFiltered();
+            if (fmComboActive >= 0 && fmComboActive < opts.length) {
+                pickFmGroup(opts[fmComboActive]);
+            }
+        }
+
+        // GitHub #103: auto-open the user's only entry if it has
+        // auto_open_if_singleton set. Fires once per browser session
+        // (sessionStorage-gated) so an accidental refresh of Connections
+        // doesn't spawn another client tab — the user can always click
+        // the entry card to reconnect manually. Logout clears the flag,
+        // so the next fresh login auto-opens again.
+        function maybeAutoOpenSingleton() {
+            try {
+                if (sessionStorage.getItem('rustguac_auto_opened') === '1') return;
+            } catch (e) { /* no sessionStorage */ }
+
+            // Gather every entry the user currently sees across top-level
+            // folders from the batch response. Subfolders aren't in the
+            // initial batch (lazy-loaded) so this deliberately only
+            // considers top-level — keeps the behaviour predictable.
+            var allEntries = [];
+            Object.keys(folderEntries).forEach(function(key) {
+                (folderEntries[key] || []).forEach(function(e) {
+                    allEntries.push({ key: key, entry: e });
+                });
+            });
+            if (allEntries.length !== 1) return;
+            var hit = allEntries[0];
+            if (!hit.entry || !hit.entry.auto_open_if_singleton) return;
+
+            // Decode the folder key: "<scope>|<path>"
+            var sep = hit.key.indexOf('|');
+            if (sep < 0) return;
+            var scope = hit.key.slice(0, sep);
+            var path = hit.key.slice(sep + 1);
+            var name = hit.entry.name;
+            try { sessionStorage.setItem('rustguac_auto_opened', '1'); } catch (e) {}
+
+            // Use the same connect path the table's Connect button uses,
+            // minus the UI chrome. Open the resulting session in a new tab.
+            fetch('/api/addressbook/folders/' + encodeURIComponent(scope)
+                + '/' + encodeURIComponent(path)
+                + '/entries/' + encodeURIComponent(name) + '/connect', {
+                method: 'POST',
+                headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
+                credentials: 'same-origin',
+                body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data && data.session_id) {
+                    // Browsers block window.open after an async fetch
+                    // (no user gesture), so replace the current tab.
+                    // Kiosk-style single-entry users see only the client;
+                    // to return to Connections they navigate back.
+                    var label = encodeURIComponent(hit.entry.display_name || hit.entry.name);
+                    window.location.href = '/client/' + data.session_id + '?name=' + label;
+                }
+            })
+            .catch(function() { /* silent — user can still connect manually */ });
         }
 
         function populateLoginScriptDropdown(selectedValue) {
@@ -1320,6 +1396,7 @@
                         loadEntries(folders[0].scope, folderPath(folders[0]));
                     }
                 }
+                maybeAutoOpenSingleton();
             })
             .catch(function(err) {
                 showError('Failed to load folders: ' + err.message);
@@ -1885,7 +1962,11 @@
                     updateFmComboActive();
                 } else if (ev.key === 'Enter') {
                     ev.preventDefault();
-                    addFmGroupFromInput();
+                    if (inp.value.trim()) {
+                        addFmGroupFromInput();
+                    } else {
+                        pickFmGroupFromCombo();
+                    }
                 } else if (ev.key === 'Escape') {
                     closeFmCombo();
                     inp.blur();
@@ -2453,6 +2534,7 @@
             document.getElementById('em-disable-copy').checked = false;
             document.getElementById('em-disable-paste').checked = false;
             document.getElementById('em-allow-sharing').checked = false;
+            document.getElementById('em-auto-open-singleton').checked = false;
             document.getElementById('em-enable-drive').checked = false;
             document.getElementById('em-drive-warning').style.display = 'none';
             document.getElementById('em-remote-app').value = '';
@@ -2634,6 +2716,8 @@
                 document.getElementById('em-disable-paste').checked = !!entryData.disable_paste;
                 // Populate per-entry sharing flag
                 document.getElementById('em-allow-sharing').checked = !!entryData.allow_sharing;
+                // Populate auto-open singleton flag
+                document.getElementById('em-auto-open-singleton').checked = !!entryData.auto_open_if_singleton;
                 // Populate hop list from jump_hosts array
                 if (entryData.jump_hosts && entryData.jump_hosts.length > 0) {
                     hopList = entryData.jump_hosts.map(function(h) {
@@ -2789,6 +2873,8 @@
             // Per-entry sharing (admin opt-in; gates the Share button on
             // Connections active-session cards)
             if (document.getElementById('em-allow-sharing').checked) entry.allow_sharing = true;
+            // Auto-open if this is the user's only visible entry (#103)
+            if (document.getElementById('em-auto-open-singleton').checked) entry.auto_open_if_singleton = true;
 
             // Tunnel / jump host settings — multi-hop (all types)
             if (type === 'ssh' || type === 'rdp' || type === 'vnc' || type === 'web') {
