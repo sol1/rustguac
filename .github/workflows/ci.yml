@@ -50,6 +50,8 @@ jobs:
         run: $HOME/.cargo/bin/cargo build --release
 
       - name: Security audit
+        # Ignored advisories + rationale live in .cargo/audit.toml so new
+        # advisories on the same crates still surface.
         run: |
           $HOME/.cargo/bin/cargo install cargo-audit
-          $HOME/.cargo/bin/cargo audit --ignore RUSTSEC-2023-0071
+          $HOME/.cargo/bin/cargo audit

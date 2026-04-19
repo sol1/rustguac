@@ -1803,4 +1803,108 @@ mod tests {
         let entry3: AddressBookEntry = serde_json::from_str(json3).unwrap();
         assert_eq!(entry3.enable_h264, Some(false));
     }
+
+    // ── Path-traversal regression tests (v1.5.4 fix) ──────────────────────
+    // Locks down the validate_name / validate_path invariants. Any future
+    // relaxation of these rules (or a bug that re-opens `../` handling) must
+    // fail these tests, not land silently.
+
+    #[test]
+    fn validate_name_accepts_plain_names() {
+        assert!(validate_name("acme").is_ok());
+        assert!(validate_name("acme-prod").is_ok());
+        assert!(validate_name("acme_prod").is_ok());
+        assert!(validate_name("host.example").is_ok());
+        assert!(validate_name("A1b2C3").is_ok());
+    }
+
+    #[test]
+    fn validate_name_rejects_traversal() {
+        assert!(validate_name("..").is_err());
+        assert!(validate_name(".").is_err());
+        assert!(validate_name("../etc").is_err());
+        assert!(validate_name("foo/bar").is_err());
+        assert!(validate_name("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_reserved() {
+        assert!(validate_name(".config").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_encoded_traversal() {
+        // Encoded forms should fail because `%` is not in the whitelist.
+        assert!(validate_name("%2e%2e").is_err());
+        assert!(validate_name("%2E%2E%2F").is_err());
+        assert!(validate_name("..%2F..").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_nul_and_control() {
+        assert!(validate_name("foo\0bar").is_err());
+        assert!(validate_name("foo\nbar").is_err());
+        assert!(validate_name("foo\tbar").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_unicode() {
+        // Unicode letters/digits shouldn't sneak past the ascii-alphanumeric
+        // whitelist (blocks homoglyph and normalization tricks).
+        assert!(validate_name("café").is_err());
+        assert!(validate_name("Ⅰ").is_err()); // Roman numeral 1
+        assert!(validate_name("а").is_err()); // Cyrillic 'a'
+    }
+
+    #[test]
+    fn validate_name_rejects_empty_and_overlong() {
+        assert!(validate_name("").is_err());
+        let overlong = "a".repeat(65);
+        assert!(validate_name(&overlong).is_err());
+        let at_limit = "a".repeat(64);
+        assert!(validate_name(&at_limit).is_ok());
+    }
+
+    #[test]
+    fn validate_name_rejects_spaces_and_special() {
+        assert!(validate_name("foo bar").is_err());
+        assert!(validate_name("foo;rm -rf").is_err());
+        assert!(validate_name("foo$bar").is_err());
+        assert!(validate_name("foo@bar").is_err());
+    }
+
+    #[test]
+    fn validate_path_accepts_nested() {
+        assert!(validate_path("Clients/Acme/Servers").is_ok());
+        assert!(validate_path("a").is_ok());
+        assert!(validate_path("a/b").is_ok());
+    }
+
+    #[test]
+    fn validate_path_rejects_leading_or_trailing_slash() {
+        assert!(validate_path("/foo").is_err());
+        assert!(validate_path("foo/").is_err());
+        assert!(validate_path("/").is_err());
+    }
+
+    #[test]
+    fn validate_path_rejects_empty_segments() {
+        assert!(validate_path("").is_err());
+        assert!(validate_path("a//b").is_err());
+        assert!(validate_path("a///b").is_err());
+    }
+
+    #[test]
+    fn validate_path_rejects_traversal_in_any_segment() {
+        assert!(validate_path("../etc").is_err());
+        assert!(validate_path("foo/../etc").is_err());
+        assert!(validate_path("foo/..").is_err());
+        assert!(validate_path("foo/./bar").is_err());
+    }
+
+    #[test]
+    fn validate_path_rejects_overlong() {
+        let overlong = format!("{}", "a".repeat(257));
+        assert!(validate_path(&overlong).is_err());
+    }
 }

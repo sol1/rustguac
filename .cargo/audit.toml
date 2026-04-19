@@ -1,0 +1,18 @@
+[advisories]
+# Advisories ignored with rationale. Regularly re-check whether upstream has
+# landed a fix so these entries can be removed.
+ignore = [
+    # rsa — Marvin timing sidechannel in RSA decryption. No upstream fix
+    # available; pulled in transitively by `openidconnect` (OIDC ID-token
+    # verification) and `russh` (SSH client). Local exploitation requires
+    # precise remote timing of many RSA operations against keys the attacker
+    # is trying to recover; not reachable in a meaningful way from this
+    # deployment's threat model. Revisit whenever `rsa` ships a fix.
+    "RUSTSEC-2023-0071",
+
+    # rustls-pemfile — unmaintained. Used only at server startup to parse
+    # operator-controlled TLS cert/key PEMs from disk; not parsing attacker
+    # input. Replacement during a future dependency sweep (rustls-pki-types
+    # now has an integrated PEM reader).
+    "RUSTSEC-2025-0134",
+]

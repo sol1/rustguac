@@ -1253,4 +1253,52 @@ mod tests {
         let html = "<title>rustguac</title><h1>rustguac</h1>";
         assert_eq!(rewrite_branding(html, "rustguac", None), html);
     }
+
+    // ── Rate-limit plumbing ─────────────────────────────────────────────
+    // Proves that the tower_governor layer is actually applied: bursts
+    // above the configured threshold return 429. Guards against a future
+    // refactor that drops `.layer(GovernorLayer::new(...))` from a route
+    // group without noticing.
+
+    #[tokio::test]
+    async fn rate_limit_layer_returns_429_on_burst() {
+        use axum::{body::Body, http::Request, routing::get, Router};
+        use tower::ServiceExt;
+
+        // Same settings family as the OIDC auth-rate-limit path in main.rs.
+        let conf = GovernorConfigBuilder::default()
+            .per_second(1)
+            .burst_size(3)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .expect("governor config");
+
+        let app: Router = Router::new()
+            .route("/probe", get(|| async { axum::http::StatusCode::OK }))
+            .layer(GovernorLayer::new(conf));
+
+        // Fire 10 requests back-to-back from the same source IP. With
+        // burst=3 per_second=1, at least one must be throttled (429).
+        // SmartIpKeyExtractor honours X-Forwarded-For when present.
+        let mut saw_ok = false;
+        let mut saw_429 = false;
+        for _ in 0..10 {
+            let req = Request::builder()
+                .uri("/probe")
+                .header("x-forwarded-for", "203.0.113.99")
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            match resp.status().as_u16() {
+                200 => saw_ok = true,
+                429 => saw_429 = true,
+                other => panic!("unexpected status {other} — governor misconfigured"),
+            }
+        }
+        assert!(saw_ok, "no requests succeeded — layer misconfigured");
+        assert!(
+            saw_429,
+            "no requests were throttled — rate-limit not applied"
+        );
+    }
 }

@@ -452,6 +452,25 @@ pub async fn logout(
 
 /// Extract group memberships from a JWT string by decoding the payload.
 /// Accepts the raw JWT string to avoid openidconnect's complex generics.
+/// Max OIDC groups kept per login. Caps `seen_groups` bloat + `oidc_groups`
+/// column size if an IdP returns an absurdly large group list (misconfig or
+/// compromise). Realistic AD deployments sit well under this.
+const MAX_OIDC_GROUPS: usize = 64;
+/// Max characters per group name. Longer names are truncated on the byte
+/// boundary preserving UTF-8 (we drop trailing partial code points).
+const MAX_OIDC_GROUP_LEN: usize = 256;
+
+fn truncate_group_name(s: &str) -> String {
+    if s.len() <= MAX_OIDC_GROUP_LEN {
+        return s.to_string();
+    }
+    let mut end = MAX_OIDC_GROUP_LEN;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
 fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
     use base64::Engine;
     let parts: Vec<&str> = token_str.split('.').collect();
@@ -470,15 +489,25 @@ fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
         Err(_) => return Vec::new(),
     };
 
-    match claims.get(groups_claim) {
+    let mut groups: Vec<String> = match claims.get(groups_claim) {
         Some(serde_json::Value::Array(arr)) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|v| v.as_str().map(truncate_group_name))
             .collect(),
         // Some OIDC providers send a plain string instead of an array when user is in one group
-        Some(serde_json::Value::String(s)) => vec![s.clone()],
+        Some(serde_json::Value::String(s)) => vec![truncate_group_name(s)],
         _ => Vec::new(),
+    };
+
+    if groups.len() > MAX_OIDC_GROUPS {
+        tracing::warn!(
+            total = groups.len(),
+            kept = MAX_OIDC_GROUPS,
+            "OIDC groups claim exceeds cap — truncating"
+        );
+        groups.truncate(MAX_OIDC_GROUPS);
     }
+    groups
 }
 
 /// Extract a cookie value from request headers.
@@ -501,4 +530,94 @@ fn extract_cookie_from_headers(headers: &axum::http::HeaderMap, name: &str) -> O
                 }
             })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    fn make_jwt(payload: &serde_json::Value) -> String {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(payload).unwrap());
+        format!("{}.{}.sig", header, payload)
+    }
+
+    #[test]
+    fn groups_missing_claim_returns_empty() {
+        let jwt = make_jwt(&serde_json::json!({"sub": "alice"}));
+        assert!(extract_groups_from_jwt(&jwt, "groups").is_empty());
+    }
+
+    #[test]
+    fn groups_malformed_jwt_returns_empty() {
+        assert!(extract_groups_from_jwt("not-a-jwt", "groups").is_empty());
+        assert!(extract_groups_from_jwt("onlyone", "groups").is_empty());
+        assert!(extract_groups_from_jwt("a.b", "groups").is_empty());
+        assert!(extract_groups_from_jwt("a.!notbase64!.c", "groups").is_empty());
+    }
+
+    #[test]
+    fn groups_array_passed_through() {
+        let jwt = make_jwt(&serde_json::json!({"groups": ["admins", "ops"]}));
+        let got = extract_groups_from_jwt(&jwt, "groups");
+        assert_eq!(got, vec!["admins".to_string(), "ops".to_string()]);
+    }
+
+    #[test]
+    fn groups_single_string_wrapped() {
+        let jwt = make_jwt(&serde_json::json!({"groups": "admins"}));
+        assert_eq!(extract_groups_from_jwt(&jwt, "groups"), vec!["admins"]);
+    }
+
+    #[test]
+    fn groups_non_string_values_filtered() {
+        let jwt = make_jwt(&serde_json::json!({"groups": ["ok", 42, null, {"nested": "x"}]}));
+        assert_eq!(extract_groups_from_jwt(&jwt, "groups"), vec!["ok"]);
+    }
+
+    #[test]
+    fn groups_array_over_cap_truncated() {
+        let many: Vec<String> = (0..MAX_OIDC_GROUPS + 50).map(|i| format!("g{i}")).collect();
+        let jwt = make_jwt(&serde_json::json!({"groups": many}));
+        let got = extract_groups_from_jwt(&jwt, "groups");
+        assert_eq!(got.len(), MAX_OIDC_GROUPS);
+        assert_eq!(got[0], "g0");
+    }
+
+    #[test]
+    fn groups_long_names_truncated_on_utf8_boundary() {
+        // Build a name with a multi-byte char straddling the 256-byte limit.
+        // '€' is 3 bytes. Pad with ASCII up to position 254 then add two '€' —
+        // naive byte-truncate at 256 would split the second '€'.
+        let mut name = "a".repeat(254);
+        name.push('€'); // bytes 254..257
+        name.push('€'); // bytes 257..260
+        let jwt = make_jwt(&serde_json::json!({"groups": [name.clone()]}));
+        let got = extract_groups_from_jwt(&jwt, "groups");
+        assert_eq!(got.len(), 1);
+        // Truncation must end on a valid UTF-8 boundary ≤ 256 bytes.
+        assert!(got[0].len() <= MAX_OIDC_GROUP_LEN);
+        assert!(std::str::from_utf8(got[0].as_bytes()).is_ok());
+        // And must not exceed the original.
+        assert!(name.starts_with(&got[0]));
+    }
+
+    #[test]
+    fn groups_short_names_pass_through_unchanged() {
+        let jwt = make_jwt(&serde_json::json!({"groups": ["alpha", "beta"]}));
+        assert_eq!(
+            extract_groups_from_jwt(&jwt, "groups"),
+            vec!["alpha", "beta"]
+        );
+    }
+
+    #[test]
+    fn groups_custom_claim_name_respected() {
+        let jwt = make_jwt(&serde_json::json!({"roles": ["r1", "r2"], "groups": ["g1"]}));
+        assert_eq!(extract_groups_from_jwt(&jwt, "roles"), vec!["r1", "r2"]);
+        assert_eq!(extract_groups_from_jwt(&jwt, "groups"), vec!["g1"]);
+    }
 }

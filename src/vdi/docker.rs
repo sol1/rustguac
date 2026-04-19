@@ -538,3 +538,120 @@ impl DockerDriver {
             .collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Sanitization invariants: output must be safe for use as a Docker
+    // container-name suffix (Docker requires `[a-zA-Z0-9_.-]` and must not
+    // start/end with `-`). A hostile OIDC IdP should not be able to collide
+    // one user's container with another, escape the name prefix, or
+    // inject a separator.
+
+    fn san(s: &str) -> String {
+        DockerDriver::sanitize_username(s)
+    }
+
+    #[test]
+    fn sanitize_username_lowercases() {
+        assert_eq!(san("Alice"), "alice");
+        assert_eq!(san("BOB"), "bob");
+    }
+
+    #[test]
+    fn sanitize_username_replaces_specials_with_dash() {
+        // Each non-alphanumeric char maps 1:1 to '-' (no collapsing).
+        // That's still Docker-safe — interior `--` is legal; only leading/
+        // trailing dashes are disallowed and those are trimmed below.
+        assert_eq!(san("alice.bob"), "alice-bob");
+        assert_eq!(san("alice@corp"), "alice-corp");
+        assert_eq!(san("a b"), "a-b");
+        assert_eq!(san("a$b"), "a-b");
+        assert_eq!(san("a/b"), "a-b");
+        assert_eq!(san("a\\b"), "a-b");
+        // Two consecutive specials → two dashes (no collapse).
+        assert_eq!(san("a..b"), "a--b");
+        assert_eq!(san("a@@b"), "a--b");
+    }
+
+    #[test]
+    fn sanitize_username_strips_leading_trailing_dashes() {
+        // Leading/trailing specials collapse then trim — required because
+        // Docker rejects names starting with `-`.
+        assert_eq!(san("--alice--"), "alice");
+        assert_eq!(san("@alice@"), "alice");
+        assert_eq!(san(".alice."), "alice");
+    }
+
+    #[test]
+    fn sanitize_username_drops_unicode() {
+        // `is_ascii_alphanumeric` is strict — unicode homoglyphs collapse.
+        assert_eq!(san("café"), "caf");
+        // Cyrillic 'а' → non-ASCII, becomes dash then trimmed.
+        assert_eq!(san("аlice"), "lice");
+    }
+
+    #[test]
+    fn sanitize_username_collapses_to_empty() {
+        // Pathological input: nothing ascii-alphanumeric. Output is empty
+        // (which would produce `rustguac-vdi-` — an invalid Docker name).
+        // Documented here so the caller knows to reject empty output if it
+        // ever matters (currently login requires a non-empty OIDC `sub`).
+        assert_eq!(san("@@@"), "");
+        assert_eq!(san(""), "");
+        assert_eq!(san("___"), "");
+    }
+
+    #[test]
+    fn sanitize_username_collision_resistant_on_ascii() {
+        // Two different ascii-alphanumeric usernames must not collide.
+        assert_ne!(san("alice"), san("bob"));
+        assert_ne!(san("alice1"), san("alice2"));
+    }
+
+    #[test]
+    fn sanitize_username_preserves_digits_and_underscore_dropped() {
+        // Digits survive; underscore is NOT alphanumeric per the map() and
+        // becomes a dash (so `a_b` and `a-b` both collapse to `a-b`).
+        assert_eq!(san("bench001"), "bench001");
+        assert_eq!(san("a_b"), "a-b");
+        assert_eq!(san("a-b"), "a-b");
+    }
+
+    #[test]
+    fn container_name_prefix_enforced() {
+        // Container name must always start with the fixed prefix so a
+        // hostile username can't pretend to be someone else's container.
+        assert!(DockerDriver::container_name("alice").starts_with("rustguac-vdi-"));
+        assert!(DockerDriver::container_name("@@@").starts_with("rustguac-vdi-"));
+        assert_eq!(DockerDriver::container_name("alice"), "rustguac-vdi-alice");
+    }
+
+    #[test]
+    fn container_name_no_newlines_or_shell_metachars() {
+        // Output must not contain any character a shell or Docker CLI would
+        // treat specially if the name were ever concatenated into a command.
+        for input in [
+            "alice\nroot",
+            "alice;rm",
+            "alice`id`",
+            "alice$(id)",
+            "alice\"quoted\"",
+            "alice'quoted'",
+            "alice|pipe",
+            "alice&bg",
+        ] {
+            let name = DockerDriver::container_name(input);
+            for bad in ['\n', ';', '`', '$', '\"', '\'', '|', '&', ' ', '/', '\\'] {
+                assert!(
+                    !name.contains(bad),
+                    "container name `{}` contains {:?} for input {:?}",
+                    name,
+                    bad,
+                    input
+                );
+            }
+        }
+    }
+}

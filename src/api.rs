@@ -294,7 +294,7 @@ pub async fn put_session_thumbnail(
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
     // Validate JPEG magic bytes
-    if body.len() < 3 || body[0] != 0xFF || body[1] != 0xD8 || body[2] != 0xFF {
+    if !is_jpeg_magic(&body) {
         return StatusCode::BAD_REQUEST.into_response();
     }
 
@@ -1176,7 +1176,13 @@ pub async fn delete_recording(
 /// Validate a recording filename: must end in .guac, no path separators,
 /// and the resolved path must stay within the recording directory.
 fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path) -> bool {
-    if !name.ends_with(".guac") || name.contains('/') || name.contains('\\') || name.contains("..")
+    if name.is_empty()
+        || name == ".guac"
+        || !name.ends_with(".guac")
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name.contains('\0')
     {
         return false;
     }
@@ -1186,6 +1192,13 @@ fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path) -> bool {
         (Ok(resolved), Ok(base)) => resolved.starts_with(&base),
         _ => false,
     }
+}
+
+/// JPEG magic-byte check. Uploaded thumbnails must begin with `FF D8 FF`
+/// (SOI + APPn marker). Rejects truncated bodies so the caller can return
+/// a clean 400 without touching disk.
+fn is_jpeg_magic(body: &[u8]) -> bool {
+    body.len() >= 3 && body[0] == 0xFF && body[1] == 0xD8 && body[2] == 0xFF
 }
 
 // ── User management endpoints (admin only) ──
@@ -1381,7 +1394,11 @@ pub async fn get_session_banner(
     Path(id): Path<Uuid>,
     Query(query): Query<BannerQuery>,
 ) -> impl IntoResponse {
-    if !manager.validate_share_token(id, &query.token).await {
+    if !manager
+        .validate_share_token(id, &query.token)
+        .await
+        .is_valid()
+    {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "invalid share token"})),
@@ -3941,5 +3958,69 @@ mod tests {
             "..%2F..%2Fetc.guac",
             Path::new("/tmp")
         ));
+    }
+
+    #[test]
+    fn test_safe_recording_name_empty_and_bare_extension() {
+        // Empty string and just-the-extension should never pass.
+        assert!(!is_safe_recording_name("", Path::new("/tmp")));
+        assert!(!is_safe_recording_name(".guac", Path::new("/tmp")));
+    }
+
+    #[test]
+    fn test_safe_recording_name_nul_byte_rejected() {
+        // NUL in a filename can truncate the name at the syscall boundary on
+        // some platforms — must be rejected pre-canonicalize.
+        assert!(!is_safe_recording_name("session\0.guac", Path::new("/tmp")));
+        assert!(!is_safe_recording_name(
+            "sess.guac\0.txt",
+            Path::new("/tmp")
+        ));
+    }
+
+    #[test]
+    fn test_safe_recording_name_hidden_traversal() {
+        // Double-dot must be rejected anywhere in the name, not just as a
+        // segment — covers `foo..bar.guac`, `.guac..evil.guac`, etc.
+        assert!(!is_safe_recording_name("foo..bar.guac", Path::new("/tmp")));
+        assert!(!is_safe_recording_name("..guac", Path::new("/tmp")));
+    }
+
+    #[test]
+    fn test_safe_recording_name_extension_case_sensitive() {
+        // Rustguac writes lower-case .guac only; allowing .GUAC creates a
+        // second naming space that bypasses admin tools expecting lowercase.
+        assert!(!is_safe_recording_name("session.GUAC", Path::new("/tmp")));
+        assert!(!is_safe_recording_name("session.Guac", Path::new("/tmp")));
+    }
+
+    #[test]
+    fn test_is_jpeg_magic_happy_path() {
+        assert!(is_jpeg_magic(&[0xFF, 0xD8, 0xFF]));
+        assert!(is_jpeg_magic(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00]));
+    }
+
+    #[test]
+    fn test_is_jpeg_magic_rejects_short_body() {
+        assert!(!is_jpeg_magic(&[]));
+        assert!(!is_jpeg_magic(&[0xFF]));
+        assert!(!is_jpeg_magic(&[0xFF, 0xD8]));
+    }
+
+    #[test]
+    fn test_is_jpeg_magic_rejects_other_formats() {
+        // PNG (89 50 4E), GIF (47 49 46), PDF (25 50 44), HTML-ish (3C 21 44).
+        assert!(!is_jpeg_magic(b"\x89PNG\r\n\x1a\n"));
+        assert!(!is_jpeg_magic(b"GIF89a"));
+        assert!(!is_jpeg_magic(b"%PDF-1.4"));
+        assert!(!is_jpeg_magic(b"<!DOCTYPE html>"));
+    }
+
+    #[test]
+    fn test_is_jpeg_magic_off_by_one_byte() {
+        // One-byte variations must not slip through.
+        assert!(!is_jpeg_magic(&[0xFE, 0xD8, 0xFF]));
+        assert!(!is_jpeg_magic(&[0xFF, 0xD7, 0xFF]));
+        assert!(!is_jpeg_magic(&[0xFF, 0xD8, 0xFE]));
     }
 }

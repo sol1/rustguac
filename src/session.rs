@@ -228,10 +228,25 @@ pub struct Session {
 #[derive(Debug, Clone)]
 pub struct ShadowToken {
     pub token_hash: String,
-    /// Kept for future logging/listing of active shadow sessions.
-    #[allow(dead_code)]
     pub issued_by: String,
     pub expires_at: DateTime<Utc>,
+}
+
+/// Result of validating a share-or-shadow token. Callers use this to tell
+/// owner traffic from admin-minted shadow viewers, and to audit each shadow
+/// use (the raw mint is audited separately; re-use is logged per connection
+/// so a leaked token's blast radius is observable after the fact).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShareTokenValidation {
+    Invalid,
+    Owner,
+    Shadow { issued_by: String },
+}
+
+impl ShareTokenValidation {
+    pub fn is_valid(&self) -> bool {
+        !matches!(self, ShareTokenValidation::Invalid)
+    }
 }
 
 fn generate_share_token() -> String {
@@ -1317,43 +1332,22 @@ impl SessionManager {
         Ok((stream, cancel))
     }
 
-    /// Validate a share token for a session (constant-time comparison).
-    /// Accepts either the owner's `share_token` or any non-expired
-    /// admin-minted shadow token.
-    pub async fn validate_share_token(&self, id: Uuid, token: &str) -> bool {
-        use sha2::{Digest, Sha256};
-        use subtle::ConstantTimeEq;
+    /// Validate a share-or-shadow token for a session (constant-time
+    /// comparison). Returns which kind of token matched so callers can
+    /// audit shadow uses; returns `Invalid` if neither matches or the
+    /// session is unknown.
+    pub async fn validate_share_token(&self, id: Uuid, token: &str) -> ShareTokenValidation {
         let sessions = self.sessions.read().await;
         let Some(session) = sessions.get(&id) else {
-            return false;
+            return ShareTokenValidation::Invalid;
         };
         let session = session.lock().await;
-        let provided = Sha256::digest(token.as_bytes());
-
-        // 1. Owner's long-lived share token.
-        let expected = Sha256::digest(session.share_token.as_bytes());
-        if bool::from(expected.ct_eq(&provided)) {
-            return true;
-        }
-
-        // 2. Short-lived admin shadow tokens (sha256 compared to the
-        //    pre-hashed hex stored on the session).
-        let provided_hex = hex::encode(provided);
-        let now = Utc::now();
-        for t in &session.shadow_tokens {
-            if t.expires_at <= now {
-                continue;
-            }
-            if t.token_hash.len() == provided_hex.len()
-                && t.token_hash
-                    .as_bytes()
-                    .ct_eq(provided_hex.as_bytes())
-                    .into()
-            {
-                return true;
-            }
-        }
-        false
+        check_share_token_match(
+            &session.share_token,
+            &session.shadow_tokens,
+            token,
+            Utc::now(),
+        )
     }
 
     /// Mint a new short-lived (10 min) shadow token for a session.
@@ -1710,9 +1704,316 @@ pub enum SessionError {
     VdiError(String),
 }
 
+/// Pure token-matching helper — constant-time comparison of a provided
+/// token against the owner's long-lived `share_token` and the in-memory
+/// set of short-lived admin shadow tokens. Factored out so the logic is
+/// unit-testable without spinning up a full `SessionManager`.
+pub(crate) fn check_share_token_match(
+    share_token: &str,
+    shadow_tokens: &[ShadowToken],
+    provided: &str,
+    now: DateTime<Utc>,
+) -> ShareTokenValidation {
+    use sha2::{Digest, Sha256};
+    use subtle::ConstantTimeEq;
+
+    let provided_digest = Sha256::digest(provided.as_bytes());
+
+    // 1. Owner's long-lived share token.
+    let expected = Sha256::digest(share_token.as_bytes());
+    if bool::from(expected.ct_eq(&provided_digest)) {
+        return ShareTokenValidation::Owner;
+    }
+
+    // 2. Short-lived admin shadow tokens (sha256 compared to the
+    //    pre-hashed hex stored on the session).
+    let provided_hex = hex::encode(provided_digest);
+    for t in shadow_tokens {
+        if t.expires_at <= now {
+            continue;
+        }
+        if t.token_hash.len() == provided_hex.len()
+            && t.token_hash
+                .as_bytes()
+                .ct_eq(provided_hex.as_bytes())
+                .into()
+        {
+            return ShareTokenValidation::Shadow {
+                issued_by: t.issued_by.clone(),
+            };
+        }
+    }
+    ShareTokenValidation::Invalid
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_shadow(raw: &str, issued_by: &str, expires_at: DateTime<Utc>) -> ShadowToken {
+        use sha2::{Digest, Sha256};
+        ShadowToken {
+            token_hash: hex::encode(Sha256::digest(raw.as_bytes())),
+            issued_by: issued_by.to_string(),
+            expires_at,
+        }
+    }
+
+    #[test]
+    fn share_token_owner_match() {
+        let now = Utc::now();
+        let v = check_share_token_match("owner-secret", &[], "owner-secret", now);
+        assert_eq!(v, ShareTokenValidation::Owner);
+    }
+
+    #[test]
+    fn share_token_wrong_returns_invalid() {
+        let now = Utc::now();
+        let v = check_share_token_match("owner-secret", &[], "wrong", now);
+        assert_eq!(v, ShareTokenValidation::Invalid);
+    }
+
+    #[test]
+    fn share_token_empty_provided_invalid() {
+        let now = Utc::now();
+        let v = check_share_token_match("owner-secret", &[], "", now);
+        assert_eq!(v, ShareTokenValidation::Invalid);
+    }
+
+    #[test]
+    fn share_token_shadow_hit_returns_issued_by() {
+        let now = Utc::now();
+        let shadow = make_shadow(
+            "shadow-raw",
+            "admin@example.com",
+            now + chrono::Duration::minutes(5),
+        );
+        let v = check_share_token_match("owner-secret", &[shadow], "shadow-raw", now);
+        assert_eq!(
+            v,
+            ShareTokenValidation::Shadow {
+                issued_by: "admin@example.com".into()
+            }
+        );
+    }
+
+    #[test]
+    fn share_token_expired_shadow_rejected() {
+        let now = Utc::now();
+        let expired = make_shadow("shadow-raw", "admin", now - chrono::Duration::minutes(1));
+        let v = check_share_token_match("owner-secret", &[expired], "shadow-raw", now);
+        assert_eq!(v, ShareTokenValidation::Invalid);
+    }
+
+    #[test]
+    fn share_token_expires_at_now_treated_as_expired() {
+        // Boundary: expires_at <= now must reject.
+        let now = Utc::now();
+        let at_boundary = make_shadow("shadow-raw", "admin", now);
+        let v = check_share_token_match("owner-secret", &[at_boundary], "shadow-raw", now);
+        assert_eq!(v, ShareTokenValidation::Invalid);
+    }
+
+    #[test]
+    fn share_token_multiple_shadows_one_matches() {
+        let now = Utc::now();
+        let ttl = now + chrono::Duration::minutes(5);
+        let a = make_shadow("aaa", "admin1", ttl);
+        let b = make_shadow("bbb", "admin2", ttl);
+        let c = make_shadow("ccc", "admin3", ttl);
+        let shadows = vec![a, b, c];
+        let v = check_share_token_match("owner", &shadows, "bbb", now);
+        assert_eq!(
+            v,
+            ShareTokenValidation::Shadow {
+                issued_by: "admin2".into()
+            }
+        );
+    }
+
+    #[test]
+    fn share_token_owner_wins_over_shadow_of_same_string() {
+        // If somehow a shadow's raw value equalled the owner's share token,
+        // the owner path takes precedence (owner is checked first).
+        let now = Utc::now();
+        let shadow = make_shadow("collide", "admin", now + chrono::Duration::minutes(5));
+        let v = check_share_token_match("collide", &[shadow], "collide", now);
+        assert_eq!(v, ShareTokenValidation::Owner);
+    }
+
+    #[test]
+    fn share_token_validation_is_valid_helper() {
+        assert!(ShareTokenValidation::Owner.is_valid());
+        assert!(ShareTokenValidation::Shadow {
+            issued_by: "x".into()
+        }
+        .is_valid());
+        assert!(!ShareTokenValidation::Invalid.is_valid());
+    }
+
+    // ── SessionManager async tests (in-memory, no disk/browser/guacd) ──
+    //
+    // These exercise the mint → validate → audit path end-to-end without
+    // spinning up guacd, a browser, or touching the real recording dir.
+
+    fn seed_test_session(share_token: &str) -> Session {
+        Session {
+            id: Uuid::new_v4(),
+            session_type: SessionType::Ssh,
+            status: SessionStatus::Active,
+            created_at: Utc::now(),
+            hostname: "test-host".into(),
+            username: "alice".into(),
+            url: None,
+            banner: None,
+            guacd_stream: None,
+            connection_id: "conn-test".into(),
+            share_token: share_token.to_string(),
+            width: 1024,
+            height: 768,
+            active_connections: 0,
+            created_by: "alice".into(),
+            cancel: CancellationToken::new(),
+            browser_session: None,
+            deferred_params: None,
+            drive_path: None,
+            tunnels: Vec::new(),
+            container_id: None,
+            recording_enabled: false,
+            address_book_entry: None,
+            address_book_folder: None,
+            entry_display_name: None,
+            max_recordings: None,
+            login_script_handle: None,
+            shadow_tokens: Vec::new(),
+            share_allowed: true,
+        }
+    }
+
+    fn new_manager_for_tests() -> SessionManager {
+        // Build a config pointing at a unique temp recording dir so the
+        // real dir isn't touched and parallel tests don't collide.
+        let mut config = crate::config::Config::default();
+        let tmp = std::env::temp_dir().join(format!("rustguac-sessmgr-test-{}", Uuid::new_v4()));
+        config.recording_path = tmp.clone();
+        // xvnc/chromium paths are only stored, not exec'd — placeholders are fine.
+        config.xvnc_path = "/bin/true".into();
+        config.chromium_path = "/bin/true".into();
+        config.login_scripts_dir = "/tmp".into();
+        SessionManager::new(config, None)
+    }
+
+    async fn insert_session(mgr: &SessionManager, session: Session) -> Uuid {
+        let id = session.id;
+        mgr.sessions
+            .write()
+            .await
+            .insert(id, Arc::new(Mutex::new(session)));
+        id
+    }
+
+    #[tokio::test]
+    async fn manager_owner_token_validates() {
+        let mgr = new_manager_for_tests();
+        let id = insert_session(&mgr, seed_test_session("owner-secret")).await;
+        assert_eq!(
+            mgr.validate_share_token(id, "owner-secret").await,
+            ShareTokenValidation::Owner
+        );
+        assert_eq!(
+            mgr.validate_share_token(id, "wrong").await,
+            ShareTokenValidation::Invalid
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_mint_shadow_then_validate() {
+        let mgr = new_manager_for_tests();
+        let id = insert_session(&mgr, seed_test_session("owner-secret")).await;
+
+        let (raw, expires_at) = mgr
+            .mint_shadow_token(id, "admin@example.com")
+            .await
+            .expect("mint");
+        assert!(expires_at > Utc::now());
+        // 10-minute TTL — allow small scheduling drift.
+        let ttl_ms = (expires_at - Utc::now()).num_milliseconds();
+        assert!(ttl_ms > 9 * 60 * 1000 && ttl_ms <= 10 * 60 * 1000);
+
+        // Shadow validates and returns the issuer.
+        match mgr.validate_share_token(id, &raw).await {
+            ShareTokenValidation::Shadow { issued_by } => {
+                assert_eq!(issued_by, "admin@example.com")
+            }
+            other => panic!("expected Shadow variant, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn manager_shadow_token_is_session_scoped() {
+        // IDOR guard: a shadow token minted for session A must NOT validate
+        // against session B.
+        let mgr = new_manager_for_tests();
+        let id_a = insert_session(&mgr, seed_test_session("owner-a")).await;
+        let id_b = insert_session(&mgr, seed_test_session("owner-b")).await;
+        let (raw, _) = mgr.mint_shadow_token(id_a, "admin").await.expect("mint");
+        assert_eq!(
+            mgr.validate_share_token(id_b, &raw).await,
+            ShareTokenValidation::Invalid
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_mint_prunes_expired_shadow_tokens() {
+        let mgr = new_manager_for_tests();
+        let mut session = seed_test_session("owner");
+        let id = session.id;
+        // Seed an already-expired shadow token directly.
+        session.shadow_tokens.push(ShadowToken {
+            token_hash: "deadbeef".into(),
+            issued_by: "stale".into(),
+            expires_at: Utc::now() - chrono::Duration::hours(1),
+        });
+        mgr.sessions
+            .write()
+            .await
+            .insert(id, Arc::new(Mutex::new(session)));
+
+        // Mint pruning is documented on mint_shadow_token.
+        let _ = mgr.mint_shadow_token(id, "admin").await.unwrap();
+
+        let sessions = mgr.sessions.read().await;
+        let guard = sessions.get(&id).unwrap().lock().await;
+        assert_eq!(guard.shadow_tokens.len(), 1, "expired should be pruned");
+        assert_ne!(guard.shadow_tokens[0].issued_by, "stale");
+    }
+
+    #[tokio::test]
+    async fn manager_validate_rejects_unknown_session() {
+        let mgr = new_manager_for_tests();
+        let phantom = Uuid::new_v4();
+        assert_eq!(
+            mgr.validate_share_token(phantom, "anything").await,
+            ShareTokenValidation::Invalid
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_disconnect_viewer_saturating_decrement() {
+        let mgr = new_manager_for_tests();
+        let mut seed = seed_test_session("owner");
+        seed.active_connections = 2;
+        let id = insert_session(&mgr, seed).await;
+
+        mgr.disconnect_viewer(id).await;
+        mgr.disconnect_viewer(id).await;
+        // One extra call must NOT underflow to u32::MAX.
+        mgr.disconnect_viewer(id).await;
+
+        let sessions = mgr.sessions.read().await;
+        let guard = sessions.get(&id).unwrap().lock().await;
+        assert_eq!(guard.active_connections, 0);
+    }
 
     #[test]
     fn test_check_allowed_network_ipv4_match() {

@@ -223,4 +223,139 @@ mod tests {
         assert_eq!(results[0].as_ref().unwrap().opcode, "size");
         assert_eq!(results[1].as_ref().unwrap().opcode, "nop");
     }
+
+    // ── Adversarial parser cases ───────────────────────────────────────────
+    // guacd is a trust boundary: even under compromise, the rustguac parser
+    // must refuse to panic, must reject malformed frames cleanly, and must
+    // bound memory. Every negative case here should produce a ParseError or
+    // be dropped by the 1 MiB buffer cap — never a panic or OOM.
+
+    #[test]
+    fn parse_rejects_length_longer_than_data() {
+        // Claims 10 bytes but only 3 are present.
+        let err = Instruction::parse("10.abc").unwrap_err();
+        assert!(matches!(err, ParseError::Truncated));
+    }
+
+    #[test]
+    fn parse_rejects_non_numeric_length() {
+        let err = Instruction::parse("x.size").unwrap_err();
+        assert!(matches!(err, ParseError::InvalidLength));
+    }
+
+    #[test]
+    fn parse_rejects_negative_length() {
+        // `-1` is not valid usize — must be rejected, not cast.
+        let err = Instruction::parse("-1.x").unwrap_err();
+        assert!(matches!(err, ParseError::InvalidLength));
+    }
+
+    #[test]
+    fn parse_rejects_overflow_length() {
+        // 2^65 overflows usize on every platform and must be a clean error.
+        let err = Instruction::parse("36893488147419103232.x").unwrap_err();
+        assert!(matches!(err, ParseError::InvalidLength));
+    }
+
+    #[test]
+    fn parse_rejects_missing_dot() {
+        let err = Instruction::parse("4size").unwrap_err();
+        assert!(matches!(err, ParseError::MalformedElement));
+    }
+
+    #[test]
+    fn parse_rejects_unexpected_separator() {
+        // After the element body we must see `,` or end. A bare letter
+        // should produce UnexpectedChar, not silently continue.
+        let err = Instruction::parse("4.sizeX3.800").unwrap_err();
+        assert!(matches!(err, ParseError::UnexpectedChar));
+    }
+
+    #[test]
+    fn parse_rejects_empty() {
+        assert!(matches!(
+            Instruction::parse("").unwrap_err(),
+            ParseError::Empty
+        ));
+        assert!(matches!(
+            Instruction::parse(";").unwrap_err(),
+            ParseError::Empty
+        ));
+    }
+
+    #[test]
+    fn parse_rejects_split_multibyte_char() {
+        // '€' is three bytes (E2 82 AC). Claiming length 2 would split the
+        // char on a non-boundary — parser must reject rather than panic.
+        let bad = "2.€";
+        let err = Instruction::parse(bad).unwrap_err();
+        assert!(matches!(err, ParseError::Truncated));
+    }
+
+    #[test]
+    fn parse_accepts_correct_multibyte_length() {
+        // Correct byte-length for '€' is 3.
+        let inst = Instruction::parse("3.€").unwrap();
+        assert_eq!(inst.opcode, "€");
+    }
+
+    #[test]
+    fn parse_accepts_zero_length_element() {
+        let inst = Instruction::parse("3.nop,0.,3.foo").unwrap();
+        assert_eq!(inst.opcode, "nop");
+        assert_eq!(inst.args, vec!["", "foo"]);
+    }
+
+    #[test]
+    fn parse_accepts_embedded_semicolon_within_length() {
+        // Length includes the `;` so it's part of the element, not a
+        // terminator. The caller's framing must respect length; this test
+        // proves parse() honours the length over the semicolon.
+        let inst = Instruction::parse("5.a;b;c").unwrap();
+        assert_eq!(inst.opcode, "a;b;c");
+    }
+
+    #[test]
+    fn streaming_parser_caps_buffer_at_1_mib() {
+        // Feed > 1 MiB in a single receive with no terminator. The buffer
+        // must clear in-place rather than grow unbounded, and the call
+        // must return cleanly without panicking. After the clear, a fresh
+        // well-formed frame parses normally.
+        let mut parser = InstructionParser::new();
+        let huge = "x".repeat(1_100_000);
+        let out = parser.receive(&huge);
+        // Over-cap input is dropped entirely (no partial instruction yield).
+        assert!(out.is_empty());
+        // Fresh input parses correctly — buffer is empty, no residue.
+        let out2 = parser.receive("3.nop;");
+        assert_eq!(out2.len(), 1);
+        assert_eq!(out2[0].as_ref().unwrap().opcode, "nop");
+    }
+
+    #[test]
+    fn streaming_parser_split_at_every_boundary() {
+        // Feed a well-formed frame byte-by-byte; the parser must assemble
+        // correctly regardless of where chunks break.
+        let full = "4.size,3.800,3.600;3.nop;";
+        let mut parser = InstructionParser::new();
+        let mut all = Vec::new();
+        for ch in full.chars() {
+            let mut buf = [0u8; 4];
+            let s = ch.encode_utf8(&mut buf);
+            all.extend(parser.receive(s));
+        }
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].as_ref().unwrap().opcode, "size");
+        assert_eq!(all[1].as_ref().unwrap().opcode, "nop");
+    }
+
+    #[test]
+    fn streaming_parser_emits_error_for_malformed_frame() {
+        // A malformed-but-terminated frame yields a Result::Err, not a panic.
+        let mut parser = InstructionParser::new();
+        let out = parser.receive("not-a-valid-instruction;3.nop;");
+        assert_eq!(out.len(), 2);
+        assert!(out[0].is_err());
+        assert_eq!(out[1].as_ref().unwrap().opcode, "nop");
+    }
 }

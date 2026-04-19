@@ -2,8 +2,9 @@
 
 use crate::api::AppState;
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
+use crate::db::{self, Db};
 use crate::guacd::GuacdStream;
-use crate::session::SessionManager;
+use crate::session::{SessionManager, ShareTokenValidation};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -57,6 +58,7 @@ pub async fn ws_handler(
     headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
     trusted: Option<Extension<TrustedProxies>>,
+    database: Option<Extension<Db>>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -72,17 +74,7 @@ pub async fn ws_handler(
             .get("host")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        // Extract hostname without port from Origin URL
-        let origin_host = origin
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .trim_end_matches('/')
-            .split(':')
-            .next()
-            .unwrap_or("");
-        // Extract hostname without port from Host header
-        let host_name = host.split(':').next().unwrap_or("");
-        if !host_name.is_empty() && !origin_host.is_empty() && origin_host != host_name {
+        if !origin_host_matches(origin, host) {
             tracing::warn!(
                 session_id = %session_id,
                 client_ip = %ip,
@@ -121,10 +113,19 @@ pub async fn ws_handler(
     }
 
     let identity_name = identity.as_ref().map(|id| id.display_name().to_string());
+    let database = database.map(|Extension(db)| db);
 
     ws.protocols(["guacamole"])
         .on_upgrade(move |socket| {
-            handle_ws(manager, session_id, query.token, socket, ip, identity_name)
+            handle_ws(
+                manager,
+                session_id,
+                query.token,
+                socket,
+                ip,
+                identity_name,
+                database,
+            )
         })
         .into_response()
 }
@@ -136,6 +137,7 @@ async fn handle_ws(
     ws: WebSocket,
     client_addr: IpAddr,
     identity_name: Option<String>,
+    database: Option<Db>,
 ) {
     // Try to take the guacd stream (owner/first connection)
     let (guacd_stream, cancel) = if let Some((stream, cancel)) =
@@ -155,9 +157,44 @@ async fn handle_ws(
             }
         };
 
-        if !manager.validate_share_token(session_id, &token).await {
-            tracing::warn!(session_id = %session_id, client_ip = %client_addr, "Share token rejected");
-            return;
+        let validation = manager.validate_share_token(session_id, &token).await;
+        match &validation {
+            ShareTokenValidation::Invalid => {
+                tracing::warn!(session_id = %session_id, client_ip = %client_addr, "Share token rejected");
+                return;
+            }
+            ShareTokenValidation::Owner => {}
+            ShareTokenValidation::Shadow { issued_by } => {
+                // Audit every shadow-token use (not just the mint). A leaked
+                // token remains reusable within its TTL, but each reuse is
+                // now visible in token_audit_log with the connecting IP.
+                if let Some(db) = database.as_ref() {
+                    let db_clone = db.clone();
+                    let ip_str = client_addr.to_string();
+                    let issued_by = issued_by.clone();
+                    let details = format!("session_id={}, issued_by={}", session_id, issued_by);
+                    let _ = tokio::task::spawn_blocking(move || {
+                        if let Err(e) = db::log_token_event(
+                            &db_clone,
+                            None,
+                            None,
+                            &issued_by,
+                            "shadow_used",
+                            Some(&ip_str),
+                            Some(&details),
+                        ) {
+                            tracing::warn!(error = %e, "failed to write shadow_used audit log");
+                        }
+                    })
+                    .await;
+                }
+                tracing::info!(
+                    session_id = %session_id,
+                    client_ip = %client_addr,
+                    issued_by = %issued_by,
+                    "Shadow token consumed"
+                );
+            }
         }
 
         match manager.join_session(session_id).await {
@@ -473,4 +510,110 @@ async fn ws_to_guacd(
     }
 
     Ok(())
+}
+
+/// Return true if the browser-supplied Origin and the request Host header
+/// refer to the same hostname (ports stripped). Extracted for test.
+///
+/// If either value is missing or empty, the request is allowed — matches
+/// the prior `unwrap_or("")` behaviour where axum had no header and no
+/// CSWSH signal. The caller must still ensure auth is enforced separately.
+pub(crate) fn origin_host_matches(origin: &str, host: &str) -> bool {
+    let origin_host = origin
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .split(':')
+        .next()
+        .unwrap_or("");
+    let host_name = host.split(':').next().unwrap_or("");
+    if host_name.is_empty() || origin_host.is_empty() {
+        return true;
+    }
+    origin_host.eq_ignore_ascii_case(host_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_match_same_hostname_no_ports() {
+        assert!(origin_host_matches(
+            "https://console.example.com",
+            "console.example.com"
+        ));
+    }
+
+    #[test]
+    fn origin_match_ports_stripped() {
+        assert!(origin_host_matches(
+            "https://console.example.com:8443",
+            "console.example.com:80"
+        ));
+        assert!(origin_host_matches("http://host.local:8080", "host.local"));
+    }
+
+    #[test]
+    fn origin_match_trailing_slash_tolerated() {
+        assert!(origin_host_matches(
+            "https://console.example.com/",
+            "console.example.com"
+        ));
+    }
+
+    #[test]
+    fn origin_match_case_insensitive_hostname() {
+        // DNS is case-insensitive; browsers can vary casing.
+        assert!(origin_host_matches(
+            "https://Console.Example.COM",
+            "console.example.com"
+        ));
+    }
+
+    #[test]
+    fn origin_mismatch_different_subdomain_rejected() {
+        assert!(!origin_host_matches(
+            "https://evil.example.com",
+            "console.example.com"
+        ));
+    }
+
+    #[test]
+    fn origin_mismatch_unrelated_host_rejected() {
+        assert!(!origin_host_matches(
+            "https://evil.attacker.io",
+            "console.example.com"
+        ));
+    }
+
+    #[test]
+    fn origin_empty_allowed_preserves_prior_behaviour() {
+        // No Origin header (rare — server-side fetches / Firefox in some
+        // contexts) must be allowed by this check; caller still enforces
+        // auth. Same for empty Host (shouldn't happen, but belt + braces).
+        assert!(origin_host_matches("", "console.example.com"));
+        assert!(origin_host_matches("https://console.example.com", ""));
+    }
+
+    #[test]
+    fn origin_mismatch_path_in_origin_ignored_by_host() {
+        // An Origin with a path should never happen (spec forbids it) but
+        // if it slips through, the split should not cause a match by
+        // accident.
+        assert!(!origin_host_matches(
+            "https://evil.example.com/path",
+            "console.example.com"
+        ));
+    }
+
+    #[test]
+    fn origin_mismatch_prefix_attack_rejected() {
+        // `console.example.com.attacker.io` must NOT match
+        // `console.example.com`. Split-on-`:` + exact compare handles this.
+        assert!(!origin_host_matches(
+            "https://console.example.com.attacker.io",
+            "console.example.com"
+        ));
+    }
 }

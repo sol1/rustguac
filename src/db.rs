@@ -1579,4 +1579,66 @@ mod tests {
         let (rows3, _) = query_session_history(&db, None, None, None, None, None, 10, 20).unwrap();
         assert_eq!(rows3.len(), 5);
     }
+
+    // ── OIDC groups bounds (end-to-end) ─────────────────────────────────
+    // Verifies the pipeline: a large input list passes through
+    // upsert_seen_groups into the DB without growing unbounded. The
+    // front-end cap lives in oidc::extract_groups_from_jwt; this test
+    // covers the DB side — it must accept any input without blowing up
+    // and de-duplicate on repeat logins.
+
+    #[test]
+    fn seen_groups_upsert_deduplicates() {
+        let db = test_db();
+        upsert_seen_groups(&db, &["admins".into(), "ops".into(), "admins".into()]).unwrap();
+        // Second login with overlapping groups.
+        upsert_seen_groups(&db, &["admins".into(), "new".into()]).unwrap();
+        let groups = list_known_groups(&db).unwrap();
+        assert!(groups.contains(&"admins".into()));
+        assert!(groups.contains(&"ops".into()));
+        assert!(groups.contains(&"new".into()));
+        // No duplicates.
+        let mut sorted = groups.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(groups.len(), sorted.len());
+    }
+
+    #[test]
+    fn seen_groups_upsert_skips_empty() {
+        let db = test_db();
+        upsert_seen_groups(&db, &["".into(), " ".into(), "\t".into(), "valid".into()]).unwrap();
+        let groups = list_known_groups(&db).unwrap();
+        assert_eq!(groups, vec!["valid".to_string()]);
+    }
+
+    #[test]
+    fn seen_groups_upsert_accepts_large_batch_without_panic() {
+        // The OIDC layer caps arrays at 64 entries, but the DB must accept
+        // whatever is passed without integer/row overflow.
+        let db = test_db();
+        let many: Vec<String> = (0..500).map(|i| format!("group-{i:04}")).collect();
+        upsert_seen_groups(&db, &many).unwrap();
+        let groups = list_known_groups(&db).unwrap();
+        assert_eq!(groups.len(), 500);
+    }
+
+    #[test]
+    fn seen_groups_tolerates_special_characters() {
+        // Group names from arbitrary IdPs may contain `'`, spaces, etc.
+        // Parameterised query must bind them safely (regression test vs
+        // any future refactor that concatenates names into SQL).
+        let db = test_db();
+        let names = vec![
+            "DROP TABLE seen_groups;--".into(),
+            "ops; SELECT * FROM users".into(),
+            "alice's-group".into(),
+            "Domain Admins".into(),
+        ];
+        upsert_seen_groups(&db, &names).unwrap();
+        let got = list_known_groups(&db).unwrap();
+        for n in &names {
+            assert!(got.contains(n), "missing: {n:?}");
+        }
+    }
 }
