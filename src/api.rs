@@ -1757,7 +1757,7 @@ async fn check_folder_access(
 
     let user_groups = identity.groups();
     match vault
-        .resolve_folder_access(scope, folder, &user_groups)
+        .resolve_folder_access(scope, folder, user_groups)
         .await
     {
         Ok(true) => Ok(()),
@@ -1819,7 +1819,7 @@ pub async fn ab_list_folders(
     for folder in folders {
         if id.has_role("admin")
             || vault
-                .resolve_folder_access(&folder.scope, &folder.name, &user_groups)
+                .resolve_folder_access(&folder.scope, &folder.name, user_groups)
                 .await
                 .unwrap_or(false)
         {
@@ -1904,7 +1904,7 @@ pub async fn ab_list_all(
         // Group access check (admins see all); inherits via resolver walk-up.
         if !id.has_role("admin")
             && !vault
-                .resolve_folder_access(&folder.scope, &folder.name, &user_groups)
+                .resolve_folder_access(&folder.scope, &folder.name, user_groups)
                 .await
                 .unwrap_or(false)
         {
