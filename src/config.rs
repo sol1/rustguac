@@ -975,46 +975,48 @@ impl Default for Config {
     }
 }
 
+/// Read and parse a TOML config file, returning a rich error message on failure.
+/// The toml crate's Display impl already includes a line:column snippet with a
+/// caret pointing at the broken token; we prepend the file path so the message
+/// is unambiguous when multiple paths are searched.
+fn load_from_file(path: &str) -> Result<Config, String> {
+    let contents = std::fs::read_to_string(path).map_err(|e| format!("  {}: {}", path, e))?;
+    toml::from_str::<Config>(&contents).map_err(|e| format!("{}", e))
+}
+
 impl Config {
     pub fn load(path: Option<&str>) -> Self {
-        let mut config = if let Some(path) = path {
-            match std::fs::read_to_string(path) {
-                Ok(contents) => match toml::from_str(&contents) {
-                    Ok(config) => {
-                        tracing::info!("Loaded config from {}", path);
-                        config
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to parse config {}: {}", path, e);
-                        Self::default()
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!("Failed to read config {}: {}", path, e);
-                    Self::default()
-                }
-            }
+        // Note: tracing is initialised later (in run_server), so config-load
+        // diagnostics go to stderr directly. Misconfigurations are fatal when
+        // the operator pointed us at a specific file — silently falling back
+        // to defaults would leave them debugging a "working" server that ignored
+        // everything they configured.
+        let (path, required) = if let Some(p) = path {
+            (Some(p.to_string()), true)
         } else if std::path::Path::new("/opt/rustguac/config.toml").exists() {
-            let path = "/opt/rustguac/config.toml";
-            match std::fs::read_to_string(path) {
-                Ok(contents) => match toml::from_str(&contents) {
-                    Ok(config) => {
-                        tracing::info!("Loaded config from {} (default path)", path);
-                        config
+            (Some("/opt/rustguac/config.toml".to_string()), true)
+        } else {
+            (None, false)
+        };
+
+        let mut config = match path.as_deref() {
+            Some(p) => match load_from_file(p) {
+                Ok(c) => {
+                    eprintln!("[config] Loaded config from {}", p);
+                    c
+                }
+                Err(msg) => {
+                    eprintln!("[config] ERROR: failed to load {}:\n{}", p, msg);
+                    if required {
+                        std::process::exit(1);
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to parse config {}: {}", path, e);
-                        Self::default()
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!("Failed to read config {}: {}", path, e);
                     Self::default()
                 }
+            },
+            None => {
+                eprintln!("[config] No config file found; using built-in defaults");
+                Self::default()
             }
-        } else {
-            tracing::info!("Using default configuration");
-            Self::default()
         };
 
         // Allow OIDC client secret to be overridden via environment variable

@@ -43,11 +43,12 @@ pub async fn cmd_import_guacamole(
         std::process::exit(1);
     }
 
-    // Build group name lookup: group_id → full path name (handles nesting)
-    let group_names = build_group_paths(&groups);
+    // Build group name lookup: group_id → sanitized subfolder path (e.g. "Production/DMZ").
+    let group_paths = build_group_paths(&groups);
 
-    // Build entries
-    let mut entries: Vec<(String, AddressBookEntry)> = Vec::new();
+    // Build entries keyed by (subfolder_path, entry_name).
+    // subfolder_path is relative to the target root folder; empty string means "at root".
+    let mut entries: Vec<((String, String), AddressBookEntry)> = Vec::new();
     let mut skipped = 0;
 
     for conn in &connections {
@@ -118,18 +119,18 @@ pub async fn cmd_import_guacamole(
             auto_open_if_singleton: None,
         };
 
-        // Build entry name: group prefix + sanitized connection name
-        let group_prefix = conn
+        // Place the entry into a subfolder matching its parent group path.
+        // Connections with no parent group land at the root of the target folder.
+        let subfolder = conn
             .parent_id
-            .and_then(|gid| group_names.get(&gid))
-            .map(|g| format!("{}-", sanitize_name(g)))
+            .and_then(|gid| group_paths.get(&gid))
+            .cloned()
             .unwrap_or_default();
-
-        let raw_name = format!("{}{}", group_prefix, sanitize_name(&conn.name));
-        entries.push((raw_name, entry));
+        let entry_name = sanitize_name(&conn.name);
+        entries.push(((subfolder, entry_name), entry));
     }
 
-    // Deduplicate names
+    // Deduplicate entry names within each subfolder.
     deduplicate_names(&mut entries);
 
     println!(
@@ -141,13 +142,18 @@ pub async fn cmd_import_guacamole(
 
     if dry_run {
         println!(
-            "\n[DRY RUN] Would import to folder \"{}\" (scope: {}):\n",
+            "\n[DRY RUN] Would import under folder \"{}\" (scope: {}):\n",
             folder, scope
         );
-        for (name, entry) in &entries {
+        for ((subfolder, name), entry) in &entries {
+            let full = if subfolder.is_empty() {
+                format!("{}/{}", folder, name)
+            } else {
+                format!("{}/{}/{}", folder, subfolder, name)
+            };
             println!(
                 "  {} ({}) → {}:{}",
-                name,
+                full,
                 entry.session_type,
                 entry.hostname.as_deref().unwrap_or("?"),
                 entry
@@ -190,30 +196,61 @@ pub async fn cmd_import_guacamole(
         }
     };
 
-    // Create folder (idempotent)
-    let folder_config = FolderConfig {
+    // Create the root folder (idempotent).
+    let root_config = FolderConfig {
         allowed_groups: vec![],
         description: "Imported from Guacamole".to_string(),
     };
-    if let Err(e) = client
-        .put_folder_config(scope, folder, &folder_config)
-        .await
-    {
+    if let Err(e) = client.put_folder_config(scope, folder, &root_config).await {
         eprintln!("Error creating folder \"{}\": {}", folder, e);
         std::process::exit(1);
     }
 
-    // Write entries
+    // Create a .config for every subfolder used by any entry (including intermediate
+    // ancestors, so an empty parent still shows up in the tree with a description).
+    // Deduplicate before writing so we don't hit Vault N times for the same path.
+    let mut subfolder_paths: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for ((subfolder, _), _) in &entries {
+        if subfolder.is_empty() {
+            continue;
+        }
+        let mut acc = String::new();
+        for seg in subfolder.split('/') {
+            if !acc.is_empty() {
+                acc.push('/');
+            }
+            acc.push_str(seg);
+            subfolder_paths.insert(acc.clone());
+        }
+    }
+    for sub in &subfolder_paths {
+        let full = format!("{}/{}", folder, sub);
+        let cfg = FolderConfig {
+            allowed_groups: vec![],
+            description: format!("Imported from Guacamole: {}", sub),
+        };
+        if let Err(e) = client.put_folder_config(scope, &full, &cfg).await {
+            eprintln!("  Warning: failed to create subfolder \"{}\": {}", full, e);
+        }
+    }
+
+    // Write entries into their respective subfolders.
     let mut success = 0;
     let mut failed = 0;
-    for (name, entry) in &entries {
-        match client.put_entry(scope, folder, name, entry).await {
+    for ((subfolder, name), entry) in &entries {
+        let target_folder = if subfolder.is_empty() {
+            folder.to_string()
+        } else {
+            format!("{}/{}", folder, subfolder)
+        };
+        match client.put_entry(scope, &target_folder, name, entry).await {
             Ok(()) => {
-                println!("  Imported: {}", name);
+                println!("  Imported: {}/{}", target_folder, name);
                 success += 1;
             }
             Err(e) => {
-                eprintln!("  Failed: {} — {}", name, e);
+                eprintln!("  Failed: {}/{} — {}", target_folder, name, e);
                 failed += 1;
             }
         }
@@ -455,7 +492,9 @@ fn parse_nullable_int(s: &str) -> Option<i64> {
 
 // ── Group path building ──
 
-/// Build a map of group_id → full path name (e.g. "Production-DMZ").
+/// Build a map of group_id → sanitized subfolder path (e.g. "Production/DMZ").
+/// Each segment is sanitized individually so the path is valid for Vault (each
+/// slash-delimited segment must satisfy `validate_name`).
 fn build_group_paths(groups: &[Group]) -> HashMap<i64, String> {
     let group_map: HashMap<i64, &Group> = groups.iter().map(|g| (g.id, g)).collect();
     let mut paths = HashMap::new();
@@ -482,14 +521,14 @@ fn resolve_group_path(
         Some(g) => g,
         None => return String::new(),
     };
-    let name = group.name.clone();
+    let name = sanitize_name(&group.name);
     match group.parent_id {
         Some(pid) if groups.contains_key(&pid) => {
             let parent_path = resolve_group_path(pid, groups, cache);
             let full = if parent_path.is_empty() {
                 name
             } else {
-                format!("{}-{}", parent_path, name)
+                format!("{}/{}", parent_path, name)
             };
             cache.insert(id, full.clone());
             full
@@ -534,23 +573,23 @@ fn sanitize_name(name: &str) -> String {
     }
 }
 
-/// Deduplicate entry names by appending -2, -3, etc.
-fn deduplicate_names(entries: &mut [(String, AddressBookEntry)]) {
-    let mut seen: HashMap<String, usize> = HashMap::new();
-    for entry in entries.iter_mut() {
-        let name = entry.0.clone();
-        let count = seen.entry(name.clone()).or_insert(0);
+/// Deduplicate entry names per-subfolder by appending -2, -3, etc.
+/// Two entries with the same name in different subfolders do not collide.
+fn deduplicate_names(entries: &mut [((String, String), AddressBookEntry)]) {
+    let mut seen: HashMap<(String, String), usize> = HashMap::new();
+    for ((subfolder, name), _) in entries.iter_mut() {
+        let key = (subfolder.clone(), name.clone());
+        let count = seen.entry(key).or_insert(0);
         *count += 1;
         if *count > 1 {
             let suffix = format!("-{}", count);
-            // Ensure we don't exceed 64 chars with the suffix
             let max_base = 64 - suffix.len();
             let base = if name.len() > max_base {
                 &name[..max_base]
             } else {
-                &name
+                name.as_str()
             };
-            entry.0 = format!("{}{}", base, suffix);
+            *name = format!("{}{}", base, suffix);
         }
     }
 }
@@ -662,16 +701,21 @@ mod tests {
             auto_open_if_singleton: None,
         };
         let mut entries = vec![
-            ("web".into(), entry()),
-            ("web".into(), entry()),
-            ("web".into(), entry()),
-            ("db".into(), entry()),
+            (("".into(), "web".into()), entry()),
+            (("".into(), "web".into()), entry()),
+            (("".into(), "web".into()), entry()),
+            (("".into(), "db".into()), entry()),
+            // Same name in a different subfolder must NOT be renamed.
+            (("Prod".into(), "web".into()), entry()),
+            (("Prod".into(), "web".into()), entry()),
         ];
         deduplicate_names(&mut entries);
-        assert_eq!(entries[0].0, "web");
-        assert_eq!(entries[1].0, "web-2");
-        assert_eq!(entries[2].0, "web-3");
-        assert_eq!(entries[3].0, "db");
+        assert_eq!(entries[0].0 .1, "web");
+        assert_eq!(entries[1].0 .1, "web-2");
+        assert_eq!(entries[2].0 .1, "web-3");
+        assert_eq!(entries[3].0 .1, "db");
+        assert_eq!(entries[4].0 .1, "web");
+        assert_eq!(entries[5].0 .1, "web-2");
     }
 
     #[test]
@@ -726,8 +770,29 @@ mod tests {
         ];
         let paths = build_group_paths(&groups);
         assert_eq!(paths[&1], "Production");
-        assert_eq!(paths[&2], "Production-DMZ");
-        assert_eq!(paths[&3], "Production-DMZ-Web");
+        assert_eq!(paths[&2], "Production/DMZ");
+        assert_eq!(paths[&3], "Production/DMZ/Web");
+    }
+
+    #[test]
+    fn test_group_path_sanitizes_segments() {
+        // Group names with spaces/punctuation must be sanitized *per segment*
+        // so the resulting path is accepted by Vault's validate_path.
+        let groups = vec![
+            Group {
+                id: 1,
+                parent_id: None,
+                name: "Client (Acme)".into(),
+            },
+            Group {
+                id: 2,
+                parent_id: Some(1),
+                name: "Prod DMZ".into(),
+            },
+        ];
+        let paths = build_group_paths(&groups);
+        assert_eq!(paths[&1], "Client-Acme");
+        assert_eq!(paths[&2], "Client-Acme/Prod-DMZ");
     }
 
     #[test]

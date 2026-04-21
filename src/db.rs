@@ -75,9 +75,65 @@ pub struct TokenAuditEntry {
     pub created_at: String,
 }
 
+/// If we're running as root and the db's parent directory is owned by a non-root
+/// user (the typical `/opt/rustguac/data` owned by `rustguac:rustguac` case),
+/// chown the db file and any `-wal` / `-shm` sidecars to match the parent dir.
+///
+/// Why: CLI commands like `add-admin` are often run under `sudo`, which would
+/// otherwise create a root-owned db that the systemd service (running as the
+/// unprivileged `rustguac` user) can't write to — surfacing later as
+/// "attempt to write a readonly database" on the first OIDC login.
+fn repair_db_ownership(path: &Path) {
+    use std::os::unix::fs::MetadataExt;
+
+    // Only act when running as root — otherwise chown(2) would fail anyway.
+    // SAFETY: geteuid is always safe, takes no args.
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+
+    let Some(parent) = path.parent() else { return };
+    let Ok(parent_meta) = std::fs::metadata(parent) else { return };
+    let target_uid = parent_meta.uid();
+    let target_gid = parent_meta.gid();
+    if target_uid == 0 && target_gid == 0 {
+        return;
+    }
+
+    let stem = path.as_os_str().to_os_string();
+    let mut wal = stem.clone();
+    wal.push("-wal");
+    let mut shm = stem.clone();
+    shm.push("-shm");
+
+    for candidate in [path.as_os_str(), wal.as_os_str(), shm.as_os_str()] {
+        let p = Path::new(candidate);
+        let Ok(meta) = std::fs::metadata(p) else { continue };
+        if meta.uid() == target_uid && meta.gid() == target_gid {
+            continue;
+        }
+        let c_path = match std::ffi::CString::new(candidate.as_encoded_bytes()) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        // SAFETY: c_path is a valid NUL-terminated C string pointing to an existing file.
+        let rc = unsafe { libc::chown(c_path.as_ptr(), target_uid, target_gid) };
+        if rc != 0 {
+            eprintln!(
+                "warning: failed to chown {} to {}:{}: {}",
+                p.display(),
+                target_uid,
+                target_gid,
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+}
+
 /// Open (or create) the database and run migrations.
 pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
     let conn = Connection::open(path)?;
+    repair_db_ownership(path);
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS admins (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
