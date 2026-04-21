@@ -93,7 +93,9 @@ fn repair_db_ownership(path: &Path) {
     }
 
     let Some(parent) = path.parent() else { return };
-    let Ok(parent_meta) = std::fs::metadata(parent) else { return };
+    let Ok(parent_meta) = std::fs::metadata(parent) else {
+        return;
+    };
     let target_uid = parent_meta.uid();
     let target_gid = parent_meta.gid();
     if target_uid == 0 && target_gid == 0 {
@@ -108,7 +110,9 @@ fn repair_db_ownership(path: &Path) {
 
     for candidate in [path.as_os_str(), wal.as_os_str(), shm.as_os_str()] {
         let p = Path::new(candidate);
-        let Ok(meta) = std::fs::metadata(p) else { continue };
+        let Ok(meta) = std::fs::metadata(p) else {
+            continue;
+        };
         if meta.uid() == target_uid && meta.gid() == target_gid {
             continue;
         }

@@ -209,8 +209,7 @@ pub async fn cmd_import_guacamole(
     // Create a .config for every subfolder used by any entry (including intermediate
     // ancestors, so an empty parent still shows up in the tree with a description).
     // Deduplicate before writing so we don't hit Vault N times for the same path.
-    let mut subfolder_paths: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
+    let mut subfolder_paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for ((subfolder, _), _) in &entries {
         if subfolder.is_empty() {
             continue;
