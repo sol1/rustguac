@@ -1099,6 +1099,14 @@
         function clearError() {
             document.getElementById('global-error').textContent = '';
         }
+        // Transient success/info message using the same global banner. Clears after 4s.
+        function showInfo(msg) {
+            var el = document.getElementById('global-error');
+            el.textContent = msg;
+            setTimeout(function() {
+                if (el.textContent === msg) el.textContent = '';
+            }, 4000);
+        }
 
         // Check user role and vault status
         function init() {
@@ -2061,13 +2069,27 @@
         document.getElementById('btn-delete-folder').addEventListener('click', function() {
             if (!selectedFolder) return;
             var selPath = folderPath(selectedFolder);
-            if (!confirm('Delete folder "' + selPath + '" and ALL its entries? This cannot be undone.')) return;
+            var hasSubtree = !!(selectedFolder.has_children);
+            var warning = hasSubtree
+                ? 'Delete folder "' + selPath + '" AND all its subfolders and entries?\n\nThis recursively removes the entire subtree and cannot be undone.'
+                : 'Delete folder "' + selPath + '" and all its entries?\n\nThis cannot be undone.';
+            if (!confirm(warning)) return;
             fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath), {
                 method: 'DELETE',
                 headers: apiHeaders(),
                 credentials: 'same-origin'
             }).then(function(res) {
                 if (!res.ok) return res.text().then(function(t) { showError(t); });
+                return res.json().catch(function() { return null; });
+            }).then(function(data) {
+                if (data && (data.subfolders_deleted || data.entries_deleted)) {
+                    var msg = 'Deleted ' + (data.entries_deleted || 0) + ' entr' + ((data.entries_deleted === 1) ? 'y' : 'ies');
+                    if (data.subfolders_deleted) {
+                        msg += ' across ' + data.subfolders_deleted + ' subfolder' + ((data.subfolders_deleted === 1) ? '' : 's');
+                    }
+                    msg += '.';
+                    showInfo(msg);
+                }
                 selectedFolder = null;
                 subfolderCache = {}; // drop all cached subfolder listings; they may reference the deleted path
                 document.getElementById('entries-header').style.display = 'none';

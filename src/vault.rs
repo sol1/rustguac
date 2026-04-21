@@ -863,19 +863,51 @@ impl VaultClient {
         }
     }
 
-    /// Delete an entire folder (all entries + .config).
-    pub async fn delete_folder(&self, scope: &str, folder: &str) -> Result<(), VaultError> {
+    /// Delete an entire folder and its subtree (all entries + .config at every
+    /// level). Pre-v1.6.0 this only cleared the top folder, which silently
+    /// left subfolder keys in Vault; post-subfolders the UI would then refresh
+    /// and show the folder still populated with its subtree, so delete
+    /// appeared to silently fail. This now walks the whole subtree iteratively.
+    ///
+    /// Returns (subfolder_count, entry_count) for audit/UI feedback. Subfolder
+    /// count excludes the folder itself (i.e. 0 for a leaf).
+    pub async fn delete_folder(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<(usize, usize), VaultError> {
         validate_path(folder)?;
-        // List and delete all entries
-        let entries = self.list_entries(scope, folder).await.unwrap_or_default();
-        for entry in entries {
-            let _ = self.delete_entry(scope, folder, &entry).await;
+
+        // BFS-collect every folder path in the subtree (including the root).
+        let mut queue: Vec<String> = vec![folder.to_string()];
+        let mut i = 0;
+        while i < queue.len() {
+            let current = queue[i].clone();
+            if let Ok(subs) = self.list_subfolders(scope, &current).await {
+                for sub in subs {
+                    let sub_path = sub
+                        .path
+                        .unwrap_or_else(|| format!("{}/{}", current, sub.name));
+                    queue.push(sub_path);
+                }
+            }
+            i += 1;
         }
-        // Delete .config
+
         let scope_prefix = self.resolve_scope_prefix(scope)?;
-        let path = self.metadata_path(&scope_prefix, &format!("{}/{}", folder, ".config"));
-        let _ = self.request(reqwest::Method::DELETE, &path, None).await;
-        Ok(())
+        let mut entry_count = 0usize;
+        for path in &queue {
+            let entries = self.list_entries(scope, path).await.unwrap_or_default();
+            for entry in entries {
+                let _ = self.delete_entry(scope, path, &entry).await;
+                entry_count += 1;
+            }
+            let cfg_path = self.metadata_path(&scope_prefix, &format!("{}/{}", path, ".config"));
+            let _ = self.request(reqwest::Method::DELETE, &cfg_path, None).await;
+        }
+
+        let subfolder_count = queue.len().saturating_sub(1);
+        Ok((subfolder_count, entry_count))
     }
 
     // ── Generic KV v2 read ──

@@ -2427,7 +2427,12 @@ pub async fn ab_delete_folder(
     }
 
     match vault.delete_folder(&scope, &folder).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok((subfolders, entries)) => Json(json!({
+            "ok": true,
+            "subfolders_deleted": subfolders,
+            "entries_deleted": entries,
+        }))
+        .into_response(),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": e.to_string()})),
