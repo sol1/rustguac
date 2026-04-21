@@ -916,6 +916,10 @@ async fn run_server(config: Config, database: Db) {
             delete(api::admin_revoke_user_token),
         )
         .route("/api/admin/token-audit", get(api::admin_token_audit))
+        .route(
+            "/api/admin/addressbook-audit",
+            get(api::admin_addressbook_audit),
+        )
         // Login scripts listing
         .route("/api/login-scripts", get(api::list_login_scripts))
         .route("/api/ws-ticket", post(api::create_ws_ticket))

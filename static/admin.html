@@ -109,6 +109,22 @@
     </table>
     <div id="no-audit" style="display:none;color:var(--text-muted);margin-top:0.5em;font-size:0.9em;">No audit events.</div>
 
+    <h2>Connections Audit Log</h2>
+    <div style="margin-bottom:0.5em;color:var(--text-muted);font-size:0.9em;">
+        Destructive and mutating actions against the Connections address book. Metadata only &mdash; entry field values (passwords, keys) are never logged.
+    </div>
+    <div style="margin-bottom:0.5em;">
+        <input type="text" id="ab-audit-email-filter" placeholder="Filter by email" style="width:200px;">
+        <button class="btn-primary" id="ab-audit-filter-btn" style="padding:0.3em 0.8em;">Filter</button>
+    </div>
+    <table id="ab-audit-table">
+        <thead><tr>
+            <th>Time</th><th>User</th><th>Action</th><th>Scope</th><th>Folder</th><th>Entry</th><th>IP</th><th>Details</th>
+        </tr></thead>
+        <tbody id="ab-audit-body"></tbody>
+    </table>
+    <div id="no-ab-audit" style="display:none;color:var(--text-muted);margin-top:0.5em;font-size:0.9em;">No connections audit events.</div>
+
     <div id="error"></div>
 
     <script>
@@ -148,6 +164,7 @@
                 loadMappings();
                 loadAllTokens();
                 loadAuditLog();
+                loadAbAuditLog();
                 loadSystemStatus();
             })
             .catch(function() {});
@@ -567,6 +584,55 @@
         document.getElementById('audit-filter-btn').addEventListener('click', function() {
             var email = document.getElementById('audit-email-filter').value.trim();
             loadAuditLog(email || undefined);
+        });
+
+        // ── Connections Audit Log ──
+
+        function loadAbAuditLog(emailFilter) {
+            var url = '/api/admin/addressbook-audit?limit=100';
+            if (emailFilter) url += '&email=' + encodeURIComponent(emailFilter);
+
+            fetch(url, { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) { return res.json(); })
+            .then(function(entries) {
+                var tbody = document.getElementById('ab-audit-body');
+                tbody.innerHTML = '';
+
+                if (!entries || entries.length === 0) {
+                    document.getElementById('no-ab-audit').style.display = '';
+                    return;
+                }
+                document.getElementById('no-ab-audit').style.display = 'none';
+
+                entries.forEach(function(e) {
+                    var tr = document.createElement('tr');
+                    tr.className = 'audit-row';
+                    tr.appendChild(td(e.created_at || ''));
+                    tr.appendChild(td(e.user_email || ''));
+                    tr.appendChild(td(e.action || ''));
+                    tr.appendChild(td(e.scope || ''));
+                    tr.appendChild(td(e.folder_path || ''));
+                    tr.appendChild(td(e.entry_name || ''));
+                    tr.appendChild(td(e.ip_addr || ''));
+
+                    var detailsTd = document.createElement('td');
+                    detailsTd.style.maxWidth = '240px';
+                    detailsTd.style.overflow = 'hidden';
+                    detailsTd.style.textOverflow = 'ellipsis';
+                    detailsTd.style.fontSize = '0.85em';
+                    detailsTd.textContent = e.details || '';
+                    detailsTd.title = e.details || '';
+                    tr.appendChild(detailsTd);
+
+                    tbody.appendChild(tr);
+                });
+            })
+            .catch(function() { showError('Failed to load connections audit log'); });
+        }
+
+        document.getElementById('ab-audit-filter-btn').addEventListener('click', function() {
+            var email = document.getElementById('ab-audit-email-filter').value.trim();
+            loadAbAuditLog(email || undefined);
         });
 
         // Auto-refresh

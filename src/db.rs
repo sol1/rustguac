@@ -75,6 +75,23 @@ pub struct TokenAuditEntry {
     pub created_at: String,
 }
 
+/// Connections (address book) audit log entry. Persisted in SQLite, never in
+/// Vault, so only headline metadata goes here: action name, target path, and
+/// small counts. Entry field values (passwords, keys, usernames) must never
+/// be written to `details` — see feedback_audit_log_scope.md.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AddressbookAuditEntry {
+    pub id: i64,
+    pub user_email: String,
+    pub action: String,
+    pub scope: String,
+    pub folder_path: String,
+    pub entry_name: Option<String>,
+    pub ip_addr: Option<String>,
+    pub details: Option<String>,
+    pub created_at: String,
+}
+
 /// If we're running as root and the db's parent directory is owned by a non-root
 /// user (the typical `/opt/rustguac/data` owned by `rustguac:rustguac` case),
 /// chown the db file and any `-wal` / `-shm` sidecars to match the parent dir.
@@ -224,7 +241,21 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );
         CREATE INDEX IF NOT EXISTS idx_sh_created_by ON session_history(created_by);
         CREATE INDEX IF NOT EXISTS idx_sh_entry ON session_history(address_book_entry);
-        CREATE INDEX IF NOT EXISTS idx_sh_started ON session_history(started_at);",
+        CREATE INDEX IF NOT EXISTS idx_sh_started ON session_history(started_at);
+
+        CREATE TABLE IF NOT EXISTS addressbook_audit_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email  TEXT NOT NULL,
+            action      TEXT NOT NULL,
+            scope       TEXT NOT NULL,
+            folder_path TEXT NOT NULL,
+            entry_name  TEXT,
+            ip_addr     TEXT,
+            details     TEXT,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_ab_audit_created ON addressbook_audit_log(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_ab_audit_user ON addressbook_audit_log(user_email);",
     )?;
 
     // Migration: add oidc_groups column if it doesn't exist
@@ -1025,10 +1056,93 @@ pub fn list_token_audit_log(
 pub fn cleanup_old_audit_log(db: &Db, retain_days: u32) -> rusqlite::Result<usize> {
     let conn = db.lock().unwrap();
     let modifier = format!("-{} days", retain_days);
-    conn.execute(
+    let tok = conn.execute(
         "DELETE FROM token_audit_log WHERE created_at < datetime('now', ?1)",
-        params![modifier],
-    )
+        params![&modifier],
+    )?;
+    let ab = conn.execute(
+        "DELETE FROM addressbook_audit_log WHERE created_at < datetime('now', ?1)",
+        params![&modifier],
+    )?;
+    Ok(tok + ab)
+}
+
+// ── Connections (address book) audit log ──
+
+/// Log a destructive or mutating connections action. Persisted in SQLite.
+///
+/// `details` is a free-form text blob (callers typically write JSON) but must
+/// never contain entry field values or full request bodies (see
+/// feedback_audit_log_scope.md). Counts, booleans, field-name lists are fine.
+#[allow(clippy::too_many_arguments)]
+pub fn log_addressbook_event(
+    db: &Db,
+    user_email: &str,
+    action: &str,
+    scope: &str,
+    folder_path: &str,
+    entry_name: Option<&str>,
+    ip_addr: Option<&str>,
+    details: Option<&str>,
+) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO addressbook_audit_log
+            (user_email, action, scope, folder_path, entry_name, ip_addr, details)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            user_email,
+            action,
+            scope,
+            folder_path,
+            entry_name,
+            ip_addr,
+            details
+        ],
+    )?;
+    Ok(())
+}
+
+/// List connections audit log entries, most recent first, with optional
+/// filters for limit and user_email.
+pub fn list_addressbook_audit_log(
+    db: &Db,
+    limit: u32,
+    user_email: Option<&str>,
+) -> rusqlite::Result<Vec<AddressbookAuditEntry>> {
+    let conn = db.lock().unwrap();
+    let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        if let Some(email) = user_email {
+            (
+                "SELECT id, user_email, action, scope, folder_path, entry_name,
+                        ip_addr, details, created_at
+                 FROM addressbook_audit_log WHERE user_email = ?1
+                 ORDER BY id DESC LIMIT ?2",
+                vec![Box::new(email.to_string()), Box::new(limit)],
+            )
+        } else {
+            (
+                "SELECT id, user_email, action, scope, folder_path, entry_name,
+                        ip_addr, details, created_at
+                 FROM addressbook_audit_log ORDER BY id DESC LIMIT ?1",
+                vec![Box::new(limit)],
+            )
+        };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
+        Ok(AddressbookAuditEntry {
+            id: row.get(0)?,
+            user_email: row.get(1)?,
+            action: row.get(2)?,
+            scope: row.get(3)?,
+            folder_path: row.get(4)?,
+            entry_name: row.get(5)?,
+            ip_addr: row.get(6)?,
+            details: row.get(7)?,
+            created_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
 }
 
 // ── Session history ──

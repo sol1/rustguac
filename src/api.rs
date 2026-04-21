@@ -2270,9 +2270,63 @@ fn default_scope() -> String {
     "shared".into()
 }
 
+/// Resolve the caller's client IP (honouring trusted proxies) into a string
+/// for audit logging. Returns the empty string if the identity is anonymous.
+fn audit_client_ip(
+    headers: &axum::http::HeaderMap,
+    addr: &SocketAddr,
+    trusted: Option<&Extension<TrustedProxies>>,
+) -> String {
+    let proxies = trusted.map(|Extension(t)| t.0.as_slice()).unwrap_or(&[]);
+    client_ip(headers, addr.ip(), proxies).to_string()
+}
+
+/// Persist a connections audit row asynchronously via spawn_blocking.
+/// Errors are swallowed: an audit write must never cause a user request to
+/// fail. Details must be headline-only (counts, field-name lists, booleans);
+/// never entry field values (see feedback_audit_log_scope.md).
+#[allow(clippy::too_many_arguments)]
+async fn log_ab_event(
+    database: &Db,
+    email: &str,
+    action: &str,
+    scope: &str,
+    folder_path: &str,
+    entry_name: Option<&str>,
+    ip: &str,
+    details: Option<&str>,
+) {
+    let database = database.clone();
+    let email = email.to_string();
+    let action = action.to_string();
+    let scope = scope.to_string();
+    let folder_path = folder_path.to_string();
+    let entry_name = entry_name.map(str::to_string);
+    let ip = ip.to_string();
+    let details = details.map(str::to_string);
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = db::log_addressbook_event(
+            &database,
+            &email,
+            &action,
+            &scope,
+            &folder_path,
+            entry_name.as_deref(),
+            Some(&ip),
+            details.as_deref(),
+        );
+    })
+    .await;
+}
+
 /// POST /api/addressbook/folders — Create a new folder. Admin only.
+#[allow(clippy::too_many_arguments)]
 pub async fn ab_create_folder(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Json(req): Json<CreateFolderRequest>,
 ) -> impl IntoResponse {
@@ -2280,18 +2334,19 @@ pub async fn ab_create_folder(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "admin role required"})),
-        )
-            .into_response();
-    }
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
 
+    let allowed_count = req.allowed_groups.len();
+    let inherit = req.inherit_from_parent;
     let config = FolderConfig {
         allowed_groups: req.allowed_groups,
         description: req.description,
@@ -2302,7 +2357,26 @@ pub async fn ab_create_folder(
         .put_folder_config(&req.scope, &req.name, &config)
         .await
     {
-        Ok(()) => (StatusCode::CREATED, Json(json!({"ok": true}))).into_response(),
+        Ok(()) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            let details = json!({
+                "allowed_groups_count": allowed_count,
+                "inherit_from_parent": inherit,
+            })
+            .to_string();
+            log_ab_event(
+                &database,
+                &admin_email,
+                "create_folder",
+                &req.scope,
+                &req.name,
+                None,
+                &ip,
+                Some(&details),
+            )
+            .await;
+            (StatusCode::CREATED, Json(json!({"ok": true}))).into_response()
+        }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": e.to_string()})),
@@ -2321,8 +2395,13 @@ pub struct UpdateFolderRequest {
 }
 
 /// PUT /api/addressbook/folders/:scope/:folder — Update folder config. Admin only.
+#[allow(clippy::too_many_arguments)]
 pub async fn ab_update_folder(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<UpdateFolderRequest>,
@@ -2331,18 +2410,19 @@ pub async fn ab_update_folder(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "admin role required"})),
-        )
-            .into_response();
-    }
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
 
+    let allowed_count = req.allowed_groups.len();
+    let inherit = req.inherit_from_parent;
     let config = FolderConfig {
         allowed_groups: req.allowed_groups,
         description: req.description,
@@ -2350,7 +2430,26 @@ pub async fn ab_update_folder(
     };
 
     match vault.put_folder_config(&scope, &folder, &config).await {
-        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Ok(()) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            let details = json!({
+                "allowed_groups_count": allowed_count,
+                "inherit_from_parent": inherit,
+            })
+            .to_string();
+            log_ab_event(
+                &database,
+                &admin_email,
+                "update_folder",
+                &scope,
+                &folder,
+                None,
+                &ip,
+                Some(&details),
+            )
+            .await;
+            Json(json!({"ok": true})).into_response()
+        }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": e.to_string()})),
@@ -2406,7 +2505,11 @@ pub async fn ab_get_folder_config(
 
 /// DELETE /api/addressbook/folders/:scope/:folder — Delete folder and all entries. Admin only.
 pub async fn ab_delete_folder(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
@@ -2414,25 +2517,43 @@ pub async fn ab_delete_folder(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "admin role required"})),
-        )
-            .into_response();
-    }
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
 
     match vault.delete_folder(&scope, &folder).await {
-        Ok((subfolders, entries)) => Json(json!({
-            "ok": true,
-            "subfolders_deleted": subfolders,
-            "entries_deleted": entries,
-        }))
-        .into_response(),
+        Ok((subfolders, entries)) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            let details = json!({
+                "subfolders_deleted": subfolders,
+                "entries_deleted": entries,
+            })
+            .to_string();
+            log_ab_event(
+                &database,
+                &admin_email,
+                "delete_folder",
+                &scope,
+                &folder,
+                None,
+                &ip,
+                Some(&details),
+            )
+            .await;
+            Json(json!({
+                "ok": true,
+                "subfolders_deleted": subfolders,
+                "entries_deleted": entries,
+            }))
+            .into_response()
+        }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": e.to_string()})),
@@ -2449,8 +2570,13 @@ pub struct CreateEntryRequest {
 }
 
 /// POST /api/addressbook/folders/:scope/:folder/entries — Create/update an entry. Admin only.
+#[allow(clippy::too_many_arguments)]
 pub async fn ab_create_entry(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<CreateEntryRequest>,
@@ -2459,23 +2585,38 @@ pub async fn ab_create_entry(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "admin role required"})),
-        )
-            .into_response();
-    }
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
 
+    let session_type = req.entry.session_type.clone();
     match vault
         .put_entry(&scope, &folder, &req.name, &req.entry)
         .await
     {
-        Ok(()) => (StatusCode::CREATED, Json(json!({"ok": true}))).into_response(),
+        Ok(()) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            let details = json!({ "type": session_type }).to_string();
+            log_ab_event(
+                &database,
+                &admin_email,
+                "create_entry",
+                &scope,
+                &folder,
+                Some(&req.name),
+                &ip,
+                Some(&details),
+            )
+            .await;
+            (StatusCode::CREATED, Json(json!({"ok": true}))).into_response()
+        }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": e.to_string()})),
@@ -2488,8 +2629,13 @@ pub async fn ab_create_entry(
 /// Performs a read-modify-write: reads the existing entry from Vault first, then merges
 /// incoming fields on top. This preserves credentials (password, private_key) that the
 /// frontend deliberately omits from edit forms.
+#[allow(clippy::too_many_arguments)]
 pub async fn ab_update_entry(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
     Json(data): Json<AddressBookEntry>,
@@ -2498,17 +2644,16 @@ pub async fn ab_update_entry(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "admin role required"})),
-        )
-            .into_response();
-    }
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
 
     // Read existing entry to preserve credentials the frontend never sends back
     let merged = match vault.get_entry(&scope, &folder, &entry).await {
@@ -2559,8 +2704,24 @@ pub async fn ab_update_entry(
         Err(_) => data, // New entry or Vault error — just write what we have
     };
 
+    let session_type = merged.session_type.clone();
     match vault.put_entry(&scope, &folder, &entry, &merged).await {
-        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Ok(()) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            let details = json!({ "type": session_type }).to_string();
+            log_ab_event(
+                &database,
+                &admin_email,
+                "update_entry",
+                &scope,
+                &folder,
+                Some(&entry),
+                &ip,
+                Some(&details),
+            )
+            .await;
+            Json(json!({"ok": true})).into_response()
+        }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": e.to_string()})),
@@ -2571,7 +2732,11 @@ pub async fn ab_update_entry(
 
 /// DELETE /api/addressbook/folders/:scope/:folder/entries/:entry — Delete an entry. Admin only.
 pub async fn ab_delete_entry(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
@@ -2579,20 +2744,33 @@ pub async fn ab_delete_entry(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "admin role required"})),
-        )
-            .into_response();
-    }
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
 
     match vault.delete_entry(&scope, &folder, &entry).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            log_ab_event(
+                &database,
+                &admin_email,
+                "delete_entry",
+                &scope,
+                &folder,
+                Some(&entry),
+                &ip,
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(VaultError::NotFound) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "entry not found"})),
@@ -3413,6 +3591,39 @@ pub async fn admin_token_audit(
     let db_clone = database.clone();
     match tokio::task::spawn_blocking(move || {
         db::list_token_audit_log(&db_clone, limit, email.as_deref())
+    })
+    .await
+    {
+        Ok(Ok(entries)) => Json(json!(entries)).into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to list audit log"})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/admin/addressbook-audit — View connections audit log. Admin only.
+pub async fn admin_addressbook_audit(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Query(query): Query<AuditLogQuery>,
+) -> impl IntoResponse {
+    if let Some(Extension(ref id)) = identity {
+        if !id.has_role("admin") {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response();
+        }
+    }
+
+    let limit = query.limit.unwrap_or(200).min(1000);
+    let email = query.email.clone();
+    let db_clone = database.clone();
+    match tokio::task::spawn_blocking(move || {
+        db::list_addressbook_audit_log(&db_clone, limit, email.as_deref())
     })
     .await
     {
