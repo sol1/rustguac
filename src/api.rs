@@ -1741,47 +1741,41 @@ async fn require_vault(vault: &VaultState) -> Result<Arc<VaultClient>, Response>
     })
 }
 
-/// Helper: check if the identity has group access to a folder.
+/// Helper: check if the identity has group access to a folder, honouring
+/// `inherit_from_parent` on the folder's config (a subfolder may inherit
+/// access from any ancestor whose `allowed_groups` matches the caller's
+/// OIDC groups). Admin role bypasses all checks.
 async fn check_folder_access(
     vault: &VaultClient,
     scope: &str,
     folder: &str,
     identity: &AuthIdentity,
 ) -> Result<(), Response> {
-    // Admins bypass group checks
     if identity.has_role("admin") {
         return Ok(());
     }
 
-    let config = vault
-        .get_folder_config(scope, folder)
-        .await
-        .map_err(|e| match e {
-            VaultError::NotFound => (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "folder not found"})),
-            )
-                .into_response(),
-            _ => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": e.to_string()})),
-            )
-                .into_response(),
-        })?;
-
     let user_groups = identity.groups();
-    if config
-        .allowed_groups
-        .iter()
-        .any(|g| user_groups.iter().any(|ug| ug == g))
+    match vault
+        .resolve_folder_access(scope, folder, &user_groups)
+        .await
     {
-        Ok(())
-    } else {
-        Err((
+        Ok(true) => Ok(()),
+        Ok(false) => Err((
             StatusCode::FORBIDDEN,
             Json(json!({"error": "no access to this folder"})),
         )
-            .into_response())
+            .into_response()),
+        Err(VaultError::NotFound) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "folder not found"})),
+        )
+            .into_response()),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response()),
     }
 }
 
@@ -1816,22 +1810,20 @@ pub async fn ab_list_folders(
         }
     };
 
-    // Filter by group access (admins see all)
+    // Filter by group access (admins see all).
+    // Top-level folders have no parent so the resolver's inheritance walk is
+    // effectively a single-folder check here, but we go through the resolver
+    // to keep access logic in one place.
+    let user_groups = id.groups();
     let mut visible = Vec::new();
     for folder in folders {
-        if id.has_role("admin") {
+        if id.has_role("admin")
+            || vault
+                .resolve_folder_access(&folder.scope, &folder.name, &user_groups)
+                .await
+                .unwrap_or(false)
+        {
             visible.push(folder);
-            continue;
-        }
-        if let Ok(config) = vault.get_folder_config(&folder.scope, &folder.name).await {
-            let user_groups = id.groups();
-            if config
-                .allowed_groups
-                .iter()
-                .any(|g| user_groups.iter().any(|ug| ug == g))
-            {
-                visible.push(folder);
-            }
         }
     }
 
@@ -1907,21 +1899,16 @@ pub async fn ab_list_all(
     };
 
     let mut result = Vec::new();
+    let user_groups = id.groups();
     for folder in folders {
-        // Group access check (admins see all)
-        if !id.has_role("admin") {
-            if let Ok(config) = vault.get_folder_config(&folder.scope, &folder.name).await {
-                let user_groups = id.groups();
-                if !config
-                    .allowed_groups
-                    .iter()
-                    .any(|g| user_groups.iter().any(|ug| ug == g))
-                {
-                    continue;
-                }
-            } else {
-                continue;
-            }
+        // Group access check (admins see all); inherits via resolver walk-up.
+        if !id.has_role("admin")
+            && !vault
+                .resolve_folder_access(&folder.scope, &folder.name, &user_groups)
+                .await
+                .unwrap_or(false)
+        {
+            continue;
         }
 
         // Fetch folder config for the response
@@ -2275,6 +2262,8 @@ pub struct CreateFolderRequest {
     /// "shared" or "instance" (default: "shared")
     #[serde(default = "default_scope")]
     pub scope: String,
+    #[serde(default)]
+    pub inherit_from_parent: bool,
 }
 
 fn default_scope() -> String {
@@ -2306,6 +2295,7 @@ pub async fn ab_create_folder(
     let config = FolderConfig {
         allowed_groups: req.allowed_groups,
         description: req.description,
+        inherit_from_parent: req.inherit_from_parent,
     };
 
     match vault
@@ -2326,6 +2316,8 @@ pub struct UpdateFolderRequest {
     pub allowed_groups: Vec<String>,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub inherit_from_parent: bool,
 }
 
 /// PUT /api/addressbook/folders/:scope/:folder — Update folder config. Admin only.
@@ -2354,6 +2346,7 @@ pub async fn ab_update_folder(
     let config = FolderConfig {
         allowed_groups: req.allowed_groups,
         description: req.description,
+        inherit_from_parent: req.inherit_from_parent,
     };
 
     match vault.put_folder_config(&scope, &folder, &config).await {
@@ -2394,11 +2387,13 @@ pub async fn ab_get_folder_config(
         Ok(cfg) => Json(json!({
             "allowed_groups": cfg.allowed_groups,
             "description": cfg.description,
+            "inherit_from_parent": cfg.inherit_from_parent,
         }))
         .into_response(),
         Err(crate::vault::VaultError::NotFound) => Json(json!({
             "allowed_groups": Vec::<String>::new(),
             "description": "",
+            "inherit_from_parent": false,
         }))
         .into_response(),
         Err(e) => (
@@ -3081,7 +3076,8 @@ pub async fn list_credential_variables(
         Err(resp) => return resp,
     };
 
-    // Scan all accessible folders and entries for variable references
+    // Scan all accessible folders and entries for variable references,
+    // recursing into subfolders so vars inside nested trees surface too.
     let folders = match vault.list_folders().await {
         Ok(f) => f,
         Err(e) => {
@@ -3094,29 +3090,29 @@ pub async fn list_credential_variables(
     };
 
     let mut all_vars: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut stack: Vec<(String, String)> = folders.into_iter().map(|f| (f.scope, f.name)).collect();
 
-    for folder in &folders {
-        // Check folder access for this user
-        if check_folder_access(&vault, &folder.scope, &folder.name, &id)
+    while let Some((scope, path)) = stack.pop() {
+        if check_folder_access(&vault, &scope, &path, &id)
             .await
             .is_err()
         {
             continue;
         }
 
-        let entries = match vault.list_entries(&folder.scope, &folder.name).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
+        let entries = vault.list_entries(&scope, &path).await.unwrap_or_default();
         for entry_name in &entries {
-            if let Ok(entry) = vault
-                .get_entry(&folder.scope, &folder.name, entry_name)
-                .await
-            {
+            if let Ok(entry) = vault.get_entry(&scope, &path, entry_name).await {
                 for var in crate::vault::entry_credential_variables(&entry) {
                     *all_vars.entry(var).or_insert(0) += 1;
                 }
+            }
+        }
+
+        if let Ok(subs) = vault.list_subfolders(&scope, &path).await {
+            for sub in subs {
+                let sub_path = sub.path.unwrap_or_else(|| format!("{}/{}", path, sub.name));
+                stack.push((scope.clone(), sub_path));
             }
         }
     }

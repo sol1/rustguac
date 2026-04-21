@@ -15,6 +15,7 @@ pub async fn cmd_import_guacamole(
     file: &str,
     folder: &str,
     scope: &str,
+    allowed_groups: &[String],
     dry_run: bool,
 ) {
     // Validate scope
@@ -196,10 +197,14 @@ pub async fn cmd_import_guacamole(
         }
     };
 
-    // Create the root folder (idempotent).
+    // Create the root folder (idempotent). The root carries the ACL chosen
+    // by --allowed-groups; subfolders default to inherit_from_parent=true so
+    // the whole imported tree picks up the same access rules without having
+    // to write identical allowed_groups on every child.
     let root_config = FolderConfig {
-        allowed_groups: vec![],
+        allowed_groups: allowed_groups.to_vec(),
         description: "Imported from Guacamole".to_string(),
+        inherit_from_parent: false,
     };
     if let Err(e) = client.put_folder_config(scope, folder, &root_config).await {
         eprintln!("Error creating folder \"{}\": {}", folder, e);
@@ -228,6 +233,7 @@ pub async fn cmd_import_guacamole(
         let cfg = FolderConfig {
             allowed_groups: vec![],
             description: format!("Imported from Guacamole: {}", sub),
+            inherit_from_parent: true,
         };
         if let Err(e) = client.put_folder_config(scope, &full, &cfg).await {
             eprintln!("  Warning: failed to create subfolder \"{}\": {}", full, e);

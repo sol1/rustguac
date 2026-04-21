@@ -406,6 +406,11 @@
                 </div>
             </div>
             <div class="field-hint">OIDC groups that can see this folder. Leave empty for admin-only access. Type to filter known groups or enter a custom one; Enter or Add to attach; &times; on a chip to remove.</div>
+            <label style="display:flex;align-items:center;gap:0.5em;cursor:pointer">
+                <input type="checkbox" id="fm-inherit" style="width:auto">
+                Inherit permissions from parent folder
+            </label>
+            <div class="field-hint">When ticked, if this folder's own groups list doesn't grant a user access, the check walks up to the parent (and further ancestors if they also inherit). Uncheck to enforce this folder's groups list on its own. Top-level folders have no parent so this has no effect.</div>
             <label>Scope
                 <select id="fm-scope">
                     <option value="shared">shared (all instances)</option>
@@ -1878,6 +1883,7 @@
             document.getElementById('fm-scope').disabled = false;
             document.getElementById('fm-error').textContent = '';
             document.getElementById('fm-groups-input').value = '';
+            document.getElementById('fm-inherit').checked = false;
             fmGroups = [];
             renderFmGroupChips();
             loadKnownGroups(populateFmGroupOptions);
@@ -1896,6 +1902,7 @@
             document.getElementById('fm-scope').disabled = true;
             document.getElementById('fm-error').textContent = '';
             document.getElementById('fm-groups-input').value = '';
+            document.getElementById('fm-inherit').checked = true;
             fmGroups = [];
             renderFmGroupChips();
             loadKnownGroups(populateFmGroupOptions);
@@ -1935,6 +1942,7 @@
                     renderFmGroupChips();
                     populateFmGroupOptions();
                 }
+                document.getElementById('fm-inherit').checked = !!(data && data.inherit_from_parent);
             }).catch(function() {});
 
             document.getElementById('folder-modal').classList.add('active');
@@ -2002,7 +2010,7 @@
                     method: 'PUT',
                     headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'same-origin',
-                    body: JSON.stringify({ allowed_groups: groups, description: desc })
+                    body: JSON.stringify({ allowed_groups: groups, description: desc, inherit_from_parent: document.getElementById('fm-inherit').checked })
                 })
                 .then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
@@ -2020,7 +2028,7 @@
                     method: 'POST',
                     headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'same-origin',
-                    body: JSON.stringify({ name: fullPath, allowed_groups: groups, description: desc, scope: postScope })
+                    body: JSON.stringify({ name: fullPath, allowed_groups: groups, description: desc, scope: postScope, inherit_from_parent: document.getElementById('fm-inherit').checked })
                 })
                 .then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });

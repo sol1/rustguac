@@ -55,6 +55,13 @@ pub struct FolderConfig {
     pub allowed_groups: Vec<String>,
     #[serde(default)]
     pub description: String,
+    /// When true, if the folder's own `allowed_groups` doesn't grant access,
+    /// the access check walks up the parent path and tries each ancestor's
+    /// config. New folders default to `true` in the UI; legacy configs
+    /// deserialise as `false` so existing deployments keep their
+    /// per-folder-only semantics until an admin opts in.
+    #[serde(default)]
+    pub inherit_from_parent: bool,
 }
 
 /// A connection entry stored in Vault.
@@ -699,6 +706,45 @@ impl VaultClient {
             404 => Err(VaultError::NotFound),
             403 => Err(VaultError::Forbidden),
             s => Err(VaultError::Parse(format!("unexpected status {}", s))),
+        }
+    }
+
+    /// Resolve whether `user_groups` grants access to `folder` under `scope`.
+    ///
+    /// Checks the folder's own `allowed_groups` first. If none match and the
+    /// folder's `inherit_from_parent` is true, walks up the slash-separated
+    /// path and evaluates each ancestor's config the same way. Returns `false`
+    /// once a folder denies and doesn't inherit, or once the walk reaches the
+    /// top-level folder with no match. Missing (`NotFound`) folder configs
+    /// are treated as deny; other Vault errors propagate so callers can log.
+    pub async fn resolve_folder_access(
+        &self,
+        scope: &str,
+        folder: &str,
+        user_groups: &[String],
+    ) -> Result<bool, VaultError> {
+        let mut current = folder.to_string();
+        loop {
+            let config = match self.get_folder_config(scope, &current).await {
+                Ok(c) => c,
+                Err(VaultError::NotFound) => return Ok(false),
+                Err(e) => return Err(e),
+            };
+            if config
+                .allowed_groups
+                .iter()
+                .any(|g| user_groups.iter().any(|ug| ug == g))
+            {
+                return Ok(true);
+            }
+            if !config.inherit_from_parent {
+                return Ok(false);
+            }
+            // Walk to parent segment; stop at the top-level folder.
+            match current.rsplit_once('/') {
+                Some((parent, _)) if !parent.is_empty() => current = parent.to_string(),
+                _ => return Ok(false),
+            }
         }
     }
 

@@ -140,6 +140,11 @@ enum Command {
         /// Scope: "shared" or "instance"
         #[arg(long, default_value = "shared")]
         scope: String,
+        /// OIDC groups allowed to see the imported tree (comma-separated).
+        /// Applied to the root folder; subfolders default to inherit, so the
+        /// whole tree picks up the same ACL without per-folder writes.
+        #[arg(long, value_delimiter = ',')]
+        allowed_groups: Vec<String>,
         /// Preview without writing to Vault
         #[arg(long)]
         dry_run: bool,
@@ -191,9 +196,11 @@ async fn main() {
             file,
             folder,
             scope,
+            allowed_groups,
             dry_run,
         }) => {
-            import::cmd_import_guacamole(&config, &file, &folder, &scope, dry_run).await;
+            import::cmd_import_guacamole(&config, &file, &folder, &scope, &allowed_groups, dry_run)
+                .await;
         }
     }
 }
