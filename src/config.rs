@@ -375,6 +375,21 @@ pub struct Config {
     pub theme: Option<ThemeConfig>,
     pub recording: Option<RecordingConfig>,
     pub vdi: Option<VdiConfig>,
+    pub rdp: Option<RdpConfig>,
+}
+
+/// RDP-wide defaults applied when an address book entry (or ad-hoc
+/// connect request) leaves a field unset.
+///
+/// `default_auth_pkg` picks the NLA/CredSSP authentication package
+/// FreeRDP uses. Rustguac defaults to `"ntlm"` because Kerberos
+/// requires a working KDC reachable via DNS, which most deployments
+/// don't have, and the failure mode is a silent hang. Override here
+/// with `"kerberos"` or `"negotiate"` if your environment actually
+/// supports it.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct RdpConfig {
+    pub default_auth_pkg: Option<String>,
 }
 
 /// Fully-resolved theme palette with all 26 color fields.
@@ -971,6 +986,7 @@ impl Default for Config {
             theme: None,
             recording: None,
             vdi: None,
+            rdp: None,
         }
     }
 }

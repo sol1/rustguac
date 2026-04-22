@@ -255,6 +255,83 @@ fn generate_share_token() -> String {
     hex::encode(bytes)
 }
 
+/// Resolve the RDP NLA authentication package for this session.
+///
+/// Precedence: per-entry (or per-request) value if non-empty, else the
+/// server-wide `[rdp] default_auth_pkg`, else `"ntlm"`. We default to
+/// NTLM because Kerberos requires a KDC reachable via DNS (often over
+/// TCP) and its failure mode is a silent hang that looks like a stuck
+/// RDP connection. Admins who actually run Kerberos-integrated hosts
+/// can set `default_auth_pkg = "kerberos"` or `"negotiate"` in
+/// `config.toml`.
+fn resolve_rdp_auth_pkg(entry_value: Option<&str>, config: &Config) -> Option<String> {
+    if let Some(v) = entry_value {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    if let Some(ref rdp) = config.rdp {
+        if let Some(ref pkg) = rdp.default_auth_pkg {
+            let trimmed = pkg.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    Some("ntlm".to_string())
+}
+
+#[cfg(test)]
+mod auth_pkg_tests {
+    use super::*;
+
+    fn cfg(default_auth_pkg: Option<&str>) -> Config {
+        let mut c = Config::default();
+        c.rdp = Some(crate::config::RdpConfig {
+            default_auth_pkg: default_auth_pkg.map(|s| s.to_string()),
+        });
+        c
+    }
+
+    #[test]
+    fn entry_value_wins_over_server_default() {
+        let c = cfg(Some("ntlm"));
+        assert_eq!(
+            resolve_rdp_auth_pkg(Some("kerberos"), &c),
+            Some("kerberos".into())
+        );
+    }
+
+    #[test]
+    fn empty_entry_value_falls_through_to_server_default() {
+        let c = cfg(Some("kerberos"));
+        assert_eq!(resolve_rdp_auth_pkg(Some(""), &c), Some("kerberos".into()));
+        assert_eq!(
+            resolve_rdp_auth_pkg(Some("   "), &c),
+            Some("kerberos".into())
+        );
+    }
+
+    #[test]
+    fn no_entry_no_config_defaults_to_ntlm() {
+        let c = Config::default();
+        assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("ntlm".into()));
+    }
+
+    #[test]
+    fn empty_config_default_falls_through_to_ntlm() {
+        let c = cfg(Some(""));
+        assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("ntlm".into()));
+    }
+
+    #[test]
+    fn server_default_applies_when_entry_none() {
+        let c = cfg(Some("negotiate"));
+        assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("negotiate".into()));
+    }
+}
+
 /// Check that a host resolves to an IP within the allowed CIDR networks.
 fn check_allowed_network(host: &str, port: u16, allowed: &[String]) -> Result<(), SessionError> {
     let networks: Vec<IpNetwork> = allowed
@@ -639,7 +716,7 @@ impl SessionManager {
                     drive_name: drive_cfg.drive_name.clone(),
                     disable_download: !drive_cfg.allow_download,
                     disable_upload: !drive_cfg.allow_upload,
-                    auth_pkg: req.auth_pkg.clone(),
+                    auth_pkg: resolve_rdp_auth_pkg(req.auth_pkg.as_deref(), &self.config),
                     kdc_url: req.kdc_url.clone(),
                     kerberos_cache: req.kerberos_cache.clone(),
                     remote_app: req.remote_app.clone(),

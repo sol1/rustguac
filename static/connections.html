@@ -496,12 +496,13 @@
                 </label>
                 <label>NLA Auth Package
                     <select id="em-rdp-auth-pkg">
-                        <option value="">Default (negotiate)</option>
+                        <option value="">Server default (NTLM)</option>
                         <option value="ntlm">NTLM</option>
                         <option value="kerberos">Kerberos</option>
+                        <option value="negotiate">Negotiate (Kerberos first, NTLM fallback)</option>
                     </select>
                 </label>
-                <div class="field-hint">Force a specific NLA authentication package. Kerberos requires domain-joined machines.</div>
+                <div class="field-hint">Leave blank to use the server default (NTLM unless overridden in <code>config.toml</code> <code>[rdp] default_auth_pkg</code>). Kerberos and Negotiate need a domain-joined host with a KDC reachable via DNS; when that isn't set up the RDP connection hangs silently, so NTLM is the safe default.</div>
                 <label>KDC URL <span style="color:#666;font-size:0.85em">(Kerberos only)</span>
                     <input type="text" id="em-rdp-kdc-url" placeholder="e.g. https://dc.example.com/KdcProxy">
                 </label>
@@ -855,9 +856,87 @@
         var folderEntryCounts = {}; // "scope|path" -> count
         var folderEntries = {};    // "scope|path" -> entries array
         var subfolderCache = {};   // "scope|path" -> [FolderInfo] (lazy-loaded children)
-        var expandedPaths = {};    // "scope|path" -> true (tree expansion state)
+        var expandedPaths = {};    // "scope|path" -> true (tree expansion state; persisted)
+        var EXPANDED_STORAGE_KEY = 'rustguac_connections_expanded';
+        var SELECTED_STORAGE_KEY = 'rustguac_connections_selected';
         function folderKey(scope, path) { return scope + '|' + path; }
         function folderPath(f) { return f.path || f.name; }
+
+        // Persist tree expansion across page loads so users don't have to
+        // reopen the same folders every time. Per-browser (localStorage),
+        // not per-user. Stale keys for deleted folders are harmless: the
+        // restore walk drops anything findFolder() can't resolve.
+        function saveExpandedPaths() {
+            try { localStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify(expandedPaths)); } catch (e) {}
+        }
+        function loadExpandedPaths() {
+            try {
+                var raw = localStorage.getItem(EXPANDED_STORAGE_KEY);
+                if (raw) {
+                    var parsed = JSON.parse(raw);
+                    if (parsed && typeof parsed === 'object') expandedPaths = parsed;
+                }
+            } catch (e) { expandedPaths = {}; }
+        }
+        loadExpandedPaths();
+
+        // Persist the selected folder so reopening the page re-opens the
+        // same folder, not the alphabetical first.
+        function saveSelectedFolder() {
+            try {
+                if (selectedFolder) {
+                    localStorage.setItem(SELECTED_STORAGE_KEY, JSON.stringify({
+                        scope: selectedFolder.scope,
+                        path: folderPath(selectedFolder)
+                    }));
+                } else {
+                    localStorage.removeItem(SELECTED_STORAGE_KEY);
+                }
+            } catch (e) {}
+        }
+        function loadSelectedFolder() {
+            try {
+                var raw = localStorage.getItem(SELECTED_STORAGE_KEY);
+                if (!raw) return null;
+                var parsed = JSON.parse(raw);
+                if (parsed && parsed.scope && parsed.path) return parsed;
+            } catch (e) {}
+            return null;
+        }
+
+        // Restore the expanded tree depth-first: shallow paths must load
+        // before their descendants so findFolder() can resolve deeper keys
+        // (deeper keys live in subfolderCache which is populated by
+        // loadSubfolders of their parent). Drops any stale keys along the
+        // way. Calls the callback when the walk is done.
+        function restoreExpandedTree(cb) {
+            var keys = Object.keys(expandedPaths);
+            if (keys.length === 0) { if (cb) cb(); return; }
+            keys.sort(function (a, b) {
+                var depth = function (k) { return (k.split('|')[1] || '').split('/').length; };
+                return depth(a) - depth(b);
+            });
+            var queue = keys.slice();
+            function processNext() {
+                if (queue.length === 0) { if (cb) cb(); return; }
+                var key = queue.shift();
+                var sep = key.indexOf('|');
+                if (sep < 0) { processNext(); return; }
+                var scope = key.slice(0, sep);
+                var path = key.slice(sep + 1);
+                var f = findFolder(scope, path);
+                if (!f) {
+                    // Folder no longer exists (deleted, renamed, ACL change);
+                    // drop the stale key so it doesn't drift forever.
+                    delete expandedPaths[key];
+                    processNext();
+                    return;
+                }
+                if (subfolderCache[key]) { processNext(); return; }
+                loadSubfolders(scope, path, processNext);
+            }
+            processNext();
+        }
         var currentEntries = []; // entries for the currently selected folder
         var loginScriptsCache = null; // cached list from /api/login-scripts
         var knownGroupsCache = null;  // cached list from /api/auth/known-groups
@@ -1402,12 +1481,33 @@
                     document.getElementById('empty-state').style.display = 'none';
                     document.getElementById('main-content').style.display = '';
                     renderFolders();
-                    // Auto-select first folder if none selected
-                    if (!selectedFolder && folders.length > 0) {
-                        selectedFolder = folders[0];
+                    // Restore: expanded tree first (populates subfolderCache so
+                    // deep selections can resolve via findFolder), then the
+                    // selected folder, then fall back to folders[0] if nothing
+                    // else picked up.
+                    restoreExpandedTree(function() {
                         renderFolders();
-                        loadEntries(folders[0].scope, folderPath(folders[0]));
-                    }
+                        if (!selectedFolder) {
+                            var saved = loadSelectedFolder();
+                            if (saved) {
+                                var f = findFolder(saved.scope, saved.path);
+                                if (f) {
+                                    selectedFolder = f;
+                                    renderFolders();
+                                    loadEntries(f.scope, folderPath(f));
+                                    maybeAutoOpenSingleton();
+                                    return;
+                                }
+                            }
+                            // Nothing restored; pick the first folder.
+                            selectedFolder = folders[0];
+                            saveSelectedFolder();
+                            renderFolders();
+                            loadEntries(folders[0].scope, folderPath(folders[0]));
+                        }
+                        maybeAutoOpenSingleton();
+                    });
+                    return;
                 }
                 maybeAutoOpenSingleton();
             })
@@ -1492,6 +1592,7 @@
 
             row.addEventListener('click', function() {
                 selectedFolder = f;
+                saveSelectedFolder();
                 renderFolders();
                 loadEntries(f.scope, path);
             });
@@ -1532,9 +1633,11 @@
             var key = folderKey(f.scope, path);
             if (expandedPaths[key]) {
                 delete expandedPaths[key];
+                saveExpandedPaths();
                 renderFolders();
             } else {
                 expandedPaths[key] = true;
+                saveExpandedPaths();
                 renderFolders();
                 if (!subfolderCache[key]) {
                     loadSubfolders(f.scope, path, function() { renderFolders(); });
@@ -2047,10 +2150,12 @@
                         var parentPath = subfolderParent.path;
                         var parentKey = folderKey(parentScope, parentPath);
                         expandedPaths[parentKey] = true;
+                        saveExpandedPaths();
                         delete subfolderCache[parentKey];
                         var parent = findFolder(parentScope, parentPath);
                         if (parent) parent.has_children = true;
                         selectedFolder = { name: name, scope: postScope, description: desc, path: fullPath, has_children: false };
+                        saveSelectedFolder();
                         subfolderParent = null;
                         loadSubfolders(parentScope, parentPath, function() {
                             renderFolders();
@@ -2058,6 +2163,7 @@
                         });
                     } else {
                         selectedFolder = { name: name, scope: scope, description: desc, path: name, has_children: false };
+                        saveSelectedFolder();
                         loadFolders();
                     }
                 })
@@ -2091,6 +2197,7 @@
                     showInfo(msg);
                 }
                 selectedFolder = null;
+                saveSelectedFolder();
                 subfolderCache = {}; // drop all cached subfolder listings; they may reference the deleted path
                 document.getElementById('entries-header').style.display = 'none';
                 document.getElementById('entries-content').innerHTML = '<p class="empty">Select a folder to view entries.</p>';
@@ -2969,6 +3076,7 @@
                         }).then(function() {
                             // Switch to the target folder
                             selectedFolder = findFolder(targetScope, targetFolder) || selectedFolder;
+                            saveSelectedFolder();
                         });
                     }
                 })

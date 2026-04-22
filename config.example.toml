@@ -260,3 +260,21 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # luks_device = "/opt/rustguac/drives.luks"    # LUKS container file
 # luks_name = "rustguac-drives"                # device-mapper name
 # luks_key_path = "rustguac/luks-key"          # Vault KV path for encryption key
+
+# ──────────────────────────────────────────────────────────────────
+# RDP defaults
+# ──────────────────────────────────────────────────────────────────
+#
+# Applied to every RDP session unless the address book entry (or the
+# ad-hoc connect request) overrides the same field.
+#
+# default_auth_pkg: NLA/CredSSP authentication package. Rustguac
+# defaults to "ntlm" because Kerberos requires a KDC reachable via
+# DNS (usually over TCP) and its failure mode is a silent hang.
+# Set to "kerberos" if you actually run AD-integrated hosts with
+# Kerberos working. "negotiate" means Kerberos-first with NTLM
+# fallback and is also prone to the silent-hang failure mode.
+# Leave commented to accept the "ntlm" default.
+
+# [rdp]
+# default_auth_pkg = "ntlm"
