@@ -159,18 +159,19 @@ What this script does:
     1. Install desktop environment
     2. Install build tools (build-essential, libx264-dev, etc.)
     3. Build PulseAudio xrdp audio module from source
-    4. Switch from PipeWire-pulse to real PulseAudio
+       (and switch PipeWire-pulse to real PulseAudio)
 
   Phase 2 (temporary sid):
-    5. Add Debian sid repo with pinning
-    6. Install xorgxrdp from sid
-    7. Rebuild xrdp from sid source with --enable-x264
-    8. Remove sid repo
+    4. Add Debian sid repo with pinning
+    5. Install xorgxrdp from sid
+    6. Rebuild xrdp from sid source with --enable-x264
+       (and remove sid repo)
 
   Phase 3 (configure):
-    9. Set Xorg backend, Xwrapper, startwm.sh
-   10. Create gfx.toml (H.264 + x264 encoder)
-   11. Restart xrdp
+    7. Set Xorg backend, Xwrapper, startwm.sh
+    8. Create gfx.toml (H.264 + x264 encoder)
+    9. Fix TLS key permissions (ensure xrdp is in ssl-cert group)
+   10. Restart xrdp
 
 Examples:
   sudo bash setup-xrdp-gfx.sh                    # MATE desktop (default)
@@ -486,7 +487,35 @@ EOF
 echo "  Created $GFX_CONF"
 echo ""
 
-echo "=== Step 9: Restarting xrdp ==="
+echo "=== Step 9: Fix TLS key permissions ==="
+# Debian's stock xrdp postinst runs `adduser xrdp ssl-cert` and sets the
+# snakeoil private key readable by the ssl-cert group. The sid rebuild
+# we install earlier doesn't always re-apply this cleanly, so xrdp ends
+# up unable to read /etc/xrdp/key.pem, falls back to "classic RDP
+# security", and FreeRDP clients die with a MAC checksum error during
+# the pre-TLS handshake. Fix it explicitly here.
+#
+# Idempotent: if ssl-cert group doesn't exist (non-Debian?), skip.
+if getent group ssl-cert > /dev/null 2>&1; then
+    if id xrdp >/dev/null 2>&1; then
+        if ! id -nG xrdp | tr ' ' '\n' | grep -qx ssl-cert; then
+            usermod -aG ssl-cert xrdp
+            echo "  Added xrdp user to ssl-cert group"
+        else
+            echo "  xrdp user already in ssl-cert group"
+        fi
+    fi
+    if [ -f /etc/xrdp/key.pem ]; then
+        chgrp ssl-cert /etc/xrdp/key.pem
+        chmod 640 /etc/xrdp/key.pem
+        echo "  Fixed /etc/xrdp/key.pem ownership/mode"
+    fi
+else
+    echo "  ssl-cert group not present; skipping TLS perm fix"
+fi
+echo ""
+
+echo "=== Step 10: Restarting xrdp ==="
 systemctl restart xrdp
 echo "  xrdp restarted"
 

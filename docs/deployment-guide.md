@@ -107,6 +107,8 @@ Verify: `curl -k https://localhost:8089/api/health`
 
 HAProxy provides TLS termination, HTTP/2, WebSocket support, and Knocknoc integration.
 
+**Using nginx, Caddy, Apache, or Traefik instead?** See [reverse-proxies.md](reverse-proxies.md) for per-proxy configs and an important `%2F` gotcha that affects nested folder paths on several of them.
+
 ### Install
 
 ```bash

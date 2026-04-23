@@ -728,7 +728,7 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
     ]
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct ThemeConfig {
     /// Built-in preset name: aurora (default), dark, light, high-contrast,
     /// terminal, nord, corporate, jaguar.
@@ -1103,6 +1103,22 @@ mod tests {
         let (name, colors) = cfg.resolve();
         assert_eq!(name, "aurora");
         assert!(!colors.primary.is_empty());
+    }
+
+    #[test]
+    fn test_theme_resolve_from_default_struct_is_aurora() {
+        // When config.toml has no [theme] section at all, main.rs resolves
+        // via ThemeConfig::default(). This must produce aurora, not dark or
+        // whatever happens to be first in builtin_presets().
+        let (name, colors) = ThemeConfig::default().resolve();
+        assert_eq!(name, "aurora");
+        let aurora = builtin_presets()
+            .into_iter()
+            .find(|(n, _)| *n == "aurora")
+            .map(|(_, c)| c)
+            .expect("aurora preset should exist");
+        assert_eq!(colors.primary, aurora.primary);
+        assert_eq!(colors.bg, aurora.bg);
     }
 
     #[test]

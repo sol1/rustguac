@@ -615,6 +615,8 @@ rustguac ALL=(root) NOPASSWD: /bin/chown *:* <mount_point>
 
 An example HAProxy configuration is provided in `haproxy.example.cfg`. This is the recommended production deployment pattern.
 
+For nginx, Caddy, Apache, and Traefik setups, see [reverse-proxies.md](reverse-proxies.md) — and note the `%2F` gotcha documented there if you run into 404s on nested subfolders.
+
 ### Features
 
 - **TLS termination** at HAProxy with modern ciphersuites (TLS 1.2+, ECDHE)

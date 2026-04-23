@@ -596,11 +596,11 @@ async fn run_server(config: Config, database: Db) {
     let drive_configured = DriveConfigured(config.drive.is_some());
     let site_title = SiteTitle(config.site_title.clone());
     let theme_data = {
-        let (admin_preset, admin_colors) = config
-            .theme
-            .as_ref()
-            .map(|t| t.resolve())
-            .unwrap_or_else(|| ("dark".into(), crate::config::builtin_presets()[0].1.clone()));
+        // When [theme] is absent, resolve as if it were the default ThemeConfig.
+        // ThemeConfig::resolve() already defaults preset to "aurora" when
+        // preset is unset, so this gives "no [theme] section" the same
+        // behaviour as "[theme]\n" (empty section): aurora.
+        let (admin_preset, admin_colors) = config.theme.clone().unwrap_or_default().resolve();
         let logo_url = config.theme.as_ref().and_then(|t| t.logo_url.clone());
         let presets: std::collections::HashMap<String, crate::config::ThemeColors> =
             crate::config::builtin_presets()

@@ -78,7 +78,7 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
 
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, &http_client)
         .await
-        .map_err(|e| format!("OIDC discovery failed: {:?}", e))?;
+        .map_err(|e| friendly_discovery_error(&format!("{:?}", e)))?;
 
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
@@ -532,6 +532,82 @@ fn extract_cookie_from_headers(headers: &axum::http::HeaderMap, name: &str) -> O
         })
 }
 
+/// Reshape the openidconnect crate's discovery error into something an
+/// operator can act on without grepping Debug output.
+///
+/// The specific case we handle is the issuer-URI mismatch that OIDC
+/// Discovery's spec demands (the `issuer` claim in the discovery document
+/// must byte-for-byte match the URL the client used to fetch it). This
+/// fires for any OIDC provider where the operator has a trailing slash
+/// wrong or copy-pasted the authorisation URL instead of the issuer URL:
+/// Keycloak, Authentik, Azure AD / Entra ID, Okta, Auth0, JumpCloud,
+/// Google, and so on. The original library error gives the two URIs but
+/// phrases "expected" from the validator's perspective, which is
+/// exactly backwards for what the operator needs to do. We flip it
+/// around and name the fix explicitly.
+///
+/// Every other discovery failure (network, TLS, JSON parse, wrong path)
+/// falls through to the raw Debug string so we don't swallow useful
+/// diagnostics.
+fn friendly_discovery_error(raw: &str) -> String {
+    let (got, expected) = match parse_issuer_mismatch(raw) {
+        Some(pair) => pair,
+        None => return format!("OIDC discovery failed: {raw}"),
+    };
+
+    // `got` is what the provider actually advertises in its discovery
+    // document; `expected` is what the library was told by the config.
+    // The operator always needs to change `expected` to match `got`.
+    let headline;
+    let fix;
+    if got.trim_end_matches('/') == expected.trim_end_matches('/') {
+        // Slash-only mismatch — the overwhelmingly common case.
+        if expected.ends_with('/') && !got.ends_with('/') {
+            headline = "issuer_url has an extra trailing slash";
+            fix = "remove the trailing slash from issuer_url".to_string();
+        } else {
+            headline = "issuer_url is missing a trailing slash";
+            fix = "add a trailing slash to issuer_url".to_string();
+        }
+    } else {
+        // Genuinely different URLs (different host, different path, wrong
+        // URL copied from the provider console). Operator needs to see
+        // both sides and swap in the right one.
+        headline = "issuer_url does not match the provider's advertised value";
+        fix = format!("set issuer_url = \"{got}\" in your [oidc] config");
+    }
+
+    format!(
+        "OIDC discovery failed: {headline}.\n  \
+         config:   \"{expected}\"\n  \
+         provider: \"{got}\"\n  \
+         Fix: {fix}."
+    )
+}
+
+/// Extract (got, expected) from the openidconnect crate's issuer-mismatch
+/// validation error. The error is Debug-formatted into the enclosing code
+/// path and reliably contains:
+///     unexpected issuer URI `GOT` (expected `EXPECTED`)
+/// Returns None for any other shape so the caller falls through to the raw
+/// error text.
+fn parse_issuer_mismatch(raw: &str) -> Option<(String, String)> {
+    let tag = "unexpected issuer URI `";
+    let start = raw.find(tag)? + tag.len();
+    let after = &raw[start..];
+    let got_end = after.find('`')?;
+    let got = after[..got_end].to_string();
+
+    let rest = &after[got_end + 1..];
+    let expected_tag = "(expected `";
+    let expected_start = rest.find(expected_tag)? + expected_tag.len();
+    let expected_rest = &rest[expected_start..];
+    let expected_end = expected_rest.find('`')?;
+    let expected = expected_rest[..expected_end].to_string();
+
+    Some((got, expected))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,5 +695,75 @@ mod tests {
         let jwt = make_jwt(&serde_json::json!({"roles": ["r1", "r2"], "groups": ["g1"]}));
         assert_eq!(extract_groups_from_jwt(&jwt, "roles"), vec!["r1", "r2"]);
         assert_eq!(extract_groups_from_jwt(&jwt, "groups"), vec!["g1"]);
+    }
+
+    // ── Discovery error wrapping ────────────────────────────────────────
+
+    #[test]
+    fn parse_issuer_mismatch_extracts_both_uris() {
+        let raw = "Validation(\"unexpected issuer URI `https://oauth.jumpcloud.com` (expected `https://oauth.jumpcloud.com/`)\")";
+        let (got, expected) = parse_issuer_mismatch(raw).expect("should parse");
+        assert_eq!(got, "https://oauth.jumpcloud.com");
+        assert_eq!(expected, "https://oauth.jumpcloud.com/");
+    }
+
+    #[test]
+    fn parse_issuer_mismatch_handles_opposite_slash_direction() {
+        // JumpCloud's other endpoint: the mirror-image of the JumpCloud bug.
+        let raw = "Validation(\"unexpected issuer URI `https://oauth.id.jumpcloud.com/` (expected `https://oauth.id.jumpcloud.com`)\")";
+        let (got, expected) = parse_issuer_mismatch(raw).expect("should parse");
+        assert_eq!(got, "https://oauth.id.jumpcloud.com/");
+        assert_eq!(expected, "https://oauth.id.jumpcloud.com");
+    }
+
+    #[test]
+    fn parse_issuer_mismatch_returns_none_for_unrelated_errors() {
+        assert!(parse_issuer_mismatch("Request(reqwest::Error { ... })").is_none());
+        assert!(parse_issuer_mismatch("random string").is_none());
+        assert!(parse_issuer_mismatch("").is_none());
+    }
+
+    #[test]
+    fn friendly_discovery_error_extra_slash_in_config() {
+        // Config has trailing slash, provider advertises without.
+        let raw = "Validation(\"unexpected issuer URI `https://oauth.jumpcloud.com` (expected `https://oauth.jumpcloud.com/`)\")";
+        let msg = friendly_discovery_error(raw);
+        assert!(msg.contains("issuer_url has an extra trailing slash"));
+        assert!(msg.contains("config:   \"https://oauth.jumpcloud.com/\""));
+        assert!(msg.contains("provider: \"https://oauth.jumpcloud.com\""));
+        assert!(msg.contains("Fix: remove the trailing slash from issuer_url"));
+    }
+
+    #[test]
+    fn friendly_discovery_error_missing_slash_in_config() {
+        // Provider advertises with trailing slash, config doesn't have one.
+        let raw = "Validation(\"unexpected issuer URI `https://auth.example.com/realms/corp/` (expected `https://auth.example.com/realms/corp`)\")";
+        let msg = friendly_discovery_error(raw);
+        assert!(msg.contains("issuer_url is missing a trailing slash"));
+        assert!(msg.contains("config:   \"https://auth.example.com/realms/corp\""));
+        assert!(msg.contains("provider: \"https://auth.example.com/realms/corp/\""));
+        assert!(msg.contains("Fix: add a trailing slash to issuer_url"));
+    }
+
+    #[test]
+    fn friendly_discovery_error_different_urls_entirely() {
+        // Azure-AD-style: the v2.0 authority URL vs the actual issuer.
+        // Works for any provider where the operator copy-pasted a wrong URL.
+        let raw = "Validation(\"unexpected issuer URI `https://sts.windows.net/tenant-id/` (expected `https://login.microsoftonline.com/tenant-id/v2.0`)\")";
+        let msg = friendly_discovery_error(raw);
+        assert!(msg.contains("issuer_url does not match the provider's advertised value"));
+        assert!(msg.contains("config:   \"https://login.microsoftonline.com/tenant-id/v2.0\""));
+        assert!(msg.contains("provider: \"https://sts.windows.net/tenant-id/\""));
+        assert!(msg.contains("Fix: set issuer_url = \"https://sts.windows.net/tenant-id/\""));
+    }
+
+    #[test]
+    fn friendly_discovery_error_passes_through_other_errors() {
+        let raw = "Request(NetworkError(connect_timeout))";
+        let msg = friendly_discovery_error(raw);
+        assert_eq!(
+            msg,
+            "OIDC discovery failed: Request(NetworkError(connect_timeout))"
+        );
     }
 }
