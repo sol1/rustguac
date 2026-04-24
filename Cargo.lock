@@ -3386,7 +3386,7 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "bollard",
- "cbc 0.1.2",
+ "cbc 0.2.0",
  "chrono",
  "clap",
  "futures-util",
