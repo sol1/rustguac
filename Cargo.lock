@@ -3397,7 +3397,7 @@ dependencies = [
  "openidconnect",
  "pbkdf2 0.12.2",
  "pulldown-cmark",
- "rand 0.9.4",
+ "rand 0.10.1",
  "rcgen",
  "reqwest",
  "rusqlite",
