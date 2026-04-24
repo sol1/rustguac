@@ -38,7 +38,7 @@ subtle = "2"
 aes = "0.8"
 cbc = "0.1"
 pbkdf2 = { version = "0.12", default-features = false }
-hmac = "0.12"
+hmac = "0.13"
 sha1 = "0.10"
 
 # Database

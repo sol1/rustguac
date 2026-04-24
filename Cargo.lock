@@ -3391,7 +3391,7 @@ dependencies = [
  "clap",
  "futures-util",
  "hex",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "ipnetwork",
  "libc",
  "openidconnect",
