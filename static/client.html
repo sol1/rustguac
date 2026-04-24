@@ -900,6 +900,44 @@
                 document.getElementById('disconnected-overlay').className = 'visible';
             };
 
+            // Wire tunnel events back into the client. Upstream Guacamole's
+            // Client.js deliberately doesn't listen on tunnel.onerror /
+            // tunnel.onstatechange — the Apache webapp installs those
+            // handlers externally via AngularJS. Our lean client.html
+            // inherits Tunnel.js + Client.js from upstream but used to
+            // miss this glue, so when a mid-path middlebox silently
+            // dropped the WS and socket.onclose fired, the tunnel would
+            // transition to CLOSED, fire onerror into the void, and the
+            // Guacamole client would stay stuck in CONNECTED forever.
+            // Effect: the user saw a frozen tab, no "Session Ended"
+            // overlay, and the browser kept uploading thumbnails into
+            // 404 responses for hours. Forwarding tunnel events into the
+            // existing client.onerror closes that loop.
+            tunnel.onerror = function(status) {
+                if (typeof console !== 'undefined')
+                    console.log('[rustguac] tunnel error:',
+                                status && status.message,
+                                'code=' + (status && status.code));
+                if (client.onerror) client.onerror(status || {
+                    code: 519,
+                    message: 'Connection lost'
+                });
+            };
+            tunnel.onstatechange = function(state) {
+                if (state === Guacamole.Tunnel.State.CLOSED) {
+                    if (typeof console !== 'undefined')
+                        console.log('[rustguac] tunnel closed');
+                    if (client.onerror) client.onerror({
+                        code: 519,
+                        message: 'Connection lost'
+                    });
+                } else if (state === Guacamole.Tunnel.State.UNSTABLE) {
+                    if (typeof console !== 'undefined')
+                        console.log('[rustguac] tunnel unstable');
+                    statusEl.textContent = 'Connection unstable...';
+                }
+            };
+
             // Disconnected overlay buttons
             document.getElementById('btn-close-session').addEventListener('click', function() {
                 window.close();
