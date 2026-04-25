@@ -3381,7 +3381,7 @@ dependencies = [
 name = "rustguac"
 version = "1.6.5"
 dependencies = [
- "aes 0.8.4",
+ "aes 0.9.0",
  "axum",
  "axum-server",
  "base64 0.22.1",
