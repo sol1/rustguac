@@ -194,6 +194,10 @@
         var shareToken = urlParams.get('token');
         var apiKey = sessionStorage.getItem('rustguac_api_key');
         var entryName = urlParams.get('name');
+        // Populated from /api/sessions/:id when the session is backed by a
+        // Connections entry. Used by the Reconnect button to launch a fresh
+        // session against the same entry instead of reloading a dead one.
+        var relaunchInfo = null;
 
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             var siteTitle = d.site_title || 'rustguac';
@@ -252,7 +256,16 @@
                 if (!res.ok) { statusEl.textContent = 'Error: Session not found'; throw new Error('Session not found'); }
                 return res.json();
             })
-            .then(function(session) { return showBanner(session.banner); })
+            .then(function(session) {
+                if (session && session.address_book_entry) {
+                    relaunchInfo = {
+                        entry_key: session.address_book_entry,
+                        folder: session.address_book_folder || '',
+                        display_name: session.entry_display_name || ''
+                    };
+                }
+                return showBanner(session.banner);
+            })
             .then(function() { startGuacamole(); })
             .catch(function(err) { statusEl.textContent = 'Error: ' + err.message; });
         }
@@ -895,6 +908,9 @@
             client.onerror = function(status) {
                 statusEl.textContent = 'Error: ' + (status.message || 'Unknown error');
                 statusEl.className = '';
+                // Stop the 10s thumbnail uploader; the session is dead and
+                // each XHR would otherwise 404 against a cleaned-up id.
+                if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                 document.getElementById('disconnected-title').textContent = 'Connection Error';
                 document.getElementById('disconnected-message').textContent = status.message || 'An error occurred.';
                 document.getElementById('disconnected-overlay').className = 'visible';
@@ -944,8 +960,88 @@
                 // window.close() may be blocked if not opened by script — navigate away as fallback
                 window.location.href = '/';
             });
+            // Reconnect launches a fresh session against the same Connections
+            // entry, then navigates to it. Reloading the dead session URL
+            // would just re-trigger the overlay because the original session
+            // transitioned to Completed the moment the WebSocket closed.
             document.getElementById('btn-reconnect').addEventListener('click', function() {
-                window.location.reload();
+                var btn = this;
+                btn.disabled = true;
+                btn.textContent = 'Reconnecting...';
+
+                // Share-token / shadow viewers can't mint a new session.
+                // Reload keeps current behaviour (it will fail the same way,
+                // but they have no other recourse from this page).
+                if (shareToken) {
+                    window.location.reload();
+                    return;
+                }
+
+                // Ad-hoc sessions have no entry to relaunch from. Send the
+                // user back to Connections so they can pick where to go.
+                if (!relaunchInfo) {
+                    window.location.href = '/connections.html';
+                    return;
+                }
+
+                // Composite key is "scope/folder/entry". Folder may itself
+                // contain slashes; entry names cannot (validated server-side
+                // in vault.rs validate_name), so first/last segment splits
+                // cleanly recover scope and entry.
+                var key = relaunchInfo.entry_key;
+                var firstSlash = key.indexOf('/');
+                var lastSlash = key.lastIndexOf('/');
+                if (firstSlash < 0 || lastSlash <= firstSlash) {
+                    window.location.href = '/connections.html';
+                    return;
+                }
+                var scope = key.substring(0, firstSlash);
+                var folder = relaunchInfo.folder;
+                var entry = key.substring(lastSlash + 1);
+
+                var headers = { 'Content-Type': 'application/json' };
+                if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+
+                var body = {
+                    width: window.innerWidth,
+                    height: window.innerHeight,
+                    dpi: Math.round((window.devicePixelRatio || 1) * 96)
+                };
+
+                var url = '/api/addressbook/folders/' + encodeURIComponent(scope)
+                    + '/' + encodeURIComponent(folder)
+                    + '/entries/' + encodeURIComponent(entry) + '/connect';
+
+                fetch(url, {
+                    method: 'POST',
+                    headers: headers,
+                    credentials: 'same-origin',
+                    body: JSON.stringify(body)
+                })
+                .then(function(res) {
+                    if (!res.ok) {
+                        // 412 missing creds, 403 forbidden, 404 entry gone:
+                        // none of those are fixable from this page. Punt to
+                        // Connections where the user can fill in what's
+                        // missing or pick a different entry.
+                        window.location.href = '/connections.html';
+                        return;
+                    }
+                    return res.json().then(function(data) {
+                        if (data && data.client_url) {
+                            var dest = data.client_url;
+                            if (relaunchInfo.display_name) {
+                                dest += '?name=' + encodeURIComponent(relaunchInfo.display_name);
+                            }
+                            window.location.href = dest;
+                        } else {
+                            window.location.href = '/connections.html';
+                        }
+                    });
+                })
+                .catch(function() {
+                    window.location.href = '/connections.html';
+                });
             });
 
             // ── Keyboard — attached to display so it doesn't steal from textarea ──
