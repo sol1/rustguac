@@ -287,11 +287,12 @@ mod auth_pkg_tests {
     use super::*;
 
     fn cfg(default_auth_pkg: Option<&str>) -> Config {
-        let mut c = Config::default();
-        c.rdp = Some(crate::config::RdpConfig {
-            default_auth_pkg: default_auth_pkg.map(|s| s.to_string()),
-        });
-        c
+        Config {
+            rdp: Some(crate::config::RdpConfig {
+                default_auth_pkg: default_auth_pkg.map(|s| s.to_string()),
+            }),
+            ..Config::default()
+        }
     }
 
     #[test]

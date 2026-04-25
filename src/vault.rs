@@ -1812,21 +1812,25 @@ mod tests {
 
     #[test]
     fn test_entry_credential_variables() {
-        let mut entry = AddressBookEntry::default();
-        entry.username = Some("$corp_user".into());
-        entry.password = Some("$corp_password".into());
-        entry.domain = Some("CORP".into()); // literal, not a variable
+        let entry = AddressBookEntry {
+            username: Some("$corp_user".into()),
+            password: Some("$corp_password".into()),
+            domain: Some("CORP".into()), // literal, not a variable
+            ..AddressBookEntry::default()
+        };
         let vars = entry_credential_variables(&entry);
         assert_eq!(vars, vec!["corp_user", "corp_password"]);
     }
 
     #[test]
     fn test_resolve_credential_variables_success() {
-        let mut entry = AddressBookEntry::default();
-        entry.username = Some("$corp_user".into());
-        entry.password = Some("$corp_password".into());
-        entry.domain = Some("CORP".into());
-        entry.hostname = Some("rdp.example.com".into());
+        let entry = AddressBookEntry {
+            username: Some("$corp_user".into()),
+            password: Some("$corp_password".into()),
+            domain: Some("CORP".into()),
+            hostname: Some("rdp.example.com".into()),
+            ..AddressBookEntry::default()
+        };
 
         let mut creds = HashMap::new();
         creds.insert("corp_user".into(), "alice".into());
@@ -1841,9 +1845,11 @@ mod tests {
 
     #[test]
     fn test_resolve_credential_variables_missing() {
-        let mut entry = AddressBookEntry::default();
-        entry.username = Some("$corp_user".into());
-        entry.password = Some("$corp_password".into());
+        let entry = AddressBookEntry {
+            username: Some("$corp_user".into()),
+            password: Some("$corp_password".into()),
+            ..AddressBookEntry::default()
+        };
 
         let creds = HashMap::new(); // empty
         let err = resolve_credential_variables(&entry, &creds).unwrap_err();
@@ -1852,9 +1858,11 @@ mod tests {
 
     #[test]
     fn test_resolve_credential_variables_no_variables() {
-        let mut entry = AddressBookEntry::default();
-        entry.username = Some("alice".into());
-        entry.password = Some("literal_pass".into());
+        let entry = AddressBookEntry {
+            username: Some("alice".into()),
+            password: Some("literal_pass".into()),
+            ..AddressBookEntry::default()
+        };
 
         let creds = HashMap::new();
         let resolved = resolve_credential_variables(&entry, &creds).unwrap();
@@ -1982,7 +1990,7 @@ mod tests {
 
     #[test]
     fn validate_path_rejects_overlong() {
-        let overlong = format!("{}", "a".repeat(257));
+        let overlong = "a".repeat(257);
         assert!(validate_path(&overlong).is_err());
     }
 }
