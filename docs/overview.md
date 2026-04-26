@@ -30,8 +30,8 @@ rustguac and Apache Guacamole share the same foundation:
 
 | Feature | Apache Guacamole | rustguac |
 |---------|-----------------|----------|
-| **Runtime** | Java (Tomcat + Spring) | Rust (single binary) |
-| **Database** | MySQL/PostgreSQL/LDAP | SQLite (embedded) |
+| **Runtime** | Java (Tomcat + Guice + Jersey) | Rust (single binary) |
+| **Database** | MySQL/PostgreSQL | SQLite (embedded) |
 | **Credential storage** | Database tables | Vault KV v2 (server-side only) |
 | **Authentication** | LDAP, RADIUS, TOTP, SAML, database | OIDC SSO + API keys |
 | **Web sessions** | Not supported | Headless Chromium on Xvnc |
