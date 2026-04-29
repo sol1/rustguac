@@ -925,6 +925,7 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/ws-ticket", post(api::create_ws_ticket))
         // Address book routes
         .route("/api/addressbook", get(api::ab_list_all))
+        .route("/api/addressbook/search-index", get(api::ab_search_index))
         .route("/api/addressbook/folders", get(api::ab_list_folders))
         .route("/api/addressbook/folders", post(api::ab_create_folder))
         .route(

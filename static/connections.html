@@ -369,7 +369,7 @@
                     <div class="folder-actions">
                         <strong id="entries-title"></strong>
                         <span id="entries-desc" class="desc"></span>
-                        <span style="flex:1"></span>
+                        <input type="search" id="connections-search" class="connections-search" placeholder="Search connections..." autocomplete="off" disabled />
                         <button class="btn-add admin-only" id="btn-new-entry" style="display:none">+ add entry</button>
                         <button class="btn-add admin-only" id="btn-new-subfolder" style="display:none" title="Create subfolder under this folder">+ subfolder</button>
                         <button class="btn-small admin-only" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
@@ -859,6 +859,11 @@
         var expandedPaths = {};    // "scope|path" -> true (tree expansion state; persisted)
         var EXPANDED_STORAGE_KEY = 'rustguac_connections_expanded';
         var SELECTED_STORAGE_KEY = 'rustguac_connections_selected';
+        // Quick-find search state
+        var searchIndex = null;        // [{scope, folderPath, entry, label, host, haystack}]
+        var searchIndexLoading = false;
+        var searchQuery = '';          // current query (lowercased & trimmed)
+        var searchActive = false;      // entries-content showing results, not folder entries
         function folderKey(scope, path) { return scope + '|' + path; }
         function folderPath(f) { return f.path || f.name; }
 
@@ -1507,9 +1512,11 @@
                         }
                         maybeAutoOpenSingleton();
                     });
+                    loadSearchIndex();
                     return;
                 }
                 maybeAutoOpenSingleton();
+                loadSearchIndex();
             })
             .catch(function(err) {
                 showError('Failed to load folders: ' + err.message);
@@ -1686,6 +1693,213 @@
                 }
             }
             return null;
+        }
+
+        // ── Quick-find search ──────────────────────────────────────────────
+        // Index is fetched once after loadFolders() and after any mutation that
+        // already triggers a refresh. Search runs entirely client-side against
+        // the in-memory haystack.
+
+        function loadSearchIndex() {
+            var input = document.getElementById('connections-search');
+            if (!input) return;
+            searchIndexLoading = true;
+            input.placeholder = 'Indexing...';
+            input.disabled = true;
+            fetch('/api/addressbook/search-index', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                return res.json();
+            })
+            .then(function(data) {
+                var rows = (data && data.entries) || [];
+                searchIndex = rows.map(function(r) {
+                    var e = r.entry;
+                    var label = e.display_name || e.name;
+                    var host = e.session_type === 'web' ? (e.url || '')
+                             : e.session_type === 'vdi' ? (e.container_image || '')
+                             : (e.hostname || '');
+                    var haystack = [
+                        e.name,
+                        e.display_name || '',
+                        host,
+                        e.username || '',
+                        e.url || '',
+                        e.domain || '',
+                        e.session_type,
+                        r.folder_path
+                    ].join(' ').toLowerCase();
+                    return {
+                        scope: r.scope,
+                        folderPath: r.folder_path,
+                        entry: e,
+                        label: label,
+                        host: host,
+                        haystack: haystack
+                    };
+                });
+                searchIndexLoading = false;
+                input.placeholder = 'Search ' + searchIndex.length + ' connection' + (searchIndex.length === 1 ? '' : 's') + '... (press / )';
+                input.disabled = false;
+                if (searchQuery) runSearch();
+            })
+            .catch(function(err) {
+                searchIndexLoading = false;
+                input.placeholder = 'Search unavailable';
+                input.disabled = false;
+                if (window.console) console.warn('Search index failed:', err.message);
+            });
+        }
+
+        function runSearch() {
+            var input = document.getElementById('connections-search');
+            if (!input) return;
+            var q = (input.value || '').trim().toLowerCase();
+            searchQuery = q;
+            if (!q) {
+                if (searchActive) {
+                    searchActive = false;
+                    if (selectedFolder) {
+                        loadEntries(selectedFolder.scope, folderPath(selectedFolder));
+                    } else {
+                        document.getElementById('entries-content').innerHTML =
+                            '<p class="empty">Select a folder to view entries.</p>';
+                    }
+                }
+                return;
+            }
+            searchActive = true;
+            if (!searchIndex) {
+                document.getElementById('entries-content').innerHTML =
+                    '<p class="empty">Indexing connections, please wait...</p>';
+                return;
+            }
+            var tokens = q.split(/\s+/).filter(Boolean);
+            var matches = [];
+            for (var i = 0; i < searchIndex.length; i++) {
+                var row = searchIndex[i];
+                var ok = true;
+                for (var t = 0; t < tokens.length; t++) {
+                    if (row.haystack.indexOf(tokens[t]) === -1) { ok = false; break; }
+                }
+                if (!ok) continue;
+                var first = tokens[0];
+                var lcLabel = row.label.toLowerCase();
+                var lcName = row.entry.name.toLowerCase();
+                var score = 0;
+                if (lcLabel.indexOf(first) === 0 || lcName.indexOf(first) === 0) score += 100;
+                else if (lcLabel.indexOf(first) !== -1 || lcName.indexOf(first) !== -1) score += 50;
+                if ((row.host || '').toLowerCase().indexOf(first) !== -1) score += 20;
+                if (row.folderPath.toLowerCase().indexOf(first) !== -1) score += 10;
+                matches.push({ row: row, score: score });
+            }
+            matches.sort(function(a, b) {
+                if (b.score !== a.score) return b.score - a.score;
+                if (a.row.folderPath !== b.row.folderPath) return a.row.folderPath.localeCompare(b.row.folderPath);
+                return a.row.label.localeCompare(b.row.label);
+            });
+            renderSearchResults(matches, q, tokens);
+        }
+
+        function renderSearchResults(matches, query, tokens) {
+            var content = document.getElementById('entries-content');
+            if (matches.length === 0) {
+                content.innerHTML = '<div class="empty-state" style="padding:2em;margin:1em 0">' +
+                    '<p style="color:var(--text-dim);margin:0">No matches for ' + escapeHtml(query) + '</p>' +
+                    '</div>';
+                return;
+            }
+            var maxResults = 50;
+            var more = matches.length - maxResults;
+            var shown = matches.slice(0, maxResults);
+            var html = '<table class="entries-table"><thead><tr>' +
+                '<th>Name</th><th>Type</th><th>Host</th><th>User</th><th>Folder</th><th></th><th></th>' +
+                '</tr></thead><tbody>';
+            shown.forEach(function(m) {
+                var r = m.row;
+                var e = r.entry;
+                var typeLabel = e.session_type.toUpperCase();
+                if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
+                var typeCls = 'type-' + e.session_type;
+                var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web';
+                var connectLabel = needsPrompt ? 'Login...' : 'Connect';
+                var userCol = e.username ? highlight(e.username, tokens) : '';
+                if (needsPrompt && userCol) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials prompted at connect">[prompt]</span>';
+                var scopeIcon = r.scope === 'shared' ? '⊕' : '▣';
+                html += '<tr>';
+                html += '<td>' + highlight(r.label, tokens) + '</td>';
+                html += '<td><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
+                html += '<td>' + highlight(r.host || '', tokens) + '</td>';
+                html += '<td>' + userCol + '</td>';
+                html += '<td><span class="search-folder-cell"><span class="folder-scope">' + scopeIcon + '</span> ' + highlight(r.folderPath, tokens) + '</span></td>';
+                html += '<td><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">' + connectLabel + '</button></td>';
+                html += '<td><a href="#" class="search-open-folder" data-open-scope="' + escapeAttr(r.scope) + '" data-open-folder="' + escapeAttr(r.folderPath) + '" title="Open this folder">↗ open folder</a></td>';
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            if (more > 0) {
+                html += '<div class="search-more">+' + more + ' more match' + (more === 1 ? '' : 'es') + ' — refine your search to narrow results</div>';
+            }
+            content.innerHTML = html;
+        }
+
+        function highlight(text, tokens) {
+            var safe = escapeHtml(text || '');
+            if (!tokens || !tokens.length) return safe;
+            var escaped = tokens
+                .filter(function(t) { return t.length > 0; })
+                .map(function(t) { return t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+            if (!escaped.length) return safe;
+            var re = new RegExp('(' + escaped.join('|') + ')', 'gi');
+            return safe.replace(re, '<mark>$1</mark>');
+        }
+
+        function openFolderFromSearch(scope, targetPath) {
+            var input = document.getElementById('connections-search');
+            if (input) input.value = '';
+            searchQuery = '';
+            searchActive = false;
+
+            var parts = targetPath.split('/');
+            var ancestors = [];
+            for (var i = 1; i < parts.length; i++) {
+                ancestors.push(parts.slice(0, i).join('/'));
+            }
+            ancestors.forEach(function(p) {
+                expandedPaths[folderKey(scope, p)] = true;
+            });
+            saveExpandedPaths();
+
+            var idx = 0;
+            function loadNext() {
+                if (idx >= ancestors.length) {
+                    var target = findFolder(scope, targetPath);
+                    if (target) {
+                        selectedFolder = target;
+                        saveSelectedFolder();
+                        renderFolders();
+                        loadEntries(scope, targetPath);
+                        setTimeout(function() {
+                            try {
+                                var sel = '.folder-list li[data-scope="' + scope + '"][data-path="' + targetPath.replace(/"/g, '\\"') + '"]';
+                                var row = document.querySelector(sel);
+                                if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+                            } catch (_) { /* selector edge case — non-fatal */ }
+                        }, 80);
+                    } else {
+                        renderFolders();
+                    }
+                    return;
+                }
+                var p = ancestors[idx++];
+                var key = folderKey(scope, p);
+                if (subfolderCache[key]) {
+                    loadNext();
+                } else {
+                    loadSubfolders(scope, p, loadNext);
+                }
+            }
+            loadNext();
         }
 
         function loadEntries(scope, folderPath, forceRefresh) {
@@ -1907,16 +2121,39 @@
 
         document.getElementById('entries-content').addEventListener('click', function(e) {
             var btn = e.target;
+
+            // Open folder from a search result row
+            var openLink = btn.closest && btn.closest('.search-open-folder');
+            if (openLink) {
+                e.preventDefault();
+                openFolderFromSearch(
+                    openLink.getAttribute('data-open-scope'),
+                    openLink.getAttribute('data-open-folder')
+                );
+                return;
+            }
+
             if (btn.getAttribute('data-connect')) {
                 var name = btn.getAttribute('data-connect');
                 var scope = btn.getAttribute('data-scope');
                 var folder = btn.getAttribute('data-folder');
                 clearError();
 
-                // Find the entry data to check if credentials are stored
+                // Find the entry data. When the table is showing search results,
+                // currentEntries is the previously-selected folder's entries —
+                // look in searchIndex instead.
                 var entry = null;
-                for (var i = 0; i < currentEntries.length; i++) {
-                    if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
+                if (searchActive && searchIndex) {
+                    for (var si = 0; si < searchIndex.length; si++) {
+                        var r = searchIndex[si];
+                        if (r.scope === scope && r.folderPath === folder && r.entry.name === name) {
+                            entry = r.entry; break;
+                        }
+                    }
+                } else {
+                    for (var i = 0; i < currentEntries.length; i++) {
+                        if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
+                    }
                 }
 
                 // Prompt for credentials if prompt_credentials is set or no stored creds
@@ -3125,6 +3362,39 @@
                     el.classList.remove('active');
                     entryTypeSelect.disabled = false;
                 });
+            }
+        });
+
+        // Quick-find: '/' focuses search, Esc clears + blurs.
+        // Skip when typing in any input/textarea or when a modal is open.
+        var _searchInput = document.getElementById('connections-search');
+        if (_searchInput) {
+            _searchInput.addEventListener('input', runSearch);
+            _searchInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    if (_searchInput.value) {
+                        _searchInput.value = '';
+                        runSearch();
+                    } else {
+                        _searchInput.blur();
+                    }
+                    e.stopPropagation();
+                }
+            });
+        }
+        document.addEventListener('keydown', function(e) {
+            if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+            var t = document.activeElement;
+            if (t) {
+                var tag = t.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable) return;
+            }
+            if (document.querySelector('.modal-overlay.active')) return;
+            var input = document.getElementById('connections-search');
+            if (input && !input.disabled) {
+                e.preventDefault();
+                input.focus();
+                input.select();
             }
         });
 

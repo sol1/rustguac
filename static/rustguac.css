@@ -742,3 +742,47 @@ form.card,
 .flow-node-hop { background: var(--hop-bg); color: var(--hop-fg); }
 .flow-node-target { background: var(--input); color: var(--accent); font-weight: bold; }
 .flow-arrow { color: var(--text-muted); margin: 0 var(--s-1); }
+
+/* ── Connections quick-find ─────────────────────────────────── */
+.connections-search {
+    flex: 1 1 220px;
+    min-width: 180px;
+    max-width: 480px;
+    height: var(--ctl-md);
+    margin-left: var(--s-2);
+    margin-right: auto;
+}
+.connections-search:disabled {
+    opacity: 0.6;
+    cursor: progress;
+}
+.entries-table mark {
+    background: var(--accent);
+    color: var(--bg);
+    padding: 0 0.15em;
+    border-radius: 2px;
+}
+.search-folder-cell {
+    color: var(--text-muted);
+    font-size: var(--fz-sm);
+}
+.search-folder-cell .folder-scope {
+    color: var(--accent);
+    margin-right: 0.2em;
+}
+.search-open-folder {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: var(--fz-sm);
+    white-space: nowrap;
+}
+.search-open-folder:hover { text-decoration: underline; }
+.search-more {
+    margin-top: var(--s-2);
+    padding: var(--s-2) var(--s-3);
+    color: var(--text-muted);
+    font-size: var(--fz-sm);
+    font-style: italic;
+    text-align: center;
+    border-top: 1px dashed var(--border);
+}

@@ -1943,6 +1943,88 @@ pub async fn ab_list_all(
     Json(json!({"folders": result})).into_response()
 }
 
+/// GET /api/addressbook/search-index — Flat list of every entry the user has access to,
+/// across all folders and subfolders. Powers the Connections page quick-search.
+///
+/// Walks the full tree (top-level via list_folders, then list_subfolders per node) and
+/// emits one row per entry as `{scope, folder_path, entry: EntryInfo}`. Subfolder
+/// traversal is unconditional because a child may grant access independently of a
+/// denied parent (resolve_folder_access semantics); ACL is enforced per folder before
+/// its entries are emitted.
+pub async fn ab_search_index(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(vault): Extension<VaultState>,
+) -> impl IntoResponse {
+    let vault = match require_vault(&vault).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let id = match identity {
+        Some(Extension(ref id)) if id.has_role("operator") => id,
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "operator role required"})),
+            )
+                .into_response()
+        }
+    };
+
+    let user_groups = id.groups();
+    let is_admin = id.has_role("admin");
+
+    let top = match vault.list_folders().await {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    };
+
+    let mut queue: Vec<(String, String)> = top
+        .into_iter()
+        .map(|f| (f.scope, f.path.unwrap_or(f.name)))
+        .collect();
+    let mut emitted = Vec::new();
+
+    while let Some((scope, path)) = queue.pop() {
+        if let Ok(subs) = vault.list_subfolders(&scope, &path).await {
+            for s in subs {
+                let child_path = s.path.unwrap_or_else(|| s.name.clone());
+                queue.push((scope.clone(), child_path));
+            }
+        }
+
+        let allowed = is_admin
+            || vault
+                .resolve_folder_access(&scope, &path, user_groups)
+                .await
+                .unwrap_or(false);
+        if !allowed {
+            continue;
+        }
+
+        let names = match vault.list_entries(&scope, &path).await {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        for name in &names {
+            if let Ok(entry) = vault.get_entry(&scope, &path, name).await {
+                emitted.push(json!({
+                    "scope": scope,
+                    "folder_path": path,
+                    "entry": crate::vault::EntryInfo::from((name.as_str(), &entry)),
+                }));
+            }
+        }
+    }
+
+    Json(json!({"entries": emitted})).into_response()
+}
+
 /// GET /api/addressbook/folders/:scope/:folder/entries — List entries in a folder.
 pub async fn ab_list_entries(
     identity: Option<Extension<AuthIdentity>>,
