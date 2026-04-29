@@ -1,7 +1,7 @@
 //! SQLite database layer for admin/API key management.
 
 use chrono::{DateTime, Utc};
-use rand::Rng;
+use rand::RngExt;
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;

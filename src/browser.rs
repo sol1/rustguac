@@ -7,7 +7,7 @@ use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::time::{timeout, Duration};
 
-use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
 use hmac::Hmac;
 use sha1::Sha1;
 
@@ -618,7 +618,7 @@ fn encrypt_chromium_password(plaintext: &str) -> Result<Vec<u8>, String> {
     let mut buf = vec![0u8; plaintext_bytes.len() + 16];
     buf[..plaintext_bytes.len()].copy_from_slice(plaintext_bytes);
     let encrypted = Aes128CbcEnc::new(&key.into(), &iv.into())
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext_bytes.len())
+        .encrypt_padded::<Pkcs7>(&mut buf, plaintext_bytes.len())
         .map_err(|e| format!("AES encryption failed: {}", e))?;
 
     // Prepend "v10" version tag

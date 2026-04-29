@@ -6,7 +6,7 @@ use crate::guacd::GuacdStream;
 use crate::tunnel;
 use chrono::{DateTime, Utc};
 use ipnetwork::IpNetwork;
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;

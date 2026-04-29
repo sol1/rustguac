@@ -31,15 +31,15 @@ futures-util = "0.3"
 toml = "1"
 
 # Crypto/random
-rand = "0.9"
+rand = "0.10"
 hex = "0.4"
 sha2 = "0.11"
 subtle = "2"
-aes = "0.8"
-cbc = "0.1"
-pbkdf2 = { version = "0.12", default-features = false }
-hmac = "0.12"
-sha1 = "0.10"
+aes = "0.9"
+cbc = "0.2"
+pbkdf2 = { version = "0.13", default-features = false }
+hmac = "0.13"
+sha1 = "0.11"
 
 # Database
 rusqlite = { version = "0.39", features = ["bundled"] }
