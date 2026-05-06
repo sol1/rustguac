@@ -63,7 +63,26 @@ extra_scopes = ["groups"]
 
 [Authentik](https://goauthentik.io/) is a recommended open-source identity provider that works well with rustguac.
 
-**1. Create a provider** in Authentik:
+**1. Create a `groups` scope mapping** in Authentik (skip if your instance already has one):
+
+Authentik does not ship a `groups` scope mapping by default, so the `groups` scope cannot be selected on the provider until one exists.
+
+- Go to **Customisation > Property Mappings > Create**
+- Type: **Scope Mapping** (under OAuth2/OpenID)
+- Name: `rustguac groups`
+- Scope name: `groups`
+- Description (optional): `Group memberships for rustguac`
+- Expression:
+
+  ```python
+  return {
+      "groups": [group.name for group in request.user.ak_groups.all()],
+  }
+  ```
+
+This creates a `groups` claim in the ID token containing the user's Authentik group names. Used by rustguac for group-to-role mapping (step 6).
+
+**2. Create a provider** in Authentik:
 
 - Go to **Applications > Providers > Create**
 - Select **OAuth2/OpenID Connect**
@@ -72,10 +91,9 @@ extra_scopes = ["groups"]
 - Client type: **Confidential**
 - Redirect URIs: `https://your-rustguac-host/auth/callback`
 - Under **Advanced protocol settings**:
-  - Scopes: ensure `openid`, `email`, `profile` are selected
-  - Add the `groups` scope (creates the `groups` claim in the ID token)
+  - Scopes: ensure `openid`, `email`, `profile`, **and the `rustguac groups` mapping you created in step 1** are selected
 
-**2. Create an application:**
+**3. Create an application:**
 
 - Go to **Applications > Applications > Create**
 - Name: `rustguac`
@@ -83,12 +101,12 @@ extra_scopes = ["groups"]
 - Provider: select the provider you just created
 - Launch URL: `https://your-rustguac-host/`
 
-**3. Note the provider details:**
+**4. Note the provider details:**
 
 - Go back to the provider and note the **Client ID** and **Client Secret**
 - The **OpenID Configuration Issuer** will be: `https://authentik.example.com/application/o/rustguac/`
 
-**4. Configure rustguac:**
+**5. Configure rustguac:**
 
 ```toml
 [oidc]
@@ -106,7 +124,7 @@ chmod 600 /opt/rustguac/env
 sudo systemctl restart rustguac
 ```
 
-**5. (Optional) Set up group-to-role mappings:**
+**6. (Optional) Set up group-to-role mappings:**
 
 Create groups in Authentik (e.g., `rustguac-admins`, `rustguac-operators`) and assign users to them. Then configure group-to-role mappings in the rustguac Admin page so that group membership automatically assigns roles on login. See [Roles and Access Control](roles-and-access-control.md) for details.
 
