@@ -32,13 +32,23 @@ sudo systemctl enable --now rustguac
 
 This starts both `rustguac-guacd` (the protocol daemon) and `rustguac` (the web proxy).
 
-4. **(Recommended) Set up the connections with Vault / OpenBao:**
+4. **(Required for connections) Set up Vault or OpenBao:**
 
-The connections is rustguac's primary way to manage connections. It stores SSH, RDP, VNC, and web session entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are stored server-side and never sent to the browser.
+The connections page is rustguac's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2 — credentials never reach the browser. **Without one of these, the Connections UI is unavailable** and users can only run ad-hoc sessions via the Sessions page or the API.
 
-Without Vault, rustguac can still create ad-hoc sessions via the API, but the connections UI (the main user-facing feature) will not be available.
+For a single-host install the fastest path is the bundled quickstart helper, which auto-detects vault or bao and provisions everything:
 
-See [Vault / OpenBao Connections](integrations.md#vault--openbao-address-book) for full setup instructions, including Vault policy, AppRole configuration, and the `[vault]` config section.
+```bash
+# Against an existing Vault or OpenBao:
+export VAULT_ADDR=https://vault.example.com:8200
+export VAULT_TOKEN=hvs.xxxxxxxx
+./contrib/vault-quickstart.sh
+
+# Or install Vault locally on this box with on-disk auto-unseal:
+sudo ./contrib/vault-quickstart.sh --local
+```
+
+See [Vault / OpenBao Connections](integrations.md#vault--openbao-connections) for the manual walkthrough, mTLS, multi-instance setup, and the security caveat for `--local` mode.
 
 6. **(Optional) Set up encrypted drive storage:**
 

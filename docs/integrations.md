@@ -114,9 +114,38 @@ Create groups in Authentik (e.g., `rustguac-admins`, `rustguac-operators`) and a
 
 ## Vault / OpenBao Connections
 
-The connections stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser.
+The connections feature stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser. **Either Vault or OpenBao is required for the connections feature** (entries, folders, the Connections page); without it rustguac falls back to ad-hoc-only sessions via the Sessions page.
+
+### Quickstart script
+
+For a fresh single-host install, `contrib/vault-quickstart.sh` automates the manual steps below. It auto-detects the `vault` or `bao` CLI and supports three modes:
+
+| Mode | What it does | Use it for |
+|------|-------------|------------|
+| (default) | Provision an existing Vault using `$VAULT_ADDR` and `$VAULT_TOKEN` | Already-deployed Vault |
+| `--dev`   | Spawn an in-memory dev-mode server and provision it | Demos, throwaway development |
+| `--local` | Install Vault or OpenBao as a systemd service with file storage and on-disk auto-unseal | Single-host rustguac deployments |
+
+```bash
+# Bootstrap an existing Vault:
+export VAULT_ADDR=https://vault.example.com:8200
+export VAULT_TOKEN=hvs.xxxxxxxx
+./contrib/vault-quickstart.sh
+
+# Install Vault locally with auto-unseal (after `apt install vault`):
+sudo ./contrib/vault-quickstart.sh --local
+
+# Same with OpenBao:
+sudo ./contrib/vault-quickstart.sh --cli bao --local
+```
+
+The script does **not** install the Vault or OpenBao binary itself — install one from your distribution or the upstream packages first. After it runs, the script prints the `[vault]` block to drop into `config.toml` and the `VAULT_SECRET_ID` line for the systemd env file.
+
+> **`--local` security caveat:** the unseal key is stored on disk at `/etc/vault.d/unseal-key` (or `/etc/openbao/unseal-key`) mode 0400 root:root, and a `SECURITY.txt` file is written next to it. Anyone with root or read access to that file owns the secret store. This trade is fine for single-host rustguac boxes (where root compromise already means total compromise) but unacceptable for higher-stakes deployments. For real production use cloud-KMS auto-unseal: [Vault](https://developer.hashicorp.com/vault/docs/configuration/seal) | [OpenBao](https://openbao.org/docs/configuration/seal/).
 
 ### Vault setup
+
+The manual steps below are equivalent to what `vault-quickstart.sh` automates. Use them if you want to understand the moving parts or if you need to deviate from the defaults (mount path, policy name, AppRole TTLs).
 
 **1. Enable KV v2** (skip if already enabled):
 

@@ -46,7 +46,7 @@ guacd (C, from guacamole-server)
 - **OIDC single sign-on** — Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
 - **4-tier role system** — admin, poweruser, operator, viewer with OIDC group mapping
 - **API key auth** — SHA-256 hashed keys with IP allowlists and expiry
-- **Vault-backed connections** — credentials in HashiCorp Vault / OpenBao KV v2, never reach the browser
+- **Vault-backed connections** — credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
 - **TLS everywhere** — HTTPS for clients, TLS between rustguac and guacd
 - **CIDR allowlists** — per-protocol network restrictions for session targets
 - **Per-entry clipboard control** — disable copy and/or paste for data loss prevention
@@ -77,6 +77,15 @@ guacd (C, from guacamole-server)
 - **Session ended overlay** with Reconnect/Close buttons
 - **8 built-in themes** with CSS gradient backgrounds, or configure your own
 - **Reports page** with session analytics, history, and CSV export
+
+## Requirements
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| guacd | Bundled | Built from `apache/guacamole-server`, ships in the .deb and Docker image. No separate install. |
+| **Vault or OpenBao** | **Required for the Connections UI** | Stores connection entries and credentials server-side. Without it the Connections page is unavailable and users can only run ad-hoc sessions via the API. Use [`contrib/vault-quickstart.sh`](contrib/vault-quickstart.sh) for one-command setup (auto-detects `vault` or `bao`, supports `--dev` and `--local` modes). |
+| OIDC provider | Optional | For SSO. API-key auth works on its own. Authentik/Google/Okta/Keycloak/JumpCloud all tested. |
+| Docker | Optional | Only needed for VDI desktop containers. |
 
 ## Quick start
 

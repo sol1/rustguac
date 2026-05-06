@@ -4,7 +4,9 @@
 
 rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, web browser sessions, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
 
-rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication, session recording, VDI container orchestration, and an optional Vault-backed connections.
+rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication, session recording, VDI container orchestration, and Vault-backed connection storage.
+
+The connections feature (the main user-facing UI) requires HashiCorp Vault or OpenBao for credential storage. Without one, rustguac falls back to ad-hoc-only sessions created via the API. See [Vault / OpenBao Connections](integrations.md#vault--openbao-connections) for setup, including the `contrib/vault-quickstart.sh` helper.
 
 ## Why not Apache Guacamole?
 
