@@ -603,6 +603,15 @@ cleanup_on_close = true
 retention_secs = 0
 ```
 
+#### Cleanup behaviour
+
+| Setting | Default | What it does |
+|---------|---------|-------------|
+| `cleanup_on_close` | `true` | Whether to remove the per-session drive directory when the session ends. Set to `false` to leave files on disk (still scoped to the per-session UUID subdirectory under `drive_path`). |
+| `retention_secs` | `0` | When `cleanup_on_close = true`, how long to wait after session end before removing the directory. `0` removes immediately. **Has no effect when `cleanup_on_close = false`** — without cleanup the retention timer never starts. |
+
+Each session gets its own subdirectory under `drive_path` named with the session UUID, so files do not persist *across* sessions even with `cleanup_on_close = false`. Cross-session persistence (a "personal drive" model) is not currently supported; the flag only controls whether the on-disk artefacts of a finished session linger.
+
 ### SSH SFTP
 
 For SSH sessions, SFTP file transfer happens directly between the browser and the target SSH server via guacd. No files are stored on the rustguac server.

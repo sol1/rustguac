@@ -1,5 +1,5 @@
 use crate::browser::{BrowserManager, BrowserSession};
-use crate::config::Config;
+use crate::config::{Config, DriveConfig};
 use crate::drive;
 use crate::guacd;
 use crate::guacd::GuacdStream;
@@ -1282,6 +1282,7 @@ impl SessionManager {
         let sessions_ref = Arc::clone(&self.sessions);
         let browser_mgr = Arc::clone(&self.browser_manager);
         let timeout_secs = self.config.session_pending_timeout_secs;
+        let (cleanup_on_close, retention_secs) = drive_cleanup_settings(&self.config.drive);
         tokio::spawn(async move {
             time::sleep(time::Duration::from_secs(timeout_secs)).await;
             let sessions_read = sessions_ref.read().await;
@@ -1291,7 +1292,8 @@ impl SessionManager {
                     tracing::warn!(session_id = %session_id, "Session expired (no browser connected)");
                     session.status = SessionStatus::Expired;
                     session.guacd_stream = None;
-                    cleanup_browser(&browser_mgr, &mut session).await;
+                    cleanup_browser(&browser_mgr, &mut session, cleanup_on_close, retention_secs)
+                        .await;
                 }
             }
         });
@@ -1473,7 +1475,8 @@ impl SessionManager {
             let mut session = session.lock().await;
             if session.status == SessionStatus::Active {
                 session.status = SessionStatus::Completed;
-                cleanup_browser(&self.browser_manager, &mut session).await;
+                let (c, r) = drive_cleanup_settings(&self.config.drive);
+                cleanup_browser(&self.browser_manager, &mut session, c, r).await;
                 tracing::info!(session_id = %id, "Session completed");
             }
         }
@@ -1486,7 +1489,8 @@ impl SessionManager {
             let mut session = session.lock().await;
             session.status = SessionStatus::Error;
             session.guacd_stream = None;
-            cleanup_browser(&self.browser_manager, &mut session).await;
+            let (c, r) = drive_cleanup_settings(&self.config.drive);
+            cleanup_browser(&self.browser_manager, &mut session, c, r).await;
         }
     }
 
@@ -1568,7 +1572,8 @@ impl SessionManager {
             session.cancel.cancel();
             session.status = SessionStatus::Completed;
             session.guacd_stream = None;
-            cleanup_browser(&self.browser_manager, &mut session).await;
+            let (c, r) = drive_cleanup_settings(&self.config.drive);
+            cleanup_browser(&self.browser_manager, &mut session, c, r).await;
             tracing::info!(session_id = %id, "Session terminated by API");
             true
         } else {
@@ -1750,7 +1755,24 @@ fn parse_autofill_credentials(
 
 /// Kill browser processes if this is a web session, clean up drive directory,
 /// abort any running login script, and shut down any SSH tunnel.
-async fn cleanup_browser(browser_manager: &BrowserManager, session: &mut Session) {
+///
+/// `cleanup_on_close` and `retention_secs` are sourced from `[drive]` config
+/// at each call site (see `drive_cleanup_settings`). Per-session drive dirs
+/// are only removed when `cleanup_on_close = true`. `retention_secs > 0`
+/// schedules the removal that long after session end. With `cleanup_on_close
+/// = false` the directory is left in place; the field is also cleared from
+/// the session struct so subsequent reads don't think we still own it.
+///
+/// Note: cross-session persistence (the new session reading the old
+/// session's files on disk) is NOT what these flags control. Each session
+/// gets its own per-UUID subdirectory under `drive_path`, so even with
+/// cleanup_on_close=false the next session sees an empty drive view.
+async fn cleanup_browser(
+    browser_manager: &BrowserManager,
+    session: &mut Session,
+    cleanup_on_close: bool,
+    retention_secs: u64,
+) {
     // Abort login script if still running
     if let Some(handle) = session.login_script_handle.take() {
         handle.abort();
@@ -1761,15 +1783,31 @@ async fn cleanup_browser(browser_manager: &BrowserManager, session: &mut Session
     }
     session.browser_session = None;
 
-    // Clean up per-session drive directory
-    if let Some(ref drive_path) = session.drive_path {
-        drive::cleanup_session_dir(drive_path.clone(), session.id, 0).await;
-        session.drive_path = None;
+    // Clean up per-session drive directory if configured to do so.
+    if let Some(drive_path) = session.drive_path.take() {
+        if cleanup_on_close {
+            drive::cleanup_session_dir(drive_path, session.id, retention_secs).await;
+        } else {
+            tracing::debug!(
+                session_id = %session.id,
+                "drive cleanup_on_close=false; leaving session drive directory on disk"
+            );
+        }
     }
 
     // Shut down SSH tunnel chain (reverse order)
     tunnel::shutdown_chain(&session.tunnels);
     session.tunnels.clear();
+}
+
+/// Resolve cleanup behaviour from optional `[drive]` config. Falls back to
+/// the historical "always wipe immediately" defaults when no config is set
+/// (preserves existing behaviour for installs that never enabled drive).
+fn drive_cleanup_settings(drive: &Option<DriveConfig>) -> (bool, u64) {
+    match drive {
+        Some(d) => (d.cleanup_on_close, d.retention_secs),
+        None => (true, 0),
+    }
 }
 
 #[derive(Debug)]
@@ -2195,6 +2233,31 @@ mod tests {
         let creds = parse_autofill_credentials(Some(json), None, None).unwrap();
         assert_eq!(creds.len(), 1);
         assert_eq!(creds[0].0, "https://ok.com");
+    }
+
+    #[test]
+    fn drive_cleanup_settings_no_config_uses_legacy_defaults() {
+        // No drive config = legacy "always wipe immediately" so existing
+        // installs that never touched [drive] keep prior behaviour.
+        assert_eq!(drive_cleanup_settings(&None), (true, 0));
+    }
+
+    #[test]
+    fn drive_cleanup_settings_passes_through_config() {
+        let cfg = DriveConfig {
+            enabled: true,
+            cleanup_on_close: false,
+            retention_secs: 600,
+            ..DriveConfig::default()
+        };
+        assert_eq!(drive_cleanup_settings(&Some(cfg)), (false, 600));
+    }
+
+    #[test]
+    fn drive_cleanup_settings_default_drive_config() {
+        // The default DriveConfig uses cleanup_on_close=true, retention=0.
+        let cfg = DriveConfig::default();
+        assert_eq!(drive_cleanup_settings(&Some(cfg)), (true, 0));
     }
 }
 
