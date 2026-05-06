@@ -16,7 +16,12 @@ pub struct TlsConfig {
 pub struct OidcConfig {
     pub issuer_url: String,
     pub client_id: String,
-    pub client_secret: String,
+    /// OIDC client secret. May be set in config.toml or via the
+    /// `OIDC_CLIENT_SECRET` environment variable; the env var wins when
+    /// both are present. Validated at startup to be non-empty when
+    /// `[oidc]` is configured (see Config::load).
+    #[serde(default)]
+    pub client_secret: Option<String>,
     pub redirect_uri: String,
     #[serde(default = "default_oidc_default_role")]
     pub default_role: String,
@@ -41,7 +46,10 @@ impl std::fmt::Debug for OidcConfig {
         f.debug_struct("OidcConfig")
             .field("issuer_url", &self.issuer_url)
             .field("client_id", &self.client_id)
-            .field("client_secret", &"[REDACTED]")
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("redirect_uri", &self.redirect_uri)
             .field("default_role", &self.default_role)
             .field("groups_claim", &self.groups_claim)
@@ -1035,10 +1043,32 @@ impl Config {
             }
         };
 
-        // Allow OIDC client secret to be overridden via environment variable
+        // OIDC client_secret resolution. The env var wins over whatever
+        // is in the config file, and is the documented way to keep the
+        // secret out of TOML on disk. Either source is fine, but at least
+        // one must produce a non-empty value when `[oidc]` is present;
+        // bug #121 was that the field was non-Optional in serde, so
+        // omitting it from config.toml failed parsing before the env var
+        // could fill it in.
         if let Some(ref mut oidc) = config.oidc {
             if let Ok(secret) = std::env::var("OIDC_CLIENT_SECRET") {
-                oidc.client_secret = secret;
+                if !secret.is_empty() {
+                    oidc.client_secret = Some(secret);
+                }
+            }
+            let has_secret = oidc
+                .client_secret
+                .as_ref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            if !has_secret {
+                eprintln!(
+                    "[config] ERROR: [oidc] is configured but no client_secret was provided.\n\
+                     [config]        Set `client_secret = \"...\"` in config.toml, or export\n\
+                     [config]        OIDC_CLIENT_SECRET in the rustguac environment\n\
+                     [config]        (e.g. /opt/rustguac/env)."
+                );
+                std::process::exit(1);
             }
         }
 
@@ -1168,5 +1198,50 @@ mod tests {
         assert_eq!(config.base_path, "rustguac");
         assert!(!config.tls_skip_verify);
         assert!(config.ca_cert.is_none());
+    }
+
+    #[test]
+    fn oidc_config_parses_without_client_secret() {
+        // Regression for #121: omitting client_secret from config.toml used
+        // to fail TOML parsing before OIDC_CLIENT_SECRET could fill it in.
+        // Now it's optional at parse time and validated at startup.
+        let toml_str = r#"
+            issuer_url = "https://idp.example.com/"
+            client_id = "rustguac"
+            redirect_uri = "https://console.example.com/oidc/callback"
+        "#;
+        let config: OidcConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.client_id, "rustguac");
+        assert!(config.client_secret.is_none());
+    }
+
+    #[test]
+    fn oidc_config_parses_with_client_secret() {
+        let toml_str = r#"
+            issuer_url = "https://idp.example.com/"
+            client_id = "rustguac"
+            client_secret = "from-config"
+            redirect_uri = "https://console.example.com/oidc/callback"
+        "#;
+        let config: OidcConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.client_secret.as_deref(), Some("from-config"));
+    }
+
+    #[test]
+    fn oidc_config_debug_redacts_client_secret() {
+        let config = OidcConfig {
+            issuer_url: "https://idp.example.com/".into(),
+            client_id: "rustguac".into(),
+            client_secret: Some("sensitive-value".into()),
+            redirect_uri: "https://console.example.com/oidc/callback".into(),
+            default_role: default_oidc_default_role(),
+            groups_claim: default_groups_claim(),
+            extra_scopes: vec![],
+            tls_skip_verify: false,
+            ca_cert: None,
+        };
+        let dbg = format!("{:?}", config);
+        assert!(!dbg.contains("sensitive-value"), "got: {}", dbg);
+        assert!(dbg.contains("[REDACTED]"));
     }
 }

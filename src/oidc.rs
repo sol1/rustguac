@@ -80,10 +80,18 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
         .await
         .map_err(|e| friendly_discovery_error(&format!("{:?}", e)))?;
 
+    // client_secret is validated at config-load time when [oidc] is
+    // configured (Config::load), so reaching this point with None
+    // means we were called with a partially-constructed config; treat
+    // that as a programming error rather than a user-facing one.
+    let client_secret = config
+        .client_secret
+        .clone()
+        .ok_or_else(|| "OIDC client_secret missing at startup".to_string())?;
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
         ClientId::new(config.client_id.clone()),
-        Some(ClientSecret::new(config.client_secret.clone())),
+        Some(ClientSecret::new(client_secret)),
     )
     .set_auth_type(AuthType::RequestBody)
     .set_redirect_uri(
