@@ -4,6 +4,7 @@ use crate::api::AppState;
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::guacd::GuacdStream;
+use crate::protocol::Instruction;
 use crate::session::{SessionManager, ShareTokenValidation};
 use axum::{
     extract::{
@@ -397,16 +398,24 @@ async fn proxy_ws_guacd(
     // Shared flag: set by guacd_to_ws when it sees `10.disconnect;` in the stream
     let server_disconnected = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+    // The WebSocket sink is shared so both halves can write to it. The browser →
+    // guacd side needs to echo `0.,4.ping,...` instructions back to the client
+    // (Apache webapp parity), without ever forwarding them to guacd.
+    let ws_sink = Arc::new(tokio::sync::Mutex::new(ws_write));
+
     // guacd → browser (also tee to recording)
     let recording_clone = recording.clone();
     let sd_flag = server_disconnected.clone();
+    let ws_sink_g = ws_sink.clone();
     let guacd_to_browser =
         tokio::spawn(
-            async move { guacd_to_ws(guacd_read, ws_write, recording_clone, sd_flag).await },
+            async move { guacd_to_ws(guacd_read, ws_sink_g, recording_clone, sd_flag).await },
         );
 
     // browser → guacd
-    let browser_to_guacd = tokio::spawn(async move { ws_to_guacd(ws_read, guacd_write).await });
+    let ws_sink_b = ws_sink.clone();
+    let browser_to_guacd =
+        tokio::spawn(async move { ws_to_guacd(ws_read, guacd_write, ws_sink_b).await });
 
     // Wait for either direction to finish, or cancellation
     let result = tokio::select! {
@@ -437,10 +446,12 @@ async fn proxy_ws_guacd(
     }
 }
 
+type WsSink = Arc<tokio::sync::Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>;
+
 /// Forward data from guacd to WebSocket, recording along the way.
 async fn guacd_to_ws(
     mut guacd: tokio::io::ReadHalf<GuacdStream>,
-    mut ws: futures_util::stream::SplitSink<WebSocket, Message>,
+    ws: WsSink,
     recording: Option<Arc<tokio::sync::Mutex<tokio::fs::File>>>,
     server_disconnected: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -480,21 +491,47 @@ async fn guacd_to_ws(
             server_disconnected.store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
-        ws.send(Message::Text(text.into())).await?;
+        let mut sink = ws.lock().await;
+        sink.send(Message::Text(text.into())).await?;
     }
 
     Ok(())
 }
 
-/// Forward data from WebSocket to guacd.
+/// Forward data from WebSocket to guacd, intercepting empty-opcode tunnel
+/// pings. The Guacamole client sends `0.,4.ping,<ts>;` every 500ms over the
+/// "internal data" opcode (the empty string) to keep the tunnel from going
+/// UNSTABLE. Apache's webapp echoes these back without ever forwarding them
+/// to guacd; guacd silently drops unknown opcodes (libguac/user-handlers.c
+/// `__guac_user_call_opcode_handler`), so without echoing here the client
+/// would mark the tunnel UNSTABLE after 1.5s of guacd quiet time and close
+/// it after 15s. We mirror Apache's filter behaviour.
 async fn ws_to_guacd(
-    mut ws: futures_util::stream::SplitStream<WebSocket>,
+    mut ws_read: futures_util::stream::SplitStream<WebSocket>,
     mut guacd: tokio::io::WriteHalf<GuacdStream>,
+    ws_sink: WsSink,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    while let Some(msg) = ws.next().await {
+    while let Some(msg) = ws_read.next().await {
         let msg = msg?;
         match msg {
             Message::Text(text) => {
+                // Empty-opcode instructions always start with "0.," — fast
+                // path skips the parse for normal traffic.
+                if text.starts_with("0.,") {
+                    if let Ok(instr) = Instruction::parse(text.trim_end_matches(';')) {
+                        if instr.opcode.is_empty() {
+                            // Echo ping requests; drop everything else on the
+                            // internal channel.
+                            if instr.args.first().map(|s| s.as_str()) == Some("ping") {
+                                let echo = Instruction::new("", instr.args).encode();
+                                let mut sink = ws_sink.lock().await;
+                                sink.send(Message::Text(echo.into())).await?;
+                            }
+                            continue;
+                        }
+                    }
+                }
+
                 // Log clipboard instructions from browser → guacd
                 if text.contains(".clipboard,") {
                     tracing::info!("browser sent clipboard instruction to guacd");

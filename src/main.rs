@@ -1100,6 +1100,16 @@ async fn run_server(config: Config, database: Db) {
     tracing::info!("rustguac starting on {}://{}", scheme, listen_addr);
     tracing::info!("Static files served from {:?}", static_path);
 
+    // TCP keepalive on the listener. Linux inherits SO_KEEPALIVE and the
+    // associated TCP_KEEPIDLE/INTVL/CNT options on accept(), so accepted
+    // browser sockets pick up keepalive without a per-accept hook. Pairs with
+    // the Guacamole protocol-level ping echo in src/websocket.rs to keep
+    // long-idle WebSocket sessions alive across NAT/firewall path changes.
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(std::time::Duration::from_secs(30))
+        .with_interval(std::time::Duration::from_secs(10))
+        .with_retries(3);
+
     if let Some((cert_path, key_path)) = server_tls {
         use axum_server::tls_rustls::RustlsConfig;
 
@@ -1107,8 +1117,17 @@ async fn run_server(config: Config, database: Db) {
             .await
             .expect("Failed to load TLS certificates");
 
-        let addr: SocketAddr = listen_addr.parse().expect("Invalid listen address");
-        axum_server::bind_rustls(addr, rustls_config)
+        let std_listener =
+            std::net::TcpListener::bind(&listen_addr).expect("Failed to bind listener");
+        std_listener
+            .set_nonblocking(true)
+            .expect("Failed to set listener non-blocking");
+        if let Err(e) = socket2::SockRef::from(&std_listener).set_tcp_keepalive(&keepalive) {
+            tracing::warn!(error = %e, "failed to enable TCP keepalive on TLS listener");
+        }
+
+        axum_server::from_tcp_rustls(std_listener, rustls_config)
+            .expect("Failed to wrap listener")
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await
             .expect("Server error");
@@ -1116,6 +1135,9 @@ async fn run_server(config: Config, database: Db) {
         let listener = tokio::net::TcpListener::bind(&listen_addr)
             .await
             .expect("Failed to bind listener");
+        if let Err(e) = socket2::SockRef::from(&listener).set_tcp_keepalive(&keepalive) {
+            tracing::warn!(error = %e, "failed to enable TCP keepalive on listener");
+        }
 
         axum::serve(
             listener,

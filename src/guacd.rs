@@ -5,6 +5,22 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+/// Apply TCP keepalive to a connected guacd socket. Long-lived guacd sockets
+/// can sit idle for minutes (idle terminal, idle desktop). Without keepalive,
+/// a silent network drop (NAT eviction, intermediate firewall rebuild) is only
+/// caught when something tries to write — which can be never if both sides are
+/// quiet. 30s/10s/3 means a dead path is detected within ~60s.
+fn apply_keepalive(stream: &TcpStream) {
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(30))
+        .with_interval(Duration::from_secs(10))
+        .with_retries(3);
+    let sock = socket2::SockRef::from(stream);
+    if let Err(e) = sock.set_tcp_keepalive(&keepalive) {
+        tracing::warn!(error = %e, "failed to enable TCP keepalive on guacd socket");
+    }
+}
+
 /// Combined trait for async bidirectional streams.
 pub trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> AsyncStream for T {}
@@ -111,6 +127,7 @@ pub async fn connect_and_handshake(
             ))
         })?;
 
+    apply_keepalive(&tcp);
     tracing::debug!("Connected to guacd at {}", guacd_addr);
 
     let mut stream: GuacdStream = wrap_tls(tcp, tls, guacd_addr).await?;
@@ -335,6 +352,7 @@ pub async fn join_connection(
             ))
         })?;
 
+    apply_keepalive(&tcp);
     tracing::debug!(
         "Connected to guacd for join, connection_id={}",
         connection_id

@@ -84,6 +84,9 @@ bollard = "0.20"
 # LUKS drive management (uid/gid for chown)
 libc = "0.2"
 
+# Socket-level options (TCP keepalive)
+socket2 = "0.6"
+
 # URL encoding/decoding (quick-connect redirect)
 urlencoding = "2"
 serde_urlencoded = "0.7"
