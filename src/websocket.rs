@@ -4,7 +4,7 @@ use crate::api::AppState;
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::guacd::GuacdStream;
-use crate::protocol::Instruction;
+use crate::protocol::{last_instruction_boundary, Instruction};
 use crate::session::{SessionManager, ShareTokenValidation};
 use axum::{
     extract::{
@@ -448,7 +448,22 @@ async fn proxy_ws_guacd(
 
 type WsSink = Arc<tokio::sync::Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>;
 
+/// Maximum bytes the guacd-side carry buffer is allowed to grow to before
+/// force-flushing without a clean instruction boundary. In practice guacd
+/// instructions are tiny; this exists to bound memory if upstream sends
+/// something pathological. 16 MiB is well above any real instruction.
+const MAX_GUACD_CARRY: usize = 16 * 1024 * 1024;
+
 /// Forward data from guacd to WebSocket, recording along the way.
+///
+/// The browser's Tunnel.js parser concatenates every Message::Text into a
+/// single rolling buffer with no message-boundary semantics. If we send a
+/// chunk that ends mid-instruction and `ws_to_guacd` then echoes a tunnel
+/// ping over the shared sink, the ping bytes splice into the middle of the
+/// in-flight instruction and the parser blows up with "Element terminator
+/// of instruction was not ';' nor ','". To prevent that, every Message::Text
+/// we emit ends at a true Guacamole instruction boundary; partial tail data
+/// is held in `carry` until the next read completes it.
 async fn guacd_to_ws(
     mut guacd: tokio::io::ReadHalf<GuacdStream>,
     ws: WsSink,
@@ -456,6 +471,7 @@ async fn guacd_to_ws(
     server_disconnected: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
+    let mut carry: Vec<u8> = Vec::new();
 
     loop {
         let n = guacd.read(&mut buf).await?;
@@ -465,28 +481,43 @@ async fn guacd_to_ws(
 
         let data = &buf[..n];
 
-        // Write to recording file if available
+        // Recording captures the raw guacd stream regardless of buffering.
         if let Some(ref recording) = recording {
             let mut file = recording.lock().await;
             let _ = file.write_all(data).await;
         }
 
-        // Forward to browser via WebSocket
-        let text = std::str::from_utf8(data)
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+        carry.extend_from_slice(data);
+
+        // Flush up to the last complete instruction boundary in the carry.
+        // Anything past that is held over for the next read.
+        let to_send_bytes: Vec<u8> = match last_instruction_boundary(&carry) {
+            Some(end) => carry.drain(..end).collect(),
+            None if carry.len() > MAX_GUACD_CARRY => {
+                tracing::warn!(
+                    len = carry.len(),
+                    cap = MAX_GUACD_CARRY,
+                    "guacd carry exceeded cap; force-flushing without instruction boundary"
+                );
+                std::mem::take(&mut carry)
+            }
+            None => continue,
+        };
+
+        // The boundary scanner only advances over valid UTF-8, so this
+        // String::from_utf8 should never fail in practice; defensive in
+        // case a force-flush above happened mid-multibyte char.
+        let text = String::from_utf8(to_send_bytes).map_err(
+            |e| -> Box<dyn std::error::Error + Send + Sync> {
                 format!("invalid UTF-8 from guacd: {}", e).into()
-            })?
-            .to_owned();
+            },
+        )?;
 
         // Detect guacd-initiated disconnect (server-side logout/crash).
-        // guacd sends "10.disconnect;" as the final instruction when the remote
-        // server ends the session. This does NOT appear on browser tab close.
-        //
-        // IMPORTANT: We must check instruction boundaries, not raw substring
-        // matching. The Guacamole wire format is length-prefixed, so
-        // "10.disconnect;" inside a clipboard blob or key instruction would
-        // appear as e.g. "14.10.disconnect;" (with a length prefix), never bare.
-        // A real disconnect instruction appears at position 0 or after ";".
+        // guacd sends "10.disconnect;" as the final instruction when the
+        // remote server ends the session. Buffering at instruction boundary
+        // means the disconnect appears intact in the flushed text, either
+        // at the start or after a previous ";".
         if text.starts_with("10.disconnect;") || text.contains(";10.disconnect;") {
             server_disconnected.store(true, std::sync::atomic::Ordering::Relaxed);
         }

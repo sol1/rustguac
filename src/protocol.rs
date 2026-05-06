@@ -118,6 +118,92 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// Find the byte offset just past the last complete Guacamole instruction in
+/// `buf`. Returns `None` if no complete instruction is present.
+///
+/// Walks element-by-element using the wire format's length prefix (which
+/// counts UTF-8 characters per `guac_utf8_strlen` in libguac), so element
+/// data containing literal `;` characters (clipboard text, text streams)
+/// does not produce a false boundary.
+///
+/// On the first malformed byte it returns the boundary discovered so far
+/// rather than scanning the rest of the buffer.
+pub fn last_instruction_boundary(buf: &[u8]) -> Option<usize> {
+    let mut last_end: Option<usize> = None;
+    let mut pos = 0usize;
+
+    loop {
+        // Each instruction is 1+ comma-separated elements, terminated by ';'.
+        loop {
+            // Length prefix: ASCII decimal digits up to the '.' separator.
+            let len_start = pos;
+            while pos < buf.len() && buf[pos].is_ascii_digit() {
+                pos += 1;
+            }
+            if pos == len_start || pos >= buf.len() || buf[pos] != b'.' {
+                return last_end;
+            }
+            let len: usize = match std::str::from_utf8(&buf[len_start..pos])
+                .ok()
+                .and_then(|s| s.parse().ok())
+            {
+                Some(n) => n,
+                None => return last_end,
+            };
+            pos += 1; // skip '.'
+
+            // Skip `len` UTF-8 characters of element data.
+            let mut chars_skipped = 0;
+            while chars_skipped < len {
+                if pos >= buf.len() {
+                    return last_end; // truncated mid-element
+                }
+                let b = buf[pos];
+                let char_len = if b < 0x80 {
+                    1
+                } else if b < 0xC0 {
+                    // Lone continuation byte — input is malformed UTF-8.
+                    // Bail out with whatever boundary we've already proven.
+                    return last_end;
+                } else if b < 0xE0 {
+                    2
+                } else if b < 0xF0 {
+                    3
+                } else {
+                    4
+                };
+                if pos + char_len > buf.len() {
+                    return last_end; // truncated multibyte
+                }
+                pos += char_len;
+                chars_skipped += 1;
+            }
+
+            // Element terminator.
+            if pos >= buf.len() {
+                return last_end;
+            }
+            match buf[pos] {
+                b',' => {
+                    pos += 1;
+                    // Continue inner loop: next element of this instruction.
+                }
+                b';' => {
+                    pos += 1;
+                    last_end = Some(pos);
+                    break; // Out of element loop; start scanning next instruction.
+                }
+                _ => return last_end,
+            }
+        }
+
+        // Falls through on `;`: continue 'instructions to scan more.
+        if pos >= buf.len() {
+            return last_end;
+        }
+    }
+}
+
 /// Streaming parser that accumulates data and yields complete instructions.
 #[derive(Default)]
 pub struct InstructionParser {
@@ -357,5 +443,79 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(out[0].is_err());
         assert_eq!(out[1].as_ref().unwrap().opcode, "nop");
+    }
+
+    #[test]
+    fn boundary_empty_buffer() {
+        assert_eq!(last_instruction_boundary(b""), None);
+    }
+
+    #[test]
+    fn boundary_complete_instruction() {
+        let s = b"4.size,3.800,3.600;";
+        assert_eq!(last_instruction_boundary(s), Some(s.len()));
+    }
+
+    #[test]
+    fn boundary_partial_no_terminator() {
+        assert_eq!(last_instruction_boundary(b"4.size,3.80"), None);
+    }
+
+    #[test]
+    fn boundary_two_instructions_first_complete() {
+        let s = b"4.size,3.800,3.600;3.foo";
+        assert_eq!(last_instruction_boundary(s), Some(19));
+    }
+
+    #[test]
+    fn boundary_two_instructions_both_complete() {
+        let s = b"4.size,3.800,3.600;3.nop;";
+        assert_eq!(last_instruction_boundary(s), Some(s.len()));
+    }
+
+    #[test]
+    fn boundary_ignores_semicolon_inside_element_value() {
+        // Clipboard text containing `;`: the embedded `;` MUST NOT be treated
+        // as an instruction terminator. Length prefix 11 covers "hello;world".
+        let s = b"9.clipboard,1.0,11.hello;world;";
+        assert_eq!(last_instruction_boundary(s), Some(s.len()));
+    }
+
+    #[test]
+    fn boundary_partial_when_split_inside_element_data() {
+        // Reader landed mid-clipboard-element: only "hello;" of the 11-char
+        // value is present. The trailing `;` is data, not a terminator.
+        let s = b"9.clipboard,1.0,11.hello;";
+        assert_eq!(last_instruction_boundary(s), None);
+    }
+
+    #[test]
+    fn boundary_empty_opcode_ping() {
+        // `0.,4.ping,13.1234567890123;` — empty opcode (length 0) is valid.
+        let s = b"0.,4.ping,13.1234567890123;";
+        assert_eq!(last_instruction_boundary(s), Some(s.len()));
+    }
+
+    #[test]
+    fn boundary_handles_utf8_multibyte_in_element() {
+        // "café" — 4 UTF-8 chars, 5 bytes. Length prefix counts characters.
+        let s = "9.clipboard,1.0,4.café;".as_bytes();
+        assert_eq!(last_instruction_boundary(s), Some(s.len()));
+    }
+
+    #[test]
+    fn boundary_truncated_mid_multibyte() {
+        // "9.clipboard,1.0,4.caf" + first byte of "é" only — must not advance.
+        let mut s = b"9.clipboard,1.0,4.caf".to_vec();
+        s.push(0xC3); // first byte of `é` (UTF-8 0xC3 0xA9)
+        assert_eq!(last_instruction_boundary(&s), None);
+    }
+
+    #[test]
+    fn boundary_returns_last_complete_when_trailing_garbage() {
+        // First instruction is complete; what follows is malformed. We
+        // should still report the first boundary so the proxy can flush it.
+        let s = b"3.nop;garbage";
+        assert_eq!(last_instruction_boundary(s), Some(6));
     }
 }
