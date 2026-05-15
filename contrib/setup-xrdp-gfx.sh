@@ -11,7 +11,7 @@
 # Run as root on the xrdp target machine (not the rustguac server).
 # Requires: Debian 13 (trixie) or LMDE 7, ~15 minutes.
 #
-# Usage: sudo bash setup-xrdp-gfx.sh [--desktop mate|xfce|kde|gnome|none]
+# Usage: sudo bash setup-xrdp-gfx.sh [--desktop mate|xfce|kde|gnome|cinnamon|none]
 #
 # Includes PulseAudio xrdp audio module (no separate audio script needed).
 
@@ -290,6 +290,7 @@ Options:
                      xfce   - XFCE (lightweight, reliable)
                      kde    - KDE Plasma (requires GPU or software rendering)
                      gnome  - GNOME (may need GPU for Wayland)
+                     cinnamon - Cinnamon desktop
                      none   - skip desktop install (bring your own)
 
   --diagnose         Run diagnostic checks and exit. Shows package versions,
@@ -347,8 +348,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$DESKTOP" in
-    xfce|kde|gnome|mate|none) ;;
-    *) echo "Error: --desktop must be mate, xfce, kde, gnome, or none"; exit 1 ;;
+    xfce|kde|gnome|cinnamon|mate|none) ;;
+    *) echo "Error: --desktop must be mate, xfce, kde, gnome, cinnamon, or none"; exit 1 ;;
 esac
 
 echo "============================================"
@@ -375,6 +376,10 @@ case "$DESKTOP" in
     gnome)
         DEBIAN_FRONTEND=noninteractive apt-get install -y task-gnome-desktop
         STARTWM_CMD="exec gnome-session"
+        ;;
+    cinnamon)
+        DEBIAN_FRONTEND=noninteractive apt-get install -y cinnamon-desktop-environment
+        STARTWM_CMD="exec cinnamon-session"
         ;;
     mate)
         DEBIAN_FRONTEND=noninteractive apt-get install -y mate-desktop-environment
