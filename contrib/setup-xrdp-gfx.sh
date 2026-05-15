@@ -41,12 +41,24 @@ get_debian_base_codename() {
 }
 
 is_linux_mint() {
+    if [ -r /etc/linuxmint/info ]; then
+        return 0
+    fi
+
     if [ -r /etc/os-release ]; then
         . /etc/os-release
-        [ "${ID:-}" = "linuxmint" ]
-    else
-        return 1
+        case "${ID:-} ${NAME:-} ${PRETTY_NAME:-}" in
+            *linuxmint*|*Linux\ Mint*) return 0 ;;
+        esac
     fi
+
+    if command -v lsb_release >/dev/null 2>&1; then
+        case "$(lsb_release -is 2>/dev/null)" in
+            LinuxMint|linuxmint) return 0 ;;
+        esac
+    fi
+
+    return 1
 }
 
 prepare_pulseaudio_sources() {
@@ -139,6 +151,11 @@ run_diagnose() {
     echo ""
 
     echo "── Config ──"
+    if is_linux_mint; then
+        echo "  mint:      detected"
+    else
+        echo "  mint:      not detected"
+    fi
     echo "  autorun:   $(grep '^autorun=' /etc/xrdp/xrdp.ini 2>/dev/null || echo 'NOT SET')"
     echo "  Xwrapper:  $(cat /etc/X11/Xwrapper.config 2>/dev/null | grep allowed_users || echo 'NOT SET')"
     echo "  startwm:   $(grep '^exec ' /etc/xrdp/startwm.sh 2>/dev/null || echo 'NOT SET')"
@@ -380,6 +397,13 @@ exec >> "$LOG_FILE" 2>&1
 
 echo "[$(date)] load-pulseaudio-xrdp starting"
 
+if [ "${XRDP_SESSION:-}" != "1" ]; then
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        pgrep -u "$(id -u)" -x xrdp-chansrv >/dev/null 2>&1 && break
+        sleep 0.25
+    done
+fi
+
 if [ "${XRDP_SESSION:-}" != "1" ] && ! pgrep -u "$(id -u)" -x xrdp-chansrv >/dev/null 2>&1; then
     echo "No xrdp session marker or xrdp-chansrv process found; exiting"
     exit 0
@@ -418,8 +442,14 @@ XRDP_PULSE_SOURCE_SOCKET="${XRDP_PULSE_SOURCE_SOCKET:-xrdp_chansrv_audio_in_sock
 
 FOUND_SINK_SOCKET=""
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    FOUND_SINK_SOCKET=$(find /run/xrdp/sockdir /tmp/.xrdp "$XRDP_SOCKET_PATH" \
-        -type s -name 'xrdp_chansrv_audio_out_socket_*' 2>/dev/null | head -1)
+    if [ -n "$DISPLAY_NUM" ]; then
+        FOUND_SINK_SOCKET=$(find /run/xrdp/sockdir /tmp/.xrdp "$XRDP_SOCKET_PATH" \
+            -type s -name "xrdp_chansrv_audio_out_socket_${DISPLAY_NUM}" 2>/dev/null | head -1)
+    fi
+    if [ -z "$FOUND_SINK_SOCKET" ]; then
+        FOUND_SINK_SOCKET=$(find /run/xrdp/sockdir /tmp/.xrdp "$XRDP_SOCKET_PATH" \
+            -type s -name 'xrdp_chansrv_audio_out_socket_*' 2>/dev/null | head -1)
+    fi
     [ -n "$FOUND_SINK_SOCKET" ] && break
     sleep 0.25
 done
@@ -481,17 +511,19 @@ pactl info >/dev/null 2>&1 || {
 
 pactl info | grep -E '^Server Name:|^Default Sink:' || true
 
-if ! pactl list short modules 2>/dev/null | grep -q 'module-xrdp-sink'; then
-    pactl load-module module-xrdp-sink \
-        "xrdp_socket_path=$XRDP_SOCKET_PATH" \
-        "xrdp_pulse_sink_socket=$XRDP_PULSE_SINK_SOCKET" || true
-fi
+echo "Reloading xrdp PulseAudio modules for current xrdp socket"
+pactl list short modules 2>/dev/null | awk '$2 == "module-xrdp-sink" || $2 == "module-xrdp-source" {print $1}' |
+    while read -r MODULE_ID; do
+        [ -n "$MODULE_ID" ] && pactl unload-module "$MODULE_ID" || true
+    done
 
-if ! pactl list short modules 2>/dev/null | grep -q 'module-xrdp-source'; then
-    pactl load-module module-xrdp-source \
-        "xrdp_socket_path=$XRDP_SOCKET_PATH" \
-        "xrdp_pulse_source_socket=$XRDP_PULSE_SOURCE_SOCKET" || true
-fi
+pactl load-module module-xrdp-sink \
+    "xrdp_socket_path=$XRDP_SOCKET_PATH" \
+    "xrdp_pulse_sink_socket=$XRDP_PULSE_SINK_SOCKET" || true
+
+pactl load-module module-xrdp-source \
+    "xrdp_socket_path=$XRDP_SOCKET_PATH" \
+    "xrdp_pulse_source_socket=$XRDP_PULSE_SOURCE_SOCKET" || true
 
 if pactl list short sinks 2>/dev/null | grep -q 'xrdp-sink'; then
     pactl set-default-sink xrdp-sink || true
@@ -693,9 +725,9 @@ else
 fi
 
 # Set startwm.sh
-if [ -n "$STARTWM_CMD" ]; then
-    if is_linux_mint; then
-        cat > /etc/xrdp/startwm.sh << 'WMEOF'
+if is_linux_mint; then
+    echo "  Detected Linux Mint/LMDE; installing Mint-safe startwm.sh"
+    cat > /etc/xrdp/startwm.sh << 'WMEOF'
 #!/bin/sh
 # xrdp X session start script (c) 2015, 2017, 2021 mirabilos
 # published under The MirOS Licence
@@ -725,10 +757,10 @@ fi
 # Fallback to system Xsession
 exec /etc/X11/Xsession
 WMEOF
-        chmod 755 /etc/xrdp/startwm.sh
-        echo "  Set startwm.sh to Linux Mint Xsession launcher"
-    else
-        cat > /etc/xrdp/startwm.sh << 'WMEOF'
+    chmod 755 /etc/xrdp/startwm.sh
+    echo "  Set startwm.sh to Linux Mint Xsession launcher"
+elif [ -n "$STARTWM_CMD" ]; then
+    cat > /etc/xrdp/startwm.sh << 'WMEOF'
 #!/bin/sh
 export XRDP_SESSION=1
 if [ -d "/run/user/$(id -u)" ]; then
@@ -745,13 +777,20 @@ if test -r ~/.profile; then
     . ~/.profile
 fi
 WMEOF
-        printf '%s\n' "$STARTWM_CMD" >> /etc/xrdp/startwm.sh
-        chmod 755 /etc/xrdp/startwm.sh
-        echo "  Set startwm.sh to: $STARTWM_CMD"
-    fi
+    printf '%s\n' "$STARTWM_CMD" >> /etc/xrdp/startwm.sh
+    chmod 755 /etc/xrdp/startwm.sh
+    echo "  Set startwm.sh to: $STARTWM_CMD"
 fi
 cat > /etc/X11/Xsession.d/95xrdp-pulseaudio-env << 'XSEOF'
 # Ensure xrdp desktop applications inherit the PulseAudio runtime path.
+DISPLAY_NUM=$(printf "%s" "${DISPLAY:-}" | sed 's/^.*:\([0-9][0-9]*\).*$/\1/')
+if [ -n "$DISPLAY_NUM" ] && [ "$DISPLAY_NUM" -ge 10 ] 2>/dev/null; then
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        pgrep -u "$(id -u)" -x xrdp-chansrv >/dev/null 2>&1 && break
+        sleep 0.25
+    done
+fi
+
 if pgrep -u "$(id -u)" -x xrdp-chansrv >/dev/null 2>&1; then
     export XRDP_SESSION=1
     if [ -d "/run/user/$(id -u)" ]; then
