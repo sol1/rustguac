@@ -385,9 +385,13 @@ if [ "${XRDP_SESSION:-}" != "1" ] && ! pgrep -u "$(id -u)" -x xrdp-chansrv >/dev
     exit 0
 fi
 
-if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    echo "Set XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+USER_RUNTIME_DIR="/run/user/$(id -u)"
+if [ -d "$USER_RUNTIME_DIR" ]; then
+    if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ "$XDG_RUNTIME_DIR" != "$USER_RUNTIME_DIR" ] || \
+        [ "$(stat -c %u "$XDG_RUNTIME_DIR" 2>/dev/null || echo -1)" != "$(id -u)" ]; then
+        export XDG_RUNTIME_DIR="$USER_RUNTIME_DIR"
+        echo "Set XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+    fi
 fi
 if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
     PULSE_NATIVE="unix:$XDG_RUNTIME_DIR/pulse/native"
@@ -724,15 +728,15 @@ WMEOF
         chmod 755 /etc/xrdp/startwm.sh
         echo "  Set startwm.sh to Linux Mint Xsession launcher"
     else
-        cat > /etc/xrdp/startwm.sh << WMEOF
+        cat > /etc/xrdp/startwm.sh << 'WMEOF'
 #!/bin/sh
 export XRDP_SESSION=1
 if [ -d "/run/user/$(id -u)" ]; then
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 fi
 /usr/local/bin/load-pulseaudio-xrdp
-if [ -n "\${XDG_RUNTIME_DIR:-}" ]; then
-    export PULSE_SERVER="unix:\$XDG_RUNTIME_DIR/pulse/native"
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+    export PULSE_SERVER="unix:$XDG_RUNTIME_DIR/pulse/native"
 fi
 if test -r /etc/profile; then
     . /etc/profile
@@ -740,8 +744,8 @@ fi
 if test -r ~/.profile; then
     . ~/.profile
 fi
-$STARTWM_CMD
 WMEOF
+        printf '%s\n' "$STARTWM_CMD" >> /etc/xrdp/startwm.sh
         chmod 755 /etc/xrdp/startwm.sh
         echo "  Set startwm.sh to: $STARTWM_CMD"
     fi
