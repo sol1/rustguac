@@ -127,6 +127,30 @@ prepare_pulseaudio_sources() {
     fi
 }
 
+install_microsoft_edge() {
+    if [ "$(dpkg --print-architecture)" != "amd64" ]; then
+        echo "  Skipping Microsoft Edge install (amd64 package only)"
+        return
+    fi
+
+    echo "  Installing Microsoft Edge repository"
+    apt-get install -y ca-certificates curl gnupg
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc |
+        gpg --dearmor --yes -o /usr/share/keyrings/microsoft-edge.gpg
+
+    cat > /etc/apt/sources.list.d/microsoft-edge.sources << 'EDGEEOF'
+Types: deb
+URIs: https://packages.microsoft.com/repos/edge-stable
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/microsoft-edge.gpg
+EDGEEOF
+
+    apt-get update -qq
+    apt-get install -y microsoft-edge-stable
+}
+
 # ── Diagnostic function ──────────────────────────────────────────────
 run_diagnose() {
     echo "============================================"
@@ -260,7 +284,8 @@ Set up xrdp with H.264 encoding, GFX pipeline, desktop environment,
 and audio redirection on Debian 13 (trixie) or LMDE 7.
 
 Options:
-  --desktop DESKTOP  Desktop environment to install (default: mate)
+  --desktop DESKTOP  Desktop environment to install (default: mate on Debian,
+                     none on Linux Mint/LMDE)
                      mate   - MATE desktop (recommended, Windows-like, no GPU needed)
                      xfce   - XFCE (lightweight, reliable)
                      kde    - KDE Plasma (requires GPU or software rendering)
@@ -293,7 +318,7 @@ What this script does:
    10. Restart xrdp
 
 Examples:
-  sudo bash setup-xrdp-gfx.sh                    # MATE desktop (default)
+  sudo bash setup-xrdp-gfx.sh                    # MATE on Debian, none on LMDE
   sudo bash setup-xrdp-gfx.sh --desktop kde      # KDE Plasma
   sudo bash setup-xrdp-gfx.sh --desktop none     # No desktop (headless)
   bash setup-xrdp-gfx.sh --diagnose              # Troubleshoot (no root needed)
@@ -304,7 +329,13 @@ HELPEOF
 }
 
 # Parse arguments
-DESKTOP="mate"
+if is_linux_mint; then
+    # LMDE ships with a desktop already. Leave it in place unless the user
+    # explicitly asks this script to install a different one.
+    DESKTOP="none"
+else
+    DESKTOP="mate"
+fi
 while [ $# -gt 0 ]; do
     case "$1" in
         --desktop) DESKTOP="$2"; shift 2 ;;
@@ -358,6 +389,10 @@ esac
 # Install common desktop applications
 if [ "$DESKTOP" != "none" ]; then
     apt-get install -y firefox-esr chromium
+    install_microsoft_edge
+elif is_linux_mint; then
+    apt-get install -y chromium
+    install_microsoft_edge
 fi
 echo ""
 
