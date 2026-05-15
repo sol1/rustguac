@@ -1,5 +1,6 @@
 #!/bin/bash
-# Setup GFX pipeline with H.264 encoding for xrdp on Debian 13 (trixie).
+# Setup GFX pipeline with H.264 encoding for xrdp on Debian 13 (trixie)
+# or Linux Mint Debian Edition 7 (LMDE 7, based on trixie).
 #
 # This script installs a desktop environment, rebuilds xrdp from the Debian
 # sid source package with x264 support, and configures the GFX pipeline.
@@ -8,7 +9,7 @@
 # Sid is added temporarily for the xrdp rebuild, then removed.
 #
 # Run as root on the xrdp target machine (not the rustguac server).
-# Requires: Debian 13 (trixie), ~15 minutes.
+# Requires: Debian 13 (trixie) or LMDE 7, ~15 minutes.
 #
 # Usage: sudo bash setup-xrdp-gfx.sh [--desktop mate|xfce|kde|gnome|none]
 #
@@ -20,6 +21,99 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "Error: run as root (sudo bash $0)"
     exit 1
 fi
+
+get_debian_base_codename() {
+    # LMDE reports the Mint codename via lsb_release -cs, but Debian source
+    # packages need the Debian base codename (for LMDE 7, trixie).
+    if [ -r /etc/os-release ]; then
+        . /etc/os-release
+        if [ -n "${DEBIAN_CODENAME:-}" ]; then
+            echo "$DEBIAN_CODENAME"
+            return
+        fi
+        if [ "${ID:-}" = "debian" ] && [ -n "${VERSION_CODENAME:-}" ]; then
+            echo "$VERSION_CODENAME"
+            return
+        fi
+    fi
+
+    lsb_release -cs
+}
+
+is_linux_mint() {
+    if [ -r /etc/os-release ]; then
+        . /etc/os-release
+        [ "${ID:-}" = "linuxmint" ]
+    else
+        return 1
+    fi
+}
+
+prepare_pulseaudio_sources() {
+    PULSE_DIR="/root/pulseaudio.src"
+    PULSE_SRC_TMP=""
+    if [ -d "$PULSE_DIR" ]; then
+        echo "  Reusing existing PulseAudio sources: $PULSE_DIR"
+        return
+    fi
+
+    PA_SRC_PKG=$(dpkg-query -W -f='${source:Package}' pulseaudio 2>/dev/null || true)
+    PA_BIN_VER=$(dpkg-query -W -f='${Version}' pulseaudio)
+    PA_SRC_VER=$(dpkg-query -W -f='${source:Version}' pulseaudio 2>/dev/null || true)
+
+    [ -n "$PA_SRC_PKG" ] || PA_SRC_PKG="pulseaudio"
+    [ -n "$PA_SRC_VER" ] || PA_SRC_VER=$(echo "$PA_BIN_VER" | sed 's/+b[0-9]\+$//')
+
+    echo "  PulseAudio binary version: $PA_BIN_VER"
+    echo "  PulseAudio source version: $PA_SRC_VER"
+
+    if ! apt-cache showsrc "$PA_SRC_PKG" 2>/dev/null | grep -qx "Version: $PA_SRC_VER"; then
+        BASE_CODENAME=$(get_debian_base_codename)
+        PULSE_SRC_LIST="/etc/apt/sources.list.d/debian-${BASE_CODENAME}-source.list"
+        echo "  Adding Debian $BASE_CODENAME source repo for PulseAudio source package"
+        printf "deb-src http://deb.debian.org/debian %s main\n" "$BASE_CODENAME" > "$PULSE_SRC_LIST"
+        apt-get update -qq
+    else
+        PULSE_SRC_LIST=""
+    fi
+
+    apt-get build-dep -y "$PA_SRC_PKG=$PA_SRC_VER"
+    apt-get install -y doxygen
+
+    PULSE_SRC_TMP=$(mktemp -d /tmp/pulseaudio-src.XXXXXX)
+    cd "$PULSE_SRC_TMP"
+    apt-get source "$PA_SRC_PKG=$PA_SRC_VER"
+    PA_BUILD_DIR=$(find . -maxdepth 1 -type d -name "${PA_SRC_PKG}-[0-9]*" | sort -V | tail -1)
+    if [ -z "$PA_BUILD_DIR" ]; then
+        echo "Error: cannot find extracted PulseAudio source directory"
+        exit 1
+    fi
+
+    cd "$PA_BUILD_DIR"
+    if [ -x ./configure ]; then
+        ./configure
+    elif [ -f ./meson.build ]; then
+        rm -rf build
+        meson setup build
+    else
+        echo "Error: cannot configure PulseAudio source in $(pwd)"
+        exit 1
+    fi
+
+    echo "  Trimming PulseAudio source tree to module headers"
+    find . -type f ! -name '*.h' -delete
+    find . -mindepth 1 -maxdepth 1 \
+        -name src -o -name build -o -name config.h \
+        -o -exec rm -rf {} +
+    cd ..
+    mv "$PA_BUILD_DIR" "$PULSE_DIR"
+    rm -rf "$PULSE_SRC_TMP"
+
+    if [ -n "$PULSE_SRC_LIST" ]; then
+        rm -f "$PULSE_SRC_LIST"
+        apt-get update -qq
+    fi
+}
 
 # ── Diagnostic function ──────────────────────────────────────────────
 run_diagnose() {
@@ -81,6 +175,14 @@ run_diagnose() {
     fi
     echo ""
 
+    echo "── Audio sink inputs (this user) ──"
+    pactl list sink-inputs short 2>/dev/null | sed 's/^/  /' || echo "  pactl not reachable"
+    echo ""
+
+    echo "── xrdp audio sockets ──"
+    find /run/xrdp/sockdir /tmp/.xrdp -type s -name '*audio*' 2>/dev/null | sort | sed 's/^/  /' || echo "  none found"
+    echo ""
+
     echo "── Audio server info ──"
     pactl info 2>/dev/null | grep -E "Server Name|Default Sink" | sed 's/^/  /' || echo "  pactl not reachable"
     echo ""
@@ -138,7 +240,7 @@ show_help() {
 Usage: sudo bash setup-xrdp-gfx.sh [OPTIONS]
 
 Set up xrdp with H.264 encoding, GFX pipeline, desktop environment,
-and audio redirection on Debian 13 (trixie).
+and audio redirection on Debian 13 (trixie) or LMDE 7.
 
 Options:
   --desktop DESKTOP  Desktop environment to install (default: mate)
@@ -202,7 +304,7 @@ case "$DESKTOP" in
 esac
 
 echo "============================================"
-echo "  xrdp GFX + H.264 Setup for Debian 13"
+echo "  xrdp GFX + H.264 Setup for Debian 13 / LMDE 7"
 echo "  Desktop: $DESKTOP"
 echo "============================================"
 echo ""
@@ -244,7 +346,10 @@ echo ""
 
 echo "=== Step 2: Installing build tools ==="
 apt-get install -y build-essential devscripts libx264-dev libpulse-dev \
-    git autoconf libtool m4 dpkg-dev pulseaudio
+    git autoconf libtool m4 dpkg-dev pulseaudio pulseaudio-utils pavucontrol alsa-utils
+if [ "$DESKTOP" = "mate" ]; then
+    apt-get install -y mate-media
+fi
 echo ""
 
 echo "=== Step 3: Building PulseAudio xrdp audio module ==="
@@ -252,7 +357,7 @@ AUDIO_BUILD_DIR=$(mktemp -d /tmp/xrdp-audio-build.XXXXXX)
 cd "$AUDIO_BUILD_DIR"
 git clone --depth 1 https://github.com/neutrinolabs/pulseaudio-module-xrdp.git
 cd pulseaudio-module-xrdp
-scripts/install_pulseaudio_sources_apt.sh
+(prepare_pulseaudio_sources)
 ./bootstrap
 ./configure PULSE_DIR=/root/pulseaudio.src
 make
@@ -264,32 +369,167 @@ else
     echo "  WARNING: module-xrdp-sink.so not found after install"
 fi
 AUTOSTART="/etc/xdg/autostart/pulseaudio-xrdp.desktop"
-if [ -f "$AUTOSTART" ]; then
-    echo "  Autostart: $AUTOSTART"
+XRDP_AUDIO_LOADER="/usr/local/bin/load-pulseaudio-xrdp"
+cat > "$XRDP_AUDIO_LOADER" << 'LAEOF'
+#!/bin/sh
+# Load xrdp PulseAudio modules inside an xrdp desktop session.
+LOG_DIR="${HOME:-/tmp}/.cache"
+LOG_FILE="$LOG_DIR/xrdp-pulseaudio.log"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+exec >> "$LOG_FILE" 2>&1
+
+echo "[$(date)] load-pulseaudio-xrdp starting"
+
+if [ "${XRDP_SESSION:-}" != "1" ] && ! pgrep -u "$(id -u)" -x xrdp-chansrv >/dev/null 2>&1; then
+    echo "No xrdp session marker or xrdp-chansrv process found; exiting"
+    exit 0
+fi
+
+if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    echo "Set XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+fi
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+    PULSE_NATIVE="unix:$XDG_RUNTIME_DIR/pulse/native"
 else
-    echo "  WARNING: autostart file not created by make install"
-    echo "  Creating manually..."
-    mkdir -p /etc/xdg/autostart
-    cat > "$AUTOSTART" << 'ASEOF'
+    PULSE_NATIVE=""
+fi
+
+DISPLAY_NUM=$(printf "%s" "${DISPLAY:-}" | sed 's/^.*:\([0-9][0-9]*\).*$/\1/')
+if [ -z "$DISPLAY_NUM" ] || [ "$DISPLAY_NUM" = "${DISPLAY:-}" ]; then
+    DISPLAY_NUM=$(ps -u "$(id -u -n)" -o args= 2>/dev/null | sed -n 's/.*Xorg :\([0-9][0-9]*\).*/\1/p' | head -1)
+fi
+
+XRDP_SOCKET_PATH="${XRDP_SOCKET_PATH:-}"
+if [ -z "$XRDP_SOCKET_PATH" ]; then
+    if [ -d /run/xrdp/sockdir ]; then
+        XRDP_SOCKET_PATH=/run/xrdp/sockdir
+    else
+        XRDP_SOCKET_PATH=/tmp/.xrdp
+    fi
+fi
+
+XRDP_PULSE_SINK_SOCKET="${XRDP_PULSE_SINK_SOCKET:-xrdp_chansrv_audio_out_socket_${DISPLAY_NUM}}"
+XRDP_PULSE_SOURCE_SOCKET="${XRDP_PULSE_SOURCE_SOCKET:-xrdp_chansrv_audio_in_socket_${DISPLAY_NUM}}"
+
+FOUND_SINK_SOCKET=""
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    FOUND_SINK_SOCKET=$(find /run/xrdp/sockdir /tmp/.xrdp "$XRDP_SOCKET_PATH" \
+        -type s -name 'xrdp_chansrv_audio_out_socket_*' 2>/dev/null | head -1)
+    [ -n "$FOUND_SINK_SOCKET" ] && break
+    sleep 0.25
+done
+
+if [ -n "$FOUND_SINK_SOCKET" ]; then
+    XRDP_SOCKET_PATH=$(dirname "$FOUND_SINK_SOCKET")
+    XRDP_PULSE_SINK_SOCKET=$(basename "$FOUND_SINK_SOCKET")
+    XRDP_PULSE_SOURCE_SOCKET=$(printf "%s" "$XRDP_PULSE_SINK_SOCKET" | sed 's/audio_out/audio_in/')
+fi
+
+echo "DISPLAY=${DISPLAY:-unset} display_num=${DISPLAY_NUM:-unknown}"
+echo "socket_path=$XRDP_SOCKET_PATH"
+echo "sink_socket=$XRDP_PULSE_SINK_SOCKET"
+echo "source_socket=$XRDP_PULSE_SOURCE_SOCKET"
+
+if [ ! -S "$XRDP_SOCKET_PATH/$XRDP_PULSE_SINK_SOCKET" ]; then
+    echo "xrdp audio socket missing: $XRDP_SOCKET_PATH/$XRDP_PULSE_SINK_SOCKET"
+    echo "This usually means the RDP client did not request audio redirection, or xrdp-chansrv is not running for this display."
+    echo "Available xrdp sockets:"
+    find /run/xrdp/sockdir /tmp/.xrdp "$XRDP_SOCKET_PATH" -type s 2>/dev/null | sort -u || true
+fi
+
+if pactl info 2>/dev/null | grep -q '^Server Name:.*PipeWire' || pgrep -u "$(id -u)" -x pipewire-pulse >/dev/null 2>&1; then
+    echo "Stopping pipewire-pulse for this xrdp session"
+    systemctl --user disable --now pipewire-pulse.socket pipewire-pulse.service >/dev/null 2>&1 || true
+    systemctl --user mask pipewire-pulse.socket pipewire-pulse.service >/dev/null 2>&1 || true
+    pkill -u "$(id -u)" -x pipewire-pulse >/dev/null 2>&1 || true
+    sleep 0.5
+fi
+
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+    mkdir -p "$XDG_RUNTIME_DIR/pulse" 2>/dev/null || true
+    if ! env -u PULSE_SERVER pactl info >/dev/null 2>&1 && ! pgrep -u "$(id -u)" -x pulseaudio >/dev/null 2>&1 && [ -S "$XDG_RUNTIME_DIR/pulse/native" ]; then
+        echo "Removing stale PulseAudio socket: $XDG_RUNTIME_DIR/pulse/native"
+        rm -f "$XDG_RUNTIME_DIR/pulse/native"
+    fi
+fi
+
+if ! env -u PULSE_SERVER pulseaudio --check >/dev/null 2>&1; then
+    echo "Starting real PulseAudio"
+    env -u PULSE_SERVER pulseaudio --start || true
+fi
+
+if [ -n "$PULSE_NATIVE" ]; then
+    export PULSE_SERVER="$PULSE_NATIVE"
+    echo "Set PULSE_SERVER=$PULSE_SERVER"
+fi
+
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    pactl info >/dev/null 2>&1 && break
+    sleep 0.2
+done
+
+pactl info >/dev/null 2>&1 || {
+    echo "pactl cannot connect to PulseAudio"
+    env -u PULSE_SERVER pulseaudio --start --log-target=stderr || true
+    exit 0
+}
+
+pactl info | grep -E '^Server Name:|^Default Sink:' || true
+
+if ! pactl list short modules 2>/dev/null | grep -q 'module-xrdp-sink'; then
+    pactl load-module module-xrdp-sink \
+        "xrdp_socket_path=$XRDP_SOCKET_PATH" \
+        "xrdp_pulse_sink_socket=$XRDP_PULSE_SINK_SOCKET" || true
+fi
+
+if ! pactl list short modules 2>/dev/null | grep -q 'module-xrdp-source'; then
+    pactl load-module module-xrdp-source \
+        "xrdp_socket_path=$XRDP_SOCKET_PATH" \
+        "xrdp_pulse_source_socket=$XRDP_PULSE_SOURCE_SOCKET" || true
+fi
+
+if pactl list short sinks 2>/dev/null | grep -q 'xrdp-sink'; then
+    pactl set-default-sink xrdp-sink || true
+    echo "xrdp-sink is present and set as default"
+else
+    echo "xrdp-sink is missing"
+fi
+LAEOF
+chmod 755 "$XRDP_AUDIO_LOADER"
+echo "  Installed audio loader: $XRDP_AUDIO_LOADER"
+
+PA_MOD_DIR=$(pkg-config --variable=modlibexecdir libpulse 2>/dev/null || true)
+if [ -n "$PA_MOD_DIR" ]; then
+    mkdir -p "$PA_MOD_DIR"
+    for MODULE in module-xrdp-sink.so module-xrdp-source.so; do
+        if [ ! -f "$PA_MOD_DIR/$MODULE" ]; then
+            FOUND_MODULE=$(find /usr /usr/local -name "$MODULE" 2>/dev/null | head -1)
+            if [ -n "$FOUND_MODULE" ]; then
+                cp "$FOUND_MODULE" "$PA_MOD_DIR/$MODULE"
+                echo "  Copied $MODULE into PulseAudio module dir: $PA_MOD_DIR"
+            fi
+        fi
+    done
+fi
+
+mkdir -p /etc/xdg/autostart
+cat > "$AUTOSTART" << ASEOF
 [Desktop Entry]
 Type=Application
 Name=PulseAudio xrdp modules
-Exec=/usr/bin/pactl load-module module-xrdp-sink
+Exec=$XRDP_AUDIO_LOADER
 NoDisplay=true
-OnlyShowIn=XRDP;
 ASEOF
-    echo "  Created $AUTOSTART"
-fi
+echo "  Autostart: $AUTOSTART"
 rm -rf "$AUDIO_BUILD_DIR"
 
 # Debian 13 defaults to PipeWire-pulse, but xrdp audio modules require
 # real PulseAudio. Disable PipeWire-pulse and enable PulseAudio globally.
-if systemctl --global is-enabled pipewire-pulse.socket >/dev/null 2>&1; then
-    echo "  Switching from PipeWire-pulse to PulseAudio (required for xrdp audio)"
-    systemctl --global disable pipewire-pulse.socket pipewire-pulse.service 2>/dev/null || true
-    systemctl --global mask pipewire-pulse.socket pipewire-pulse.service 2>/dev/null || true
-    systemctl --global enable pulseaudio.service pulseaudio.socket 2>/dev/null || true
-fi
+echo "  Switching from PipeWire-pulse to PulseAudio (required for xrdp audio)"
+systemctl --global disable pipewire-pulse.socket pipewire-pulse.service 2>/dev/null || true
+systemctl --global mask pipewire-pulse.socket pipewire-pulse.service 2>/dev/null || true
+systemctl --global enable pulseaudio.service pulseaudio.socket 2>/dev/null || true
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════
@@ -411,6 +651,29 @@ else
     echo "  Added autorun=Xorg"
 fi
 
+if grep -q '^\[Channels\]' "$XRDP_INI"; then
+    if sed -n '/^\[Channels\]/,/^\[/p' "$XRDP_INI" | grep -q '^rdpsnd='; then
+        sed -i '/^\[Channels\]/,/^\[/ s/^rdpsnd=.*/rdpsnd=true/' "$XRDP_INI"
+    else
+        sed -i '/^\[Channels\]/a rdpsnd=true' "$XRDP_INI"
+    fi
+
+    if sed -n '/^\[Channels\]/,/^\[/p' "$XRDP_INI" | grep -q '^drdynvc='; then
+        sed -i '/^\[Channels\]/,/^\[/ s/^drdynvc=.*/drdynvc=true/' "$XRDP_INI"
+    else
+        sed -i '/^\[Channels\]/a drdynvc=true' "$XRDP_INI"
+    fi
+    echo "  Enabled xrdp audio channels (rdpsnd, drdynvc)"
+else
+    cat >> "$XRDP_INI" << 'CHANEOF'
+
+[Channels]
+rdpsnd=true
+drdynvc=true
+CHANEOF
+    echo "  Added xrdp audio channels (rdpsnd, drdynvc)"
+fi
+
 # Allow non-root to start Xorg
 XWRAPPER="/etc/X11/Xwrapper.config"
 if [ -f "$XWRAPPER" ]; then
@@ -427,8 +690,50 @@ fi
 
 # Set startwm.sh
 if [ -n "$STARTWM_CMD" ]; then
-    cat > /etc/xrdp/startwm.sh << WMEOF
+    if is_linux_mint; then
+        cat > /etc/xrdp/startwm.sh << 'WMEOF'
 #!/bin/sh
+# xrdp X session start script (c) 2015, 2017, 2021 mirabilos
+# published under The MirOS Licence
+
+# Rely on /etc/pam.d/xrdp-sesman using pam_env to load both
+# /etc/environment and /etc/default/locale to initialise the
+# locale and the user environment properly.
+
+# xrdp X session start script
+
+unset DBUS_SESSION_BUS_ADDRESS
+unset XDG_RUNTIME_DIR
+
+if [ -r /etc/profile ]; then
+    . /etc/profile
+fi
+
+if [ -r "$HOME/.profile" ]; then
+    . "$HOME/.profile"
+fi
+
+# Use user's ~/.xsession if present
+if [ -r "$HOME/.xsession" ]; then
+    exec /bin/sh "$HOME/.xsession"
+fi
+
+# Fallback to system Xsession
+exec /etc/X11/Xsession
+WMEOF
+        chmod 755 /etc/xrdp/startwm.sh
+        echo "  Set startwm.sh to Linux Mint Xsession launcher"
+    else
+        cat > /etc/xrdp/startwm.sh << WMEOF
+#!/bin/sh
+export XRDP_SESSION=1
+if [ -d "/run/user/$(id -u)" ]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+/usr/local/bin/load-pulseaudio-xrdp
+if [ -n "\${XDG_RUNTIME_DIR:-}" ]; then
+    export PULSE_SERVER="unix:\$XDG_RUNTIME_DIR/pulse/native"
+fi
 if test -r /etc/profile; then
     . /etc/profile
 fi
@@ -437,9 +742,25 @@ if test -r ~/.profile; then
 fi
 $STARTWM_CMD
 WMEOF
-    chmod 755 /etc/xrdp/startwm.sh
-    echo "  Set startwm.sh to: $STARTWM_CMD"
+        chmod 755 /etc/xrdp/startwm.sh
+        echo "  Set startwm.sh to: $STARTWM_CMD"
+    fi
 fi
+cat > /etc/X11/Xsession.d/95xrdp-pulseaudio-env << 'XSEOF'
+# Ensure xrdp desktop applications inherit the PulseAudio runtime path.
+if pgrep -u "$(id -u)" -x xrdp-chansrv >/dev/null 2>&1; then
+    export XRDP_SESSION=1
+    if [ -d "/run/user/$(id -u)" ]; then
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    fi
+    /usr/local/bin/load-pulseaudio-xrdp
+    if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+        export PULSE_SERVER="unix:$XDG_RUNTIME_DIR/pulse/native"
+    fi
+fi
+XSEOF
+chmod 644 /etc/X11/Xsession.d/95xrdp-pulseaudio-env
+echo "  Installed Xsession PulseAudio environment hook"
 echo ""
 
 echo "=== Step 8: Creating GFX configuration ==="
