@@ -10,12 +10,15 @@ use bollard::query_parameters::{
 use bollard::Docker;
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::process::Command;
 
 /// Docker-based VDI driver. Connects to the local Docker daemon via unix socket.
 pub struct DockerDriver {
     client: Docker,
     ready_timeout: Duration,
     host_port_range: Option<(u16, u16)>,
+    container_hook_script: Option<String>,
+    container_hook_timeout: Duration,
 }
 
 impl DockerDriver {
@@ -32,6 +35,8 @@ impl DockerDriver {
             client,
             ready_timeout: Duration::from_secs(30),
             host_port_range: None,
+            container_hook_script: None,
+            container_hook_timeout: Duration::from_secs(10),
         })
     }
 
@@ -51,6 +56,13 @@ impl DockerDriver {
         }
         self.host_port_range = Some((start, end));
         Ok(self)
+    }
+
+    /// Configure an external VDI container hook script.
+    pub fn with_container_hook(mut self, script: Option<String>, timeout_secs: u64) -> Self {
+        self.container_hook_script = script.filter(|s| !s.trim().is_empty());
+        self.container_hook_timeout = Duration::from_secs(timeout_secs.max(1));
+        self
     }
 
     /// Sanitize a username into a valid Docker container name suffix.
@@ -95,6 +107,98 @@ impl DockerDriver {
             Some((start, end)) => (start..=end).contains(&port),
             None => true,
         }
+    }
+
+    fn extract_container_name(
+        inspect: &bollard::models::ContainerInspectResponse,
+        fallback: &str,
+    ) -> String {
+        inspect
+            .name
+            .as_deref()
+            .unwrap_or(fallback)
+            .trim_start_matches('/')
+            .to_string()
+    }
+
+    async fn run_container_hook(
+        &self,
+        action: &str,
+        port: u16,
+        container_id: &str,
+        container_name: &str,
+    ) -> Result<(), VdiError> {
+        let Some(script) = self.container_hook_script.as_deref() else {
+            return Ok(());
+        };
+
+        let mut child = Command::new(script);
+        child
+            .arg(action)
+            .arg(port.to_string())
+            .arg(container_id)
+            .arg(container_name)
+            .env("RUSTGUAC_VDI_HOOK_ACTION", action)
+            .env("RUSTGUAC_VDI_PORT", port.to_string())
+            .env("RUSTGUAC_VDI_CONTAINER_ID", container_id)
+            .env("RUSTGUAC_VDI_CONTAINER_NAME", container_name);
+
+        let output = tokio::time::timeout(self.container_hook_timeout, child.output())
+            .await
+            .map_err(|_| {
+                VdiError::Timeout(format!(
+                    "VDI container hook '{}' timed out after {}s",
+                    script,
+                    self.container_hook_timeout.as_secs()
+                ))
+            })?
+            .map_err(|e| {
+                VdiError::Docker(format!(
+                    "failed to run VDI container hook '{}': {}",
+                    script, e
+                ))
+            })?;
+
+        if output.status.success() {
+            tracing::info!(
+                hook = %script,
+                action,
+                port,
+                container = %container_name,
+                "VDI container hook completed"
+            );
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(VdiError::Docker(format!(
+            "VDI container hook '{}' failed for action '{}' with status {}{}{}",
+            script,
+            action,
+            output.status,
+            if stdout.trim().is_empty() {
+                String::new()
+            } else {
+                format!("; stdout: {}", stdout.trim())
+            },
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!("; stderr: {}", stderr.trim())
+            }
+        )))
+    }
+
+    async fn prepare_rdp_endpoint(
+        &self,
+        port: u16,
+        container_id: &str,
+        container_name: &str,
+    ) -> Result<(), VdiError> {
+        self.run_container_hook("up", port, container_id, container_name)
+            .await?;
+        self.wait_for_ready("127.0.0.1", port).await
     }
 
     /// Extract the host-mapped port for container port 3389/tcp from inspect data.
@@ -271,6 +375,8 @@ impl DockerDriver {
                 if running {
                     // Container is running — reuse it, but update password
                     let port = Self::extract_mapped_port(&inspect)?;
+                    let container_id = inspect.id.as_deref().unwrap_or(&name).to_string();
+                    let container_name = Self::extract_container_name(&inspect, &name);
                     if !self.port_in_configured_range(port) {
                         tracing::info!(
                             container = %name,
@@ -288,8 +394,10 @@ impl DockerDriver {
                         port,
                         "Reusing existing VDI container"
                     );
+                    self.prepare_rdp_endpoint(port, &container_id, &container_name)
+                        .await?;
                     return Ok(ContainerInfo {
-                        container_id: inspect.id.unwrap_or_default(),
+                        container_id,
                         rdp_host: "127.0.0.1".into(),
                         rdp_port: port,
                         reused: true,
@@ -298,6 +406,8 @@ impl DockerDriver {
 
                 // Container exists but stopped — start it
                 let port = Self::extract_mapped_port(&inspect)?;
+                let container_id = inspect.id.as_deref().unwrap_or(&name).to_string();
+                let container_name = Self::extract_container_name(&inspect, &name);
                 if !self.port_in_configured_range(port) {
                     tracing::info!(
                         container = %name,
@@ -316,12 +426,13 @@ impl DockerDriver {
                     .await
                     .map_err(|e| VdiError::Docker(format!("failed to start container: {}", e)))?;
 
-                self.wait_for_ready("127.0.0.1", port).await?;
+                self.prepare_rdp_endpoint(port, &container_id, &container_name)
+                    .await?;
                 self.update_container_password(&name, &spec.username, &spec.password)
                     .await?;
 
                 Ok(ContainerInfo {
-                    container_id: inspect.id.unwrap_or_default(),
+                    container_id,
                     rdp_host: "127.0.0.1".into(),
                     rdp_port: port,
                     reused: true,
@@ -478,7 +589,9 @@ impl DockerDriver {
                                 VdiError::Docker(format!("failed to inspect after create: {}", e))
                             })?;
                     let port = Self::extract_mapped_port(&inspect)?;
-                    self.wait_for_ready("127.0.0.1", port).await?;
+                    let container_name = Self::extract_container_name(&inspect, &name);
+                    self.prepare_rdp_endpoint(port, &created.id, &container_name)
+                        .await?;
 
                     tracing::info!(
                         container = %name,
@@ -507,6 +620,37 @@ impl DockerDriver {
     }
 
     async fn do_stop_container(&self, container_id: &str) -> Result<(), VdiError> {
+        let hook_info = match self.client.inspect_container(container_id, None).await {
+            Ok(inspect) => {
+                let port = Self::extract_mapped_port(&inspect).ok();
+                let name = Self::extract_container_name(&inspect, container_id);
+                port.map(|port| (port, name))
+            }
+            Err(e) => {
+                tracing::debug!(
+                    container_id,
+                    "Skipping VDI container hook teardown; inspect failed: {}",
+                    e
+                );
+                None
+            }
+        };
+
+        if let Some((port, name)) = hook_info {
+            if let Err(e) = self
+                .run_container_hook("down", port, container_id, &name)
+                .await
+            {
+                tracing::warn!(
+                    container_id,
+                    container = %name,
+                    port,
+                    "VDI container hook teardown failed: {}",
+                    e
+                );
+            }
+        }
+
         // Stop with 5s grace period
         let _ = self
             .client

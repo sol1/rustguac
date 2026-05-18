@@ -479,7 +479,12 @@ impl SessionManager {
         }
         match crate::vdi::DockerDriver::new(&vdi_cfg.docker_socket) {
             Ok(driver) => {
-                let mut driver = driver.with_ready_timeout(vdi_cfg.ready_timeout_secs);
+                let mut driver = driver
+                    .with_ready_timeout(vdi_cfg.ready_timeout_secs)
+                    .with_container_hook(
+                        vdi_cfg.container_hook_script.clone(),
+                        vdi_cfg.container_hook_timeout_secs,
+                    );
                 match (vdi_cfg.port_range_start, vdi_cfg.port_range_end) {
                     (Some(start), Some(end)) => {
                         driver = match driver.with_host_port_range(start, end) {
@@ -503,6 +508,7 @@ impl SessionManager {
                     idle_timeout_mins = vdi_cfg.idle_timeout_mins,
                     port_range_start = ?vdi_cfg.port_range_start,
                     port_range_end = ?vdi_cfg.port_range_end,
+                    container_hook_script = ?vdi_cfg.container_hook_script,
                     "VDI Docker driver initialized"
                 );
                 Some(Arc::new(driver))
