@@ -52,13 +52,28 @@ sudo systemctl restart rustguac
 
 ## Docker image requirements
 
-Any Docker image that meets these requirements will work:
+rustguac supports two patterns for image authentication:
 
-- **xrdp listening on port 3389** with TLS certificates configured
-- **Accepts environment variables**: `VDI_USERNAME`, `VDI_PASSWORD`
-- **Entrypoint** creates the Linux user, sets the password, and starts xrdp
+### Pattern A: env-var driven (recommended for shared deployments)
 
-A minimal test image is included at `contrib/vdi-test-image/` (Debian + xfce4).
+The image reads `VDI_USERNAME` and `VDI_PASSWORD` from its entrypoint, calls `useradd` / `chpasswd` to provision the account, and starts xrdp. This is the default flow:
+
+- rustguac derives `VDI_USERNAME` from the operator's identity (everything before `@`, lowercased, non-alphanumeric replaced with `_`).
+- `VDI_PASSWORD` is freshly generated per connect (32 random hex chars).
+- Container name is deterministic per operator (`rustguac-vdi-<username>`), so reconnects reuse the same container.
+- xrdp listens on port 3389 with TLS certificates configured.
+
+A minimal example image is at `contrib/vdi-test-image/` (Debian + xfce4).
+
+### Pattern B: baked-in account (for images with fixed credentials)
+
+If your image has a hardcoded user account that does not honour `VDI_USERNAME` / `VDI_PASSWORD`, set `container_username` and `container_password` on the entry. rustguac uses those values for the RDP login into the container.
+
+**`VDI_USERNAME` / `VDI_PASSWORD` are still injected** with the override values, so an image that *also* happens to read them gets consistent state. Images that ignore the env vars simply continue to use their baked-in account; rustguac just makes sure the RDP login matches.
+
+The container name is still deterministic from the resolved username, so multiple operators connecting via an entry that uses a fixed `container_username` will share the same container instance. Confirm this is what you want before using Pattern B at scale.
+
+Both `container_username` and `container_password` support [credential variables](credential-variables.md), so the actual credential value can be sourced from each operator's saved credentials rather than stored in plain in the entry.
 
 ### Example entrypoint
 
@@ -93,7 +108,8 @@ exec xrdp --nodaemon
 2. Add a new entry with type **VDI (Docker)**
 3. Set the **Container Image** (e.g. `rustguac-vdi-test:latest`)
 4. Optionally set CPU limit, memory limit, environment variables, idle timeout
-5. Click Save
+5. If the image has a baked-in user account (Pattern B above), set **Container username** and **Container password** to match; otherwise leave them blank and the image's entrypoint will provision the account from `VDI_USERNAME` / `VDI_PASSWORD`
+6. Click Save
 
 Users in the folder's allowed groups can now click Connect to get a desktop.
 

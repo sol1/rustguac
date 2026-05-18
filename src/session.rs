@@ -115,6 +115,13 @@ pub struct CreateSessionRequest {
     pub container_env: Option<std::collections::HashMap<String, String>>,
     /// Override idle timeout for VDI container in minutes.
     pub container_idle_timeout_mins: Option<u64>,
+    /// Fixed VDI container username override (matches the baked-in account
+    /// in container images that don't honour VDI_USERNAME). Auto-derived
+    /// from the operator's identity when unset.
+    pub container_username: Option<String>,
+    /// Fixed VDI container password override matching `container_username`.
+    /// Ephemerally generated when unset.
+    pub container_password: Option<String>,
     /// Allow the owner to generate a Share URL for this session.
     /// Default false. For entry-derived sessions this is populated from
     /// the entry's `allow_sharing` flag; ad-hoc sessions are never
@@ -882,24 +889,43 @@ impl SessionManager {
                     )));
                 }
 
-                // Sanitize username and generate ephemeral password
-                let vdi_username = created_by
-                    .split('@')
-                    .next()
-                    .unwrap_or(&created_by)
-                    .to_lowercase()
-                    .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                    .collect::<String>();
-                let vdi_password = generate_share_token(); // 32 hex chars
+                // Username: per-entry override if set (for images with baked-in
+                // accounts that don't honour VDI_USERNAME), otherwise derive
+                // from the operator's identity. The derived form is also used
+                // as the deterministic container-name suffix, so containers
+                // are scoped per-operator. When the override is set the same
+                // container is shared by everyone connecting with that entry,
+                // which is the desired behaviour for shared baked-in accounts.
+                let vdi_username = req
+                    .container_username
+                    .as_ref()
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        created_by
+                            .split('@')
+                            .next()
+                            .unwrap_or(&created_by)
+                            .to_lowercase()
+                            .chars()
+                            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                            .collect::<String>()
+                    });
+                let vdi_password = req
+                    .container_password
+                    .as_ref()
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .unwrap_or_else(generate_share_token); // 32 hex chars
 
-                // Merge env vars
+                // Merge env vars. We still set VDI_USERNAME/VDI_PASSWORD even
+                // when the override is in use - that way images which DO read
+                // the env vars get the right values, and images which ignore
+                // them aren't affected. User-provided env never overrides the
+                // core VDI vars.
                 let mut env = req.container_env.unwrap_or_default();
-                // Don't let user-provided env override the core VDI vars
-                env.entry("VDI_USERNAME".into())
-                    .or_insert(vdi_username.clone());
-                env.entry("VDI_PASSWORD".into())
-                    .or_insert(vdi_password.clone());
+                env.insert("VDI_USERNAME".into(), vdi_username.clone());
+                env.insert("VDI_PASSWORD".into(), vdi_password.clone());
 
                 // Resolve resource limits: entry overrides > config defaults
                 let cpu_limit = req.container_cpu_limit.unwrap_or(vdi_cfg.default_cpu_limit);

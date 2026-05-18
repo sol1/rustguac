@@ -36,6 +36,21 @@ Both reference the same `corp` domain. A user opens **My Credentials**, fills in
 
 An entry can also mix variables with static values. For example, an RDP entry might have a static hostname and port but use `$ad_username`, `$ad_password`, and `$ad_domain` for credentials.
 
+## Where variables can be used
+
+Credential variables are expanded at connect time in the following entry fields:
+
+| Field | Applies to | Notes |
+|-------|------------|-------|
+| `username` | SSH, RDP, VNC, Web | Authentication username for the target |
+| `password` | SSH, RDP, VNC, Web | Authentication password for the target |
+| `domain` | RDP | AD/Windows domain |
+| `private_key` | SSH | SSH private key contents |
+| `container_username` | VDI | Username used to log into the VDI container (only when set on the entry; otherwise auto-derived from the operator identity) |
+| `container_password` | VDI | Password used to log into the VDI container (only when set on the entry; otherwise ephemerally generated) |
+
+VDI entries that auto-derive credentials (the default for images that honour `VDI_USERNAME`/`VDI_PASSWORD`) do not need credential variables. They only apply when an admin has set explicit `container_username` / `container_password` overrides for an image with a baked-in account.
+
 ## My Credentials dialog
 
 Access via the gear icon in the top-right corner of the connections page. The dialog:

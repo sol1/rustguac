@@ -2296,6 +2296,8 @@ pub async fn ab_connect_entry(
         container_memory_limit: ab_entry.container_memory_limit,
         container_env: ab_entry.container_env,
         container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
+        container_username: ab_entry.container_username,
+        container_password: ab_entry.container_password,
         allow_sharing: ab_entry.allow_sharing,
     };
 
@@ -2776,6 +2778,7 @@ pub async fn ab_update_entry(
             AddressBookEntry {
                 password: data.password.or(existing.password),
                 private_key: data.private_key.or(existing.private_key),
+                container_password: data.container_password.or(existing.container_password),
                 jump_hosts: merged_jump_hosts,
                 // Clear legacy flat fields — they've been migrated
                 jump_password: None,
@@ -3947,6 +3950,8 @@ pub async fn quick_connect(
             container_memory_limit: ab_entry.container_memory_limit,
             container_env: ab_entry.container_env,
             container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
+            container_username: ab_entry.container_username,
+            container_password: ab_entry.container_password,
             allow_sharing: ab_entry.allow_sharing,
         };
 
@@ -4045,6 +4050,8 @@ pub async fn quick_connect(
         container_memory_limit: None,
         container_env: None,
         container_idle_timeout_mins: None,
+        container_username: None,
+        container_password: None,
         allow_sharing: None,
     };
 

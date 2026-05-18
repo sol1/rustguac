@@ -173,6 +173,18 @@ pub struct AddressBookEntry {
     /// Override idle timeout for VDI container in minutes. Uses global default if unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_idle_timeout_mins: Option<u64>,
+    /// Optional fixed username for the VDI container's RDP login. When set,
+    /// rustguac uses this username for the RDP connect into the container
+    /// instead of deriving one from the operator's identity. Useful when the
+    /// container image has a baked-in user that doesn't honour the
+    /// VDI_USERNAME env var.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_username: Option<String>,
+    /// Optional fixed password matching `container_username`. When set,
+    /// rustguac uses this password for the RDP connect instead of
+    /// generating an ephemeral one. Stored in Vault alongside the entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_password: Option<String>,
     /// Allow users to generate a Share URL for sessions from this entry.
     /// Default: false (admin must opt in per entry). Gates the Share
     /// button in the Connections Active Sessions card — when `false`,
@@ -305,6 +317,14 @@ pub struct EntryInfo {
     /// Idle timeout for VDI container in minutes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_idle_timeout_mins: Option<u64>,
+    /// Optional fixed VDI container username (for images with baked-in
+    /// accounts that don't honour VDI_USERNAME).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_username: Option<String>,
+    /// Whether a fixed VDI container password is stored on this entry.
+    /// The actual value is never serialised back to clients.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub has_container_password: bool,
     /// Whether users can generate Share URLs for sessions of this entry.
     /// Defaults to false — admin must opt in per entry.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -369,6 +389,8 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             container_memory_limit: e.container_memory_limit,
             container_env: e.container_env.clone(),
             container_idle_timeout_mins: e.container_idle_timeout_mins,
+            container_username: e.container_username.clone(),
+            has_container_password: e.container_password.as_ref().is_some_and(|p| !p.is_empty()),
             allow_sharing: e.allow_sharing,
             auto_open_if_singleton: e.auto_open_if_singleton,
         }
@@ -1340,6 +1362,8 @@ pub fn entry_credential_variables(entry: &AddressBookEntry) -> Vec<String> {
         &entry.password,
         &entry.domain,
         &entry.private_key,
+        &entry.container_username,
+        &entry.container_password,
     ]
     .iter()
     .filter_map(|field| field.as_deref())
@@ -1379,6 +1403,8 @@ pub fn resolve_credential_variables(
     resolve_field(&mut resolved.password, user_creds, &mut missing);
     resolve_field(&mut resolved.domain, user_creds, &mut missing);
     resolve_field(&mut resolved.private_key, user_creds, &mut missing);
+    resolve_field(&mut resolved.container_username, user_creds, &mut missing);
+    resolve_field(&mut resolved.container_password, user_creds, &mut missing);
 
     if missing.is_empty() {
         Ok(resolved)

@@ -589,7 +589,7 @@
                 <label>Container Image
                     <input type="text" id="em-vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest">
                 </label>
-                <div class="field-hint">Docker image with xrdp on port 3389. Must accept <code>VDI_USERNAME</code> and <code>VDI_PASSWORD</code> env vars. Container is ephemeral — persists while idle, then removed.</div>
+                <div class="field-hint">Docker image with xrdp on port 3389. By default the entrypoint should read <code>VDI_USERNAME</code> / <code>VDI_PASSWORD</code> env vars (rustguac derives them from your identity and generates an ephemeral password per connect). For images with a baked-in account, fill in the Container username / password fields below. Container is ephemeral - persists while idle, then removed.</div>
                 <label>CPU Limit <span style="color:var(--text-muted);font-size:0.85em">(optional, cores)</span>
                     <input type="number" id="em-vdi-cpu" step="0.5" min="0" placeholder="e.g. 2.0 (0 = use default)">
                 </label>
@@ -599,6 +599,13 @@
                 <label>Environment Variables <span style="color:var(--text-muted);font-size:0.85em">(optional, KEY=VALUE per line)</span>
                     <textarea id="em-vdi-env" rows="3" style="resize:vertical;font-size:0.85em" placeholder="TZ=Australia/Brisbane&#10;LANG=en_US.UTF-8"></textarea>
                 </label>
+                <label>Container username <span style="color:var(--text-muted);font-size:0.85em">(optional, overrides auto-derive)</span>
+                    <input type="text" id="em-vdi-container-username" placeholder="Leave blank to derive from operator identity">
+                </label>
+                <label>Container password <span style="color:var(--text-muted);font-size:0.85em">(optional, overrides ephemeral)</span>
+                    <input type="password" id="em-vdi-container-password" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
+                </label>
+                <div class="field-hint">Use these only when the container image has a fixed account (Pattern B in the <a href="/docs.html#vdi" style="color:var(--accent)">VDI docs</a>). When set, rustguac uses these creds for the RDP login into the container, and the same container is shared by everyone connecting through this entry (deterministic name from the username). When left blank, rustguac derives a per-operator username and generates a fresh password every connect. Both fields support <a href="/docs.html#credential-variables" style="color:var(--accent)">credential variables</a> (e.g. <code>$corp_username</code>).</div>
                 <label>Idle Timeout <span style="color:var(--text-muted);font-size:0.85em">(optional, minutes)</span>
                     <input type="number" id="em-vdi-idle-timeout" min="0" placeholder="e.g. 60 (0 = use global default)">
                 </label>
@@ -2920,6 +2927,9 @@
             document.getElementById('em-vdi-cpu').value = '';
             document.getElementById('em-vdi-memory').value = '';
             document.getElementById('em-vdi-env').value = '';
+            document.getElementById('em-vdi-container-username').value = '';
+            document.getElementById('em-vdi-container-password').value = '';
+            document.getElementById('em-vdi-container-password').placeholder = 'Leave blank to generate per-connect';
             document.getElementById('em-vdi-idle-timeout').value = '';
             document.getElementById('em-vdi-banner').value = '';
             document.getElementById('em-override-recording').checked = false;
@@ -3043,6 +3053,14 @@
                         }).join('\n');
                         document.getElementById('em-vdi-env').value = envLines;
                     }
+                    document.getElementById('em-vdi-container-username').value = entryData.container_username || '';
+                    // Password field is left blank by design; the entry retains the stored value
+                    // unless a new one is typed. has_container_password shows whether one is set.
+                    var cpw = document.getElementById('em-vdi-container-password');
+                    cpw.value = '';
+                    cpw.placeholder = entryData.has_container_password
+                        ? '(stored password unchanged unless you type a new one)'
+                        : 'Leave blank to generate per-connect';
                     document.getElementById('em-vdi-idle-timeout').value = entryData.container_idle_timeout_mins || '';
                     document.getElementById('em-vdi-banner').value = entryData.banner || '';
                 }
@@ -3204,6 +3222,12 @@
                     });
                     if (Object.keys(envMap).length > 0) entry.container_env = envMap;
                 }
+                var cu = document.getElementById('em-vdi-container-username').value.trim();
+                if (cu) entry.container_username = cu;
+                // Password: only send when user typed something. Empty preserves the stored value
+                // server-side (see ab_update_entry in api.rs).
+                var cp = document.getElementById('em-vdi-container-password').value;
+                if (cp) entry.container_password = cp;
                 var idleT = parseInt(document.getElementById('em-vdi-idle-timeout').value);
                 if (idleT > 0) entry.container_idle_timeout_mins = idleT;
                 var vbn = document.getElementById('em-vdi-banner').value.trim();
