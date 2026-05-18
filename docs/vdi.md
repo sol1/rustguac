@@ -38,6 +38,8 @@ enabled = true
 # default_cpu_limit = 2.0                   # cores, 0 = no limit
 # default_memory_limit = 2048               # MB, 0 = no limit
 # ready_timeout_secs = 30                   # wait for xrdp to start
+# port_range_start = 39000                  # optional localhost RDP port range
+# port_range_end = 39999
 # idle_timeout_mins = 60                    # container lifetime after disconnect
 # home_base = "/vdi-homes"                  # persistent home directories
 # allowed_images = ["myregistry/desktop:latest"]  # whitelist, empty = allow all

@@ -479,10 +479,30 @@ impl SessionManager {
         }
         match crate::vdi::DockerDriver::new(&vdi_cfg.docker_socket) {
             Ok(driver) => {
-                let driver = driver.with_ready_timeout(vdi_cfg.ready_timeout_secs);
+                let mut driver = driver.with_ready_timeout(vdi_cfg.ready_timeout_secs);
+                match (vdi_cfg.port_range_start, vdi_cfg.port_range_end) {
+                    (Some(start), Some(end)) => {
+                        driver = match driver.with_host_port_range(start, end) {
+                            Ok(driver) => driver,
+                            Err(e) => {
+                                tracing::error!("Failed to initialize VDI Docker driver: {}", e);
+                                return None;
+                            }
+                        };
+                    }
+                    (None, None) => {}
+                    _ => {
+                        tracing::error!(
+                            "Failed to initialize VDI Docker driver: port_range_start and port_range_end must be set together"
+                        );
+                        return None;
+                    }
+                }
                 tracing::info!(
                     socket = %vdi_cfg.docker_socket,
                     idle_timeout_mins = vdi_cfg.idle_timeout_mins,
+                    port_range_start = ?vdi_cfg.port_range_start,
+                    port_range_end = ?vdi_cfg.port_range_end,
                     "VDI Docker driver initialized"
                 );
                 Some(Arc::new(driver))

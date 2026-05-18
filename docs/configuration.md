@@ -240,6 +240,8 @@ Enables VDI (Virtual Desktop Infrastructure) sessions using Docker containers. E
 | `default_cpu_limit` | float | `0` | Default CPU limit for containers (fractional cores, e.g. 2.0). 0 = no limit. |
 | `default_memory_limit` | integer | `0` | Default memory limit in MB. 0 = no limit. |
 | `ready_timeout_secs` | integer | `30` | Seconds to wait for xrdp to become ready in a new container. |
+| `port_range_start` | integer | *(none)* | First localhost port Docker may bind VDI RDP to. Must be set with `port_range_end`. |
+| `port_range_end` | integer | *(none)* | Last localhost port Docker may bind VDI RDP to. Must be set with `port_range_start`. |
 | `idle_timeout_mins` | integer | `60` | Minutes a container persists after last session disconnect. 0 = remove immediately. |
 | `allowed_images` | list | `[]` | Allowed Docker images (exact match). Empty = allow all. |
 | `home_base` | string | *(none)* | Base directory for persistent user home dirs. Each user gets `{home_base}/{username}` mounted into the container. |
@@ -248,6 +250,8 @@ Enables VDI (Virtual Desktop Infrastructure) sessions using Docker containers. E
 [vdi]
 enabled = true
 idle_timeout_mins = 60
+# port_range_start = 39000
+# port_range_end = 39999
 home_base = "/vdi-homes"
 # allowed_images = ["myregistry/desktop:latest"]
 ```

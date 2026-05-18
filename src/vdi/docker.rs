@@ -15,6 +15,7 @@ use std::time::Duration;
 pub struct DockerDriver {
     client: Docker,
     ready_timeout: Duration,
+    host_port_range: Option<(u16, u16)>,
 }
 
 impl DockerDriver {
@@ -30,6 +31,7 @@ impl DockerDriver {
         Ok(Self {
             client,
             ready_timeout: Duration::from_secs(30),
+            host_port_range: None,
         })
     }
 
@@ -37,6 +39,18 @@ impl DockerDriver {
     pub fn with_ready_timeout(mut self, secs: u64) -> Self {
         self.ready_timeout = Duration::from_secs(secs);
         self
+    }
+
+    /// Restrict Docker's published host port for RDP to an inclusive range.
+    pub fn with_host_port_range(mut self, start: u16, end: u16) -> Result<Self, VdiError> {
+        if start == 0 || start > end {
+            return Err(VdiError::Docker(format!(
+                "invalid VDI port range: {}-{}",
+                start, end
+            )));
+        }
+        self.host_port_range = Some((start, end));
+        Ok(self)
     }
 
     /// Sanitize a username into a valid Docker container name suffix.
@@ -53,6 +67,34 @@ impl DockerDriver {
     /// Container name for a given username.
     fn container_name(username: &str) -> String {
         format!("rustguac-vdi-{}", Self::sanitize_username(username))
+    }
+
+    /// Candidate host ports to ask Docker to bind. Without a configured range,
+    /// `0` preserves Docker's default random-port allocation.
+    fn host_port_candidates(host_port_range: Option<(u16, u16)>, username: &str) -> Vec<String> {
+        let Some((start, end)) = host_port_range else {
+            return vec!["0".into()];
+        };
+
+        let len = end as u32 - start as u32 + 1;
+        let hash = username.bytes().fold(0xcbf29ce484222325_u64, |hash, b| {
+            hash.wrapping_mul(0x100000001b3) ^ b as u64
+        });
+        let offset = (hash % len as u64) as u32;
+
+        (0..len)
+            .map(|i| {
+                let port = start as u32 + ((offset + i) % len);
+                port.to_string()
+            })
+            .collect()
+    }
+
+    fn port_in_configured_range(&self, port: u16) -> bool {
+        match self.host_port_range {
+            Some((start, end)) => (start..=end).contains(&port),
+            None => true,
+        }
     }
 
     /// Extract the host-mapped port for container port 3389/tcp from inspect data.
@@ -229,6 +271,16 @@ impl DockerDriver {
                 if running {
                     // Container is running — reuse it, but update password
                     let port = Self::extract_mapped_port(&inspect)?;
+                    if !self.port_in_configured_range(port) {
+                        tracing::info!(
+                            container = %name,
+                            port,
+                            "VDI container port is outside configured range — replacing container"
+                        );
+                        let cid = inspect.id.as_deref().unwrap_or(&name);
+                        let _ = self.do_stop_container(cid).await;
+                        return Box::pin(self.do_start_or_reuse(spec)).await;
+                    }
                     self.update_container_password(&name, &spec.username, &spec.password)
                         .await?;
                     tracing::info!(
@@ -245,21 +297,25 @@ impl DockerDriver {
                 }
 
                 // Container exists but stopped — start it
+                let port = Self::extract_mapped_port(&inspect)?;
+                if !self.port_in_configured_range(port) {
+                    tracing::info!(
+                        container = %name,
+                        port,
+                        "Stopped VDI container port is outside configured range — replacing container"
+                    );
+                    let cid = inspect.id.as_deref().unwrap_or(&name);
+                    let _ = self.do_stop_container(cid).await;
+                    return Box::pin(self.do_start_or_reuse(spec)).await;
+                }
+
+                // Container exists but stopped with an acceptable port — start it
                 tracing::info!(container = %name, "Starting stopped VDI container");
                 self.client
                     .start_container(&name, None::<StartContainerOptions>)
                     .await
                     .map_err(|e| VdiError::Docker(format!("failed to start container: {}", e)))?;
 
-                // Re-inspect to get port mapping
-                let inspect = self
-                    .client
-                    .inspect_container(&name, None)
-                    .await
-                    .map_err(|e| {
-                        VdiError::Docker(format!("failed to inspect after start: {}", e))
-                    })?;
-                let port = Self::extract_mapped_port(&inspect)?;
                 self.wait_for_ready("127.0.0.1", port).await?;
                 self.update_container_password(&name, &spec.username, &spec.password)
                     .await?;
@@ -303,16 +359,6 @@ impl DockerDriver {
                     }
                     env_vec.push(format!("{}={}", k, v));
                 }
-
-                // Port binding: 3389/tcp → random host port
-                let mut port_bindings = HashMap::new();
-                port_bindings.insert(
-                    "3389/tcp".to_string(),
-                    Some(vec![PortBinding {
-                        host_ip: Some("127.0.0.1".into()),
-                        host_port: Some("0".into()), // random port
-                    }]),
-                );
 
                 // Labels
                 let mut labels = HashMap::new();
@@ -364,62 +410,94 @@ impl DockerDriver {
                     None
                 };
 
-                let host_config = HostConfig {
-                    port_bindings: Some(port_bindings),
-                    nano_cpus,
-                    memory,
-                    binds,
-                    ..Default::default()
-                };
+                let mut last_error = None;
+                for host_port in Self::host_port_candidates(self.host_port_range, &spec.username) {
+                    // Port binding: 3389/tcp → selected localhost host port.
+                    // A configured range uses explicit ports; no range uses
+                    // Docker's random allocation via host port 0.
+                    let mut port_bindings = HashMap::new();
+                    port_bindings.insert(
+                        "3389/tcp".to_string(),
+                        Some(vec![PortBinding {
+                            host_ip: Some("127.0.0.1".into()),
+                            host_port: Some(host_port.clone()),
+                        }]),
+                    );
 
-                let config = ContainerCreateBody {
-                    image: Some(spec.image.clone()),
-                    env: Some(env_vec),
-                    labels: Some(labels),
-                    host_config: Some(host_config),
-                    ..Default::default()
-                };
+                    let host_config = HostConfig {
+                        port_bindings: Some(port_bindings),
+                        nano_cpus,
+                        memory,
+                        binds: binds.clone(),
+                        ..Default::default()
+                    };
 
-                let opts = CreateContainerOptions {
-                    name: Some(name.clone()),
-                    ..Default::default()
-                };
+                    let config = ContainerCreateBody {
+                        image: Some(spec.image.clone()),
+                        env: Some(env_vec.clone()),
+                        labels: Some(labels.clone()),
+                        host_config: Some(host_config),
+                        ..Default::default()
+                    };
 
-                let created = self
-                    .client
-                    .create_container(Some(opts), config)
-                    .await
-                    .map_err(|e| VdiError::Docker(format!("failed to create container: {}", e)))?;
+                    let opts = CreateContainerOptions {
+                        name: Some(name.clone()),
+                        ..Default::default()
+                    };
 
-                self.client
-                    .start_container(&name, None::<StartContainerOptions>)
-                    .await
-                    .map_err(|e| VdiError::Docker(format!("failed to start container: {}", e)))?;
+                    let created = match self.client.create_container(Some(opts), config).await {
+                        Ok(created) => created,
+                        Err(e) => {
+                            last_error = Some(format!("failed to create container: {}", e));
+                            break;
+                        }
+                    };
 
-                // Inspect to get the mapped port
-                let inspect = self
-                    .client
-                    .inspect_container(&name, None)
-                    .await
-                    .map_err(|e| {
-                        VdiError::Docker(format!("failed to inspect after create: {}", e))
-                    })?;
-                let port = Self::extract_mapped_port(&inspect)?;
-                self.wait_for_ready("127.0.0.1", port).await?;
+                    if let Err(e) = self
+                        .client
+                        .start_container(&name, None::<StartContainerOptions>)
+                        .await
+                    {
+                        last_error = Some(format!(
+                            "failed to start container with host port {}: {}",
+                            host_port, e
+                        ));
+                        let _ = self.do_stop_container(&created.id).await;
+                        if self.host_port_range.is_some() {
+                            continue;
+                        }
+                        break;
+                    }
 
-                tracing::info!(
-                    container = %name,
-                    container_id = %created.id,
-                    port,
-                    "VDI container ready"
-                );
+                    // Inspect to get the mapped port
+                    let inspect =
+                        self.client
+                            .inspect_container(&name, None)
+                            .await
+                            .map_err(|e| {
+                                VdiError::Docker(format!("failed to inspect after create: {}", e))
+                            })?;
+                    let port = Self::extract_mapped_port(&inspect)?;
+                    self.wait_for_ready("127.0.0.1", port).await?;
 
-                Ok(ContainerInfo {
-                    container_id: created.id,
-                    rdp_host: "127.0.0.1".into(),
-                    rdp_port: port,
-                    reused: false,
-                })
+                    tracing::info!(
+                        container = %name,
+                        container_id = %created.id,
+                        port,
+                        "VDI container ready"
+                    );
+
+                    return Ok(ContainerInfo {
+                        container_id: created.id,
+                        rdp_host: "127.0.0.1".into(),
+                        rdp_port: port,
+                        reused: false,
+                    });
+                }
+
+                Err(VdiError::Docker(last_error.unwrap_or_else(|| {
+                    "failed to allocate a VDI host port".into()
+                })))
             }
             Err(e) => Err(VdiError::Docker(format!(
                 "failed to inspect container: {}",
@@ -653,5 +731,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn host_port_candidates_defaults_to_docker_random() {
+        assert_eq!(
+            DockerDriver::host_port_candidates(None, "alice"),
+            vec!["0".to_string()]
+        );
+    }
+
+    #[test]
+    fn host_port_candidates_stay_within_configured_range() {
+        let ports = DockerDriver::host_port_candidates(Some((39000, 39003)), "alice");
+        assert_eq!(ports.len(), 4);
+        for port in ports {
+            let port = port.parse::<u16>().unwrap();
+            assert!((39000..=39003).contains(&port));
+        }
+    }
+
+    #[test]
+    fn host_port_candidates_try_each_port_once() {
+        let mut ports = DockerDriver::host_port_candidates(Some((39000, 39003)), "alice");
+        ports.sort();
+        assert_eq!(
+            ports,
+            vec![
+                "39000".to_string(),
+                "39001".to_string(),
+                "39002".to_string(),
+                "39003".to_string()
+            ]
+        );
     }
 }
