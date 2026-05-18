@@ -293,6 +293,15 @@ pub struct EntryInfo {
     /// Docker image for VDI sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_image: Option<String>,
+    /// CPU limit for VDI container (cores, e.g. 2.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_cpu_limit: Option<f64>,
+    /// Memory limit for VDI container (bytes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_memory_limit: Option<u64>,
+    /// Environment variables to inject into the VDI container.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_env: Option<std::collections::HashMap<String, String>>,
     /// Idle timeout for VDI container in minutes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_idle_timeout_mins: Option<u64>,
@@ -356,6 +365,9 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             force_lossless: e.force_lossless,
             enable_h264: e.enable_h264,
             container_image: e.container_image.clone(),
+            container_cpu_limit: e.container_cpu_limit,
+            container_memory_limit: e.container_memory_limit,
+            container_env: e.container_env.clone(),
             container_idle_timeout_mins: e.container_idle_timeout_mins,
             allow_sharing: e.allow_sharing,
             auto_open_if_singleton: e.auto_open_if_singleton,
