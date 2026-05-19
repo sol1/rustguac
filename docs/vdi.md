@@ -148,9 +148,9 @@ Dormant VDI containers (running but no active browser session) also appear with 
 ## Container hook
 
 Set `container_hook_script` when Rustguac needs an external command to prepare
-or tear down access to a container's mapped RDP port. The hook is useful when
-the Docker daemon is reached through a forwarded socket and the container's
-`127.0.0.1:<port>` mapping exists on another host.
+or tear down access to a container's mapped RDP port. This can be used for
+deployment-specific setup that must happen after Docker has assigned the port
+and before Rustguac starts probing xrdp.
 
 Rustguac calls the script as:
 
@@ -164,9 +164,6 @@ checks whether xrdp is ready on `127.0.0.1:<port>`. The script should return
 only after the local listener is available. `down` runs before Rustguac stops
 and removes the container. Hook execution is limited by
 `container_hook_timeout_secs` (default: 10 seconds).
-
-An SSH tunnel example is included at
-`contrib/vdi-test-image/vdi-container-hook-example.sh`.
 
 ## Per-entry settings
 
