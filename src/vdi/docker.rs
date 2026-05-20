@@ -65,9 +65,9 @@ impl DockerDriver {
         self
     }
 
-    /// Sanitize a username into a valid Docker container name suffix.
-    fn sanitize_username(username: &str) -> String {
-        username
+    /// Sanitize user-controlled text into a valid Docker container name suffix.
+    fn sanitize_name_suffix(value: &str) -> String {
+        value
             .to_lowercase()
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -76,9 +76,22 @@ impl DockerDriver {
             .to_string()
     }
 
-    /// Container name for a given username.
-    fn container_name(username: &str) -> String {
-        format!("rustguac-vdi-{}", Self::sanitize_username(username))
+    fn entry_name(entry_key: Option<&str>) -> Option<String> {
+        entry_key.and_then(|key| {
+            key.rsplit('/')
+                .next()
+                .map(Self::sanitize_name_suffix)
+                .filter(|name| !name.is_empty())
+        })
+    }
+
+    /// Container name for a VDI session.
+    fn container_name(spec: &ContainerSpec) -> String {
+        let username = Self::sanitize_name_suffix(&spec.username);
+        match Self::entry_name(spec.entry_key.as_deref()) {
+            Some(entry_name) => format!("rustguac-vdi-{}-{}", username, entry_name),
+            None => format!("rustguac-vdi-{}", username),
+        }
     }
 
     /// Candidate host ports to ask Docker to bind. Without a configured range,
@@ -342,7 +355,7 @@ impl DockerDriver {
     }
 
     async fn do_start_or_reuse(&self, spec: &ContainerSpec) -> Result<ContainerInfo, VdiError> {
-        let name = Self::container_name(&spec.username);
+        let name = Self::container_name(spec);
 
         // Check if container already exists
         match self.client.inspect_container(&name, None).await {
@@ -412,6 +425,7 @@ impl DockerDriver {
                     }
                     return Ok(ContainerInfo {
                         container_id,
+                        container_name,
                         rdp_host: "127.0.0.1".into(),
                         rdp_port: port,
                         reused: true,
@@ -477,6 +491,7 @@ impl DockerDriver {
 
                 Ok(ContainerInfo {
                     container_id,
+                    container_name,
                     rdp_host: "127.0.0.1".into(),
                     rdp_port: port,
                     reused: true,
@@ -658,6 +673,7 @@ impl DockerDriver {
 
                     return Ok(ContainerInfo {
                         container_id: created.id,
+                        container_name,
                         rdp_host: "127.0.0.1".into(),
                         rdp_port: port,
                         reused: false,
@@ -828,7 +844,21 @@ mod tests {
     // inject a separator.
 
     fn san(s: &str) -> String {
-        DockerDriver::sanitize_username(s)
+        DockerDriver::sanitize_name_suffix(s)
+    }
+
+    fn spec(username: &str, entry_key: Option<&str>) -> ContainerSpec {
+        ContainerSpec {
+            image: "example:latest".into(),
+            username: username.into(),
+            password: "secret".into(),
+            cpu_limit: 0.0,
+            memory_limit: 0,
+            env: std::collections::HashMap::new(),
+            home_base: None,
+            entry_key: entry_key.map(str::to_string),
+            idle_timeout_mins: None,
+        }
     }
 
     #[test]
@@ -901,9 +931,32 @@ mod tests {
     fn container_name_prefix_enforced() {
         // Container name must always start with the fixed prefix so a
         // hostile username can't pretend to be someone else's container.
-        assert!(DockerDriver::container_name("alice").starts_with("rustguac-vdi-"));
-        assert!(DockerDriver::container_name("@@@").starts_with("rustguac-vdi-"));
-        assert_eq!(DockerDriver::container_name("alice"), "rustguac-vdi-alice");
+        assert!(DockerDriver::container_name(&spec("alice", None)).starts_with("rustguac-vdi-"));
+        assert!(DockerDriver::container_name(&spec("@@@", None)).starts_with("rustguac-vdi-"));
+        assert_eq!(
+            DockerDriver::container_name(&spec("alice", None)),
+            "rustguac-vdi-alice"
+        );
+    }
+
+    #[test]
+    fn container_name_appends_sanitized_entry_name() {
+        assert_eq!(
+            DockerDriver::container_name(&spec("user", Some("shared/desktops/Dev Desktop"))),
+            "rustguac-vdi-user-dev-desktop"
+        );
+        assert_eq!(
+            DockerDriver::container_name(&spec("user", Some("shared/desktops/accounting_vdi"))),
+            "rustguac-vdi-user-accounting-vdi"
+        );
+    }
+
+    #[test]
+    fn container_name_uses_final_entry_key_segment() {
+        assert_eq!(
+            DockerDriver::container_name(&spec("user", Some("team-a/folder/vdi.one"))),
+            "rustguac-vdi-user-vdi-one"
+        );
     }
 
     #[test]
@@ -920,7 +973,7 @@ mod tests {
             "alice|pipe",
             "alice&bg",
         ] {
-            let name = DockerDriver::container_name(input);
+            let name = DockerDriver::container_name(&spec(input, Some("entry;name")));
             for bad in ['\n', ';', '`', '$', '\"', '\'', '|', '&', ' ', '/', '\\'] {
                 assert!(
                     !name.contains(bad),
