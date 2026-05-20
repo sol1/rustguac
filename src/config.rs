@@ -241,6 +241,21 @@ pub struct VdiConfig {
     /// Seconds to wait for xrdp to become ready in a new container. Default: 30.
     #[serde(default = "default_ready_timeout_secs")]
     pub ready_timeout_secs: u64,
+    /// First localhost port Docker may bind VDI RDP to. Unset = Docker chooses any random port.
+    #[serde(default)]
+    pub port_range_start: Option<u16>,
+    /// Last localhost port Docker may bind VDI RDP to. Unset = Docker chooses any random port.
+    #[serde(default)]
+    pub port_range_end: Option<u16>,
+    /// Optional script called when a VDI container's mapped RDP port should be
+    /// prepared or torn down. Called as:
+    ///   <script> up <port> <container_id> <container_name>
+    ///   <script> down <port> <container_id> <container_name>
+    #[serde(default)]
+    pub container_hook_script: Option<String>,
+    /// Seconds to wait for the VDI container hook script. Default: 10.
+    #[serde(default = "default_container_hook_timeout_secs")]
+    pub container_hook_timeout_secs: u64,
     /// Minutes a container persists after last session disconnect. Default: 60.
     /// Containers are kept running for reconnection. Set to 0 for immediate removal.
     #[serde(default = "default_idle_timeout_mins")]
@@ -261,6 +276,10 @@ fn default_docker_socket() -> String {
 
 fn default_ready_timeout_secs() -> u64 {
     30
+}
+
+fn default_container_hook_timeout_secs() -> u64 {
+    10
 }
 
 fn default_idle_timeout_mins() -> u64 {

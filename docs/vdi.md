@@ -38,6 +38,10 @@ enabled = true
 # default_cpu_limit = 2.0                   # cores, 0 = no limit
 # default_memory_limit = 2048               # MB, 0 = no limit
 # ready_timeout_secs = 30                   # wait for xrdp to start
+# port_range_start = 39000                  # optional localhost RDP port range
+# port_range_end = 39999
+# container_hook_script = "/opt/rustguac/vdi-container-hook.sh"
+# container_hook_timeout_secs = 10
 # idle_timeout_mins = 60                    # container lifetime after disconnect
 # home_base = "/vdi-homes"                  # persistent home directories
 # allowed_images = ["myregistry/desktop:latest"]  # whitelist, empty = allow all
@@ -140,6 +144,26 @@ Each user gets `{home_base}/{username}` mounted as `/home/{username}` inside the
 The connections shows an **Active Sessions** section with thumbnail previews of running sessions. Thumbnails are captured every 10 seconds from the browser display. Click a thumbnail to reconnect.
 
 Dormant VDI containers (running but no active browser session) also appear with their last captured thumbnail.
+
+## Container hook
+
+Set `container_hook_script` when Rustguac needs an external command to prepare
+or tear down access to a container's mapped RDP port. This can be used for
+deployment-specific setup that must happen after Docker has assigned the port
+and before Rustguac starts probing xrdp.
+
+Rustguac calls the script as:
+
+```bash
+/opt/rustguac/vdi-container-hook.sh up   <port> <container_id> <container_name>
+/opt/rustguac/vdi-container-hook.sh down <port> <container_id> <container_name>
+```
+
+`up` runs after Docker inspect finds the mapped RDP port and before Rustguac
+checks whether xrdp is ready on `127.0.0.1:<port>`. The script should return
+only after the local listener is available. `down` runs before Rustguac stops
+and removes the container. Hook execution is limited by
+`container_hook_timeout_secs` (default: 10 seconds).
 
 ## Per-entry settings
 
