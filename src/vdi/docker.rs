@@ -394,8 +394,22 @@ impl DockerDriver {
                         port,
                         "Reusing existing VDI container"
                     );
-                    self.prepare_rdp_endpoint(port, &container_id, &container_name)
-                        .await?;
+                    if let Err(e) = self
+                        .prepare_rdp_endpoint(port, &container_id, &container_name)
+                        .await
+                    {
+                        if self.host_port_range.is_some() {
+                            tracing::warn!(
+                                container = %name,
+                                port,
+                                "Reused VDI container endpoint failed; replacing container: {}",
+                                e
+                            );
+                            let _ = self.do_stop_container(&container_id).await;
+                            return Box::pin(self.do_start_or_reuse(spec)).await;
+                        }
+                        return Err(e);
+                    }
                     return Ok(ContainerInfo {
                         container_id,
                         rdp_host: "127.0.0.1".into(),
@@ -421,13 +435,43 @@ impl DockerDriver {
 
                 // Container exists but stopped with an acceptable port — start it
                 tracing::info!(container = %name, "Starting stopped VDI container");
-                self.client
+                if let Err(e) = self
+                    .client
                     .start_container(&name, None::<StartContainerOptions>)
                     .await
-                    .map_err(|e| VdiError::Docker(format!("failed to start container: {}", e)))?;
+                {
+                    if self.host_port_range.is_some() {
+                        tracing::warn!(
+                            container = %name,
+                            port,
+                            "Stopped VDI container failed to start; replacing container: {}",
+                            e
+                        );
+                        let _ = self.do_stop_container(&container_id).await;
+                        return Box::pin(self.do_start_or_reuse(spec)).await;
+                    }
+                    return Err(VdiError::Docker(format!(
+                        "failed to start container: {}",
+                        e
+                    )));
+                }
 
-                self.prepare_rdp_endpoint(port, &container_id, &container_name)
-                    .await?;
+                if let Err(e) = self
+                    .prepare_rdp_endpoint(port, &container_id, &container_name)
+                    .await
+                {
+                    if self.host_port_range.is_some() {
+                        tracing::warn!(
+                            container = %name,
+                            port,
+                            "Started VDI container endpoint failed; replacing container: {}",
+                            e
+                        );
+                        let _ = self.do_stop_container(&container_id).await;
+                        return Box::pin(self.do_start_or_reuse(spec)).await;
+                    }
+                    return Err(e);
+                }
                 self.update_container_password(&name, &spec.username, &spec.password)
                     .await?;
 
@@ -590,8 +634,20 @@ impl DockerDriver {
                             })?;
                     let port = Self::extract_mapped_port(&inspect)?;
                     let container_name = Self::extract_container_name(&inspect, &name);
-                    self.prepare_rdp_endpoint(port, &created.id, &container_name)
-                        .await?;
+                    if let Err(e) = self
+                        .prepare_rdp_endpoint(port, &created.id, &container_name)
+                        .await
+                    {
+                        last_error = Some(format!(
+                            "failed to prepare VDI endpoint with host port {}: {}",
+                            port, e
+                        ));
+                        let _ = self.do_stop_container(&created.id).await;
+                        if self.host_port_range.is_some() {
+                            continue;
+                        }
+                        break;
+                    }
 
                     tracing::info!(
                         container = %name,
