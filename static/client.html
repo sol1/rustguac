@@ -1102,6 +1102,18 @@
                 client.sendKeyEvent(0, keysym);
             };
 
+            // Release all held keys when the window loses focus or is hidden.
+            // Modifier keyups are otherwise lost when focus shifts away (e.g.
+            // the clipboard-permission prompt triggered by Ctrl+V, or alt-tab
+            // while holding a modifier), leaving Ctrl/Alt/Shift stuck "down"
+            // on the remote until the key is pressed again. keyboard.reset()
+            // releases every key it currently tracks as pressed, sending the
+            // matching keyup to the remote.
+            window.addEventListener('blur', function() { keyboard.reset(); });
+            document.addEventListener('visibilitychange', function() {
+                if (document.hidden) keyboard.reset();
+            });
+
             // Mouse input
             var mouse = new Guacamole.Mouse(client.getDisplay().getElement());
             mouse.onEach(['mousedown', 'mousemove', 'mouseup'], function(e) {
