@@ -90,6 +90,32 @@ This approach avoids the socket contention issue that occurred when H.264 was se
 
 **Requires:** RDP server with H.264 support (xrdp with x264, or Windows with AVC hardware encoder). Browser must support WebCodecs VideoDecoder (Chrome/Edge 94+, Firefox 130+).
 
+## 005-rdp-resize-dirty-flush.patch
+
+**Problem:** After a dynamic RDP display resize (browser window resized,
+`resize-method=display-update`), regions of the desktop render as solid black
+until something repaints them. `guac_rdp_gdi_desktop_resize()` resizes the
+FreeRDP GDI buffer and the guac display layer but never marks the layer dirty,
+so `guac_display_layer_close_raw()` flushes nothing and the client keeps its
+stale/blank canvas for the resized layer. See [sol1/rustguac#118](https://github.com/sol1/rustguac/issues/118) (reported by @Bails309, who diagnosed the root cause and supplied the fix).
+
+**Fix:** In `guac_rdp_gdi_desktop_resize()`, after the layer resize and before
+`guac_display_layer_close_raw()`:
+
+1. Mark the entire layer dirty (`guac_rect_init(&current_context->dirty, ...)`) so a full repaint is flushed to the client.
+2. Issue a `RefreshRect` for the full new desktop so the server re-sends authoritative pixels (legacy bitmap update path).
+
+**Scope:** Fixes the legacy bitmap update path, which is rustguac's default
+(`enable_gfx` defaults to false). The RDPGFX surface cache ignores
+`RefreshRect`, so GFX sessions are not addressed by this patch; in practice
+GFX sessions have not reproduced the artifact.
+
+**Files patched:**
+
+| File | Fix |
+|------|-----|
+| `src/protocols/rdp/gdi.c` | Mark layer dirty + `RefreshRect` after resize in `guac_rdp_gdi_desktop_resize()` |
+
 ## Applying patches
 
 Patches are applied automatically by all build scripts (`build-deb.sh`, `build-rpm.sh`, `install.sh`, `dev.sh`, `Dockerfile`). To apply manually:
