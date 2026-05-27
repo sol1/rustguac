@@ -26,7 +26,8 @@ pub struct ContainerSpec {
     /// Host path for persistent home directory (bind mount).
     /// When set, `{home_base}/{username}` is mounted as `/home/{username}`.
     pub home_base: Option<String>,
-    /// Address book entry key (e.g. "shared/folder/entry") for reconnect.
+    /// Address book entry key (e.g. "shared/folder/entry") for reconnect and
+    /// deterministic container naming.
     pub entry_key: Option<String>,
     /// Per-entry idle timeout in minutes (overrides global config).
     pub idle_timeout_mins: Option<u64>,
@@ -56,6 +57,8 @@ pub struct ManagedContainer {
 pub struct ContainerInfo {
     /// Docker container ID.
     pub container_id: String,
+    /// Docker container name.
+    pub container_name: String,
     /// RDP host (always "127.0.0.1" for local Docker).
     pub rdp_host: String,
     /// Mapped host port for 3389/tcp.

@@ -203,6 +203,8 @@ pub struct Session {
     pub tunnels: Vec<tunnel::SshTunnel>,
     /// Docker container ID for VDI sessions.
     pub container_id: Option<String>,
+    /// Docker container name for VDI sessions.
+    pub container_name: Option<String>,
     /// Whether recording is enabled for this session.
     pub recording_enabled: bool,
     /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
@@ -596,6 +598,7 @@ impl SessionManager {
             banner_override,
             session_drive_path,
             container_id,
+            container_name,
         ) = match req.session_type {
             SessionType::Ssh => {
                 let hostname = req.hostname.ok_or_else(|| {
@@ -675,7 +678,7 @@ impl SessionManager {
                     disable_paste: req.disable_paste.unwrap_or(false),
                 });
                 (
-                    params, hostname, username, None, None, ssh_banner, None, None,
+                    params, hostname, username, None, None, ssh_banner, None, None, None,
                 )
             }
             SessionType::Rdp => {
@@ -772,6 +775,7 @@ impl SessionManager {
                     None,
                     session_drive_path,
                     None,
+                    None,
                 )
             }
             SessionType::Vnc => {
@@ -801,7 +805,9 @@ impl SessionManager {
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
                 });
-                (params, hostname, username, None, None, None, None, None)
+                (
+                    params, hostname, username, None, None, None, None, None, None,
+                )
             }
             SessionType::Web => {
                 let raw_url = req.url.ok_or_else(|| {
@@ -883,6 +889,7 @@ impl SessionManager {
                     String::new(),
                     Some(url),
                     None, // browser spawned after tunnel setup
+                    None,
                     None,
                     None,
                     None,
@@ -971,11 +978,6 @@ impl SessionManager {
                     idle_timeout_mins: req.container_idle_timeout_mins,
                 };
 
-                // Clear stale VDI thumbnail before starting/reusing container
-                let container_name = format!("rustguac-vdi-{}", vdi_username);
-                let stale_thumb = self.vdi_thumbnail_path(&container_name);
-                let _ = std::fs::remove_file(&stale_thumb);
-
                 tracing::info!(
                     session_id = %session_id,
                     image = %image,
@@ -987,6 +989,11 @@ impl SessionManager {
                     .start_or_reuse(&spec)
                     .await
                     .map_err(|e| SessionError::VdiError(e.to_string()))?;
+
+                // Clear stale VDI thumbnail now that the driver has resolved
+                // the deterministic container name.
+                let stale_thumb = self.vdi_thumbnail_path(&info.container_name);
+                let _ = std::fs::remove_file(&stale_thumb);
 
                 if info.reused {
                     tracing::info!(
@@ -1023,7 +1030,7 @@ impl SessionManager {
                     enable_gfx: true,
                     enable_desktop_composition: true,
                     force_lossless: false,
-                    enable_h264: false,
+                    enable_h264: true,
                 }));
                 (
                     params,
@@ -1034,6 +1041,7 @@ impl SessionManager {
                     None,
                     None,
                     Some(info.container_id),
+                    Some(info.container_name),
                 )
             }
         };
@@ -1293,6 +1301,7 @@ impl SessionManager {
             drive_path: session_drive_path,
             tunnels: ssh_tunnels,
             container_id,
+            container_name,
             recording_enabled,
             address_book_entry: req.address_book_entry,
             address_book_folder: req.address_book_folder,
@@ -1585,12 +1594,19 @@ impl SessionManager {
         Some(session.created_by.clone())
     }
 
-    /// Get session type and container_id for a session (used for VDI cleanup).
-    pub async fn get_vdi_info(&self, id: Uuid) -> Option<(SessionType, Option<String>)> {
+    /// Get session type and container metadata for a session (used for VDI cleanup).
+    pub async fn get_vdi_info(
+        &self,
+        id: Uuid,
+    ) -> Option<(SessionType, Option<String>, Option<String>)> {
         let sessions = self.sessions.read().await;
         let session = sessions.get(&id)?;
         let session = session.lock().await;
-        Some((session.session_type.clone(), session.container_id.clone()))
+        Some((
+            session.session_type.clone(),
+            session.container_id.clone(),
+            session.container_name.clone(),
+        ))
     }
 
     /// Stop and remove the VDI container for a session.
@@ -2047,6 +2063,7 @@ mod tests {
             drive_path: None,
             tunnels: Vec::new(),
             container_id: None,
+            container_name: None,
             recording_enabled: false,
             address_book_entry: None,
             address_book_folder: None,

@@ -335,7 +335,7 @@ async fn handle_ws(
     }
 
     // VDI container lifecycle on session end
-    if let Some((crate::session::SessionType::Vdi, Some(ref _cid))) =
+    if let Some((crate::session::SessionType::Vdi, Some(ref _cid), container_name)) =
         manager.get_vdi_info(session_id).await
     {
         if server_disconnected {
@@ -347,9 +347,7 @@ async fn handle_ws(
             // Browser disconnect / network drop → container persists.
             // Copy session thumbnail to container-keyed file for the active desktops UI.
             let session_thumb = manager.thumbnail_path(session_id);
-            // Derive container name from session username
-            if let Some(info) = manager.get_session(session_id).await {
-                let container_name = format!("rustguac-vdi-{}", info.username);
+            if let Some(container_name) = container_name {
                 let vdi_thumb = manager.vdi_thumbnail_path(&container_name);
                 if session_thumb.exists() {
                     let _ = tokio::fs::copy(&session_thumb, &vdi_thumb).await;
