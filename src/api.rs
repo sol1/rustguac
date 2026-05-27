@@ -1779,6 +1779,42 @@ async fn check_folder_access(
     }
 }
 
+/// Returns true if the user can access this folder directly, or can access
+/// any descendant of it. Used to decide folder visibility: a folder the user
+/// cannot enter is still shown if it is on the path to something they can
+/// reach, so deeper grants are never orphaned out of the tree.
+///
+/// Recursion is boxed (async). The walk short-circuits on the first
+/// accessible folder and is bounded by the actual subtree, which is small in
+/// practice; folders the user CAN access return immediately without
+/// descending.
+fn folder_or_descendant_accessible<'a>(
+    vault: &'a VaultClient,
+    scope: &'a str,
+    path: &'a str,
+    user_groups: &'a [String],
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+    Box::pin(async move {
+        if vault
+            .resolve_folder_access(scope, path, user_groups)
+            .await
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        // Not directly accessible — keep it only if some descendant is.
+        if let Ok(subs) = vault.list_subfolders(scope, path).await {
+            for sub in subs {
+                let child = sub.path.unwrap_or(sub.name);
+                if folder_or_descendant_accessible(vault, scope, &child, user_groups).await {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+}
+
 /// GET /api/addressbook/folders — List folders visible to the current user.
 pub async fn ab_list_folders(
     identity: Option<Extension<AuthIdentity>>,
@@ -1856,7 +1892,26 @@ pub async fn ab_list_subfolders(
     }
 
     match vault.list_subfolders(&scope, &folder).await {
-        Ok(subfolders) => Json(json!(subfolders)).into_response(),
+        Ok(subfolders) => {
+            // Hide subfolders the user cannot reach. A folder is shown if the
+            // user can access it directly or can access any descendant of it
+            // (so deeper grants aren't orphaned out of the tree). Admins see
+            // everything. Fixes #147: previously every subfolder of an
+            // accessible parent was returned, so users saw folders they could
+            // only click into and get "no access".
+            if id.has_role("admin") {
+                return Json(json!(subfolders)).into_response();
+            }
+            let user_groups = id.groups();
+            let mut visible = Vec::with_capacity(subfolders.len());
+            for sf in subfolders {
+                let path = sf.path.clone().unwrap_or_else(|| sf.name.clone());
+                if folder_or_descendant_accessible(&vault, &scope, &path, user_groups).await {
+                    visible.push(sf);
+                }
+            }
+            Json(json!(visible)).into_response()
+        }
         Err(crate::vault::VaultError::NotFound) => Json(json!([])).into_response(),
         Err(e) => (
             StatusCode::BAD_GATEWAY,

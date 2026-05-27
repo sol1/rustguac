@@ -130,6 +130,12 @@ Connections folders have group-based access control. Each folder has an `allowed
 - **Admins** bypass group checks and see all folders
 - **Operators and powerusers** see only folders where their OIDC groups intersect with the folder's `allowed_groups`
 - If `allowed_groups` is empty, all authenticated users can see the folder
+- Folders the user cannot access are **hidden** from the tree, not shown-then-denied. This applies at every level, including subfolders.
+- A folder the user cannot access directly is still shown if they can access one of its descendants, so a deeper grant is never orphaned out of the tree. Access of a child can be granted independently of its parent (see Inheritance below).
+
+### Inheritance
+
+A subfolder created with `inherit_from_parent: true` (the default for new subfolders) grants access to anyone who can access its parent. A subfolder with its own non-empty `allowed_groups` and `inherit_from_parent: false` is gated solely by its own list, independent of the parent.
 
 ### Example
 
