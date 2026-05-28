@@ -312,7 +312,47 @@
 
         function setupClient(client, tunnel) {
 
-            // Wrap tunnel.oninstruction to log unique opcodes from guacd (diagnostic)
+            // ── Draw-op diagnostics (#118 black-tile investigation) ──
+            // The browser receives exactly what guacd emits, so tapping the
+            // instruction stream here shows the server's actual drawing.
+            // A ring buffer records recent draw ops (decoded to coordinates)
+            // with near-zero overhead and no console noise. After reproducing
+            // a black tile, call rustguacDumpDraws() in the console to print
+            // the recent history, or rustguacDumpDraws(x, y) to show only ops
+            // whose rectangle covers that pixel. Append ?debug=draw to the URL
+            // for live per-op logging.
+            var DRAW_RING = [];
+            var DRAW_RING_MAX = 2000;
+            var drawLiveLog = /[?&]debug=draw\b/.test(location.search);
+
+            // Decode the draw opcodes we care about into {op, layer, rect, note}.
+            // Arg orders per the Guacamole protocol.
+            function decodeDraw(opcode, a) {
+                switch (opcode) {
+                    case 'rect':   // layer,x,y,w,h
+                        return { op: 'rect', layer: +a[0], rect: [+a[1], +a[2], +a[3], +a[4]] };
+                    case 'cfill': { // mask,layer,r,g,b,a  (fills the current path/rect)
+                        var r = +a[2], g = +a[3], b = +a[4], al = +a[5];
+                        return { op: 'cfill', layer: +a[1],
+                                 note: 'rgba(' + r + ',' + g + ',' + b + ',' + al + ')'
+                                        + (r === 0 && g === 0 && b === 0 && al >= 255 ? ' <BLACK>' : '') };
+                    }
+                    case 'copy':   // srclayer,srcx,srcy,srcw,srch,mask,dstlayer,dstx,dsty
+                        return { op: 'copy', layer: +a[6],
+                                 rect: [+a[7], +a[8], +a[3], +a[4]],
+                                 note: 'src L' + a[0] + ' (' + a[1] + ',' + a[2] + ')' };
+                    case 'img':    // stream,mask,layer,mimetype,x,y
+                        return { op: 'img', layer: +a[2], rect: [+a[4], +a[5], null, null],
+                                 note: a[3] };
+                    case 'dispose': // layer
+                        return { op: 'dispose', layer: +a[0] };
+                    case 'size':   // layer,w,h
+                        return { op: 'size', layer: +a[0], note: a[1] + 'x' + a[2] };
+                    default:
+                        return null;
+                }
+            }
+
             var seenOpcodes = {};
             var origOnInstruction = tunnel.oninstruction;
             tunnel.oninstruction = function(opcode, args) {
@@ -320,7 +360,42 @@
                     seenOpcodes[opcode] = true;
                     if (typeof console !== 'undefined') console.log('[rustguac] instruction: ' + opcode + (args.length ? ' (' + args.length + ' args)' : ''));
                 }
+                var d = decodeDraw(opcode, args);
+                if (d) {
+                    d.t = Date.now();
+                    DRAW_RING.push(d);
+                    if (DRAW_RING.length > DRAW_RING_MAX) DRAW_RING.shift();
+                    if (drawLiveLog) {
+                        console.log('[draw]', d.op, 'L' + d.layer,
+                            d.rect ? '@[' + d.rect.join(',') + ']' : '',
+                            d.note || '');
+                    }
+                }
                 if (origOnInstruction) origOnInstruction(opcode, args);
+            };
+
+            // Dump the recent draw-op history. With (x,y) filters to ops whose
+            // rectangle covers that pixel on the default layer — point this at
+            // a black tile's top-left to see what last painted there.
+            window.rustguacDumpDraws = function(x, y) {
+                var rows = DRAW_RING;
+                if (typeof x === 'number' && typeof y === 'number') {
+                    rows = rows.filter(function(d) {
+                        if (!d.rect) return d.op === 'dispose' || d.op === 'size';
+                        var rx = d.rect[0], ry = d.rect[1], rw = d.rect[2], rh = d.rect[3];
+                        if (rw == null) return false;
+                        return x >= rx && y >= ry && x < rx + rw && y < ry + rh;
+                    });
+                }
+                console.log('[rustguac] ' + rows.length + ' draw ops'
+                    + (typeof x === 'number' ? ' covering (' + x + ',' + y + ')' : '') + ':');
+                console.table(rows.map(function(d) {
+                    return { op: d.op, layer: d.layer,
+                             rect: d.rect ? d.rect.join(',') : '',
+                             note: d.note || '',
+                             t: new Date(d.t).toISOString().substr(11, 12) };
+                }));
+                return rows;
             };
 
             var displayEl = document.getElementById('display');
