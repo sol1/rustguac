@@ -788,8 +788,8 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
                 bg_pattern: "none".into(),
             },
         ),
-    },
-),
+    }
+)
     ]
 }
 
