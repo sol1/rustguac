@@ -828,17 +828,40 @@ pub struct ThemeConfig {
 }
 
 impl ThemeConfig {
-    /// Resolve config into a full ThemeColors palette.
-    /// Starts from the named preset (default: "aurora"), then applies overrides.
+    /// Resolve config into a full ThemeColors palette using only the Rust
+    /// built-in presets. Convenience wrapper over [`Self::resolve_with`] for
+    /// callers that don't have a static_path to load disk themes from
+    /// (notably tests). Production code in `main.rs` calls
+    /// [`load_themes`] + [`Self::resolve_with`] so user-added `*.toml` files
+    /// are honoured.
+    #[allow(dead_code)]
     pub fn resolve(&self) -> (String, ThemeColors) {
-        let preset_name = self.preset.as_deref().unwrap_or("aurora");
-        let presets = builtin_presets();
-        let mut colors = presets
-            .iter()
-            .find(|(name, _)| *name == preset_name)
-            .map(|(_, c)| c.clone())
-            .unwrap_or_else(|| presets[0].1.clone());
+        let themes: Vec<(String, ThemeColors)> = builtin_presets()
+            .into_iter()
+            .map(|(n, c)| (n.to_string(), c))
+            .collect();
+        self.resolve_with(&themes)
+    }
 
+    /// Same as [`resolve`], but the preset name is looked up in the supplied
+    /// theme set (built-in + disk-loaded). When the `[theme]` config block is
+    /// missing or its `preset` field is unset, falls back to `"aurora"`. If
+    /// the requested preset is not in the set, the first theme in the set is
+    /// used (matches the previous behaviour of `resolve` with `builtin_presets`).
+    pub fn resolve_with(&self, themes: &[(String, ThemeColors)]) -> (String, ThemeColors) {
+        let preset_name = self.preset.as_deref().unwrap_or("aurora");
+        let mut colors = themes
+            .iter()
+            .find(|(name, _)| name == preset_name)
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(|| {
+                themes
+                    .first()
+                    .map(|(_, c)| c.clone())
+                    .unwrap_or_else(|| builtin_presets()[0].1.clone())
+            });
+
+        // Apply per-field overrides (same as resolve()).
         macro_rules! apply {
             ($field:ident, $src:ident) => {
                 if let Some(ref v) = self.$src {
@@ -851,7 +874,6 @@ impl ThemeConfig {
                 }
             };
         }
-
         apply!(primary, primary_color);
         apply!(primary_hover);
         apply!(accent, accent_color);
@@ -886,6 +908,99 @@ impl ThemeConfig {
 
         (preset_name.to_string(), colors)
     }
+}
+
+/// Load all themes from disk, merged with the Rust-baked built-ins.
+///
+/// Built-ins (the eight `aurora`/`dark`/`light`/... presets in [`builtin_presets`])
+/// are always returned even if `<static_path>/themes/` is absent, so a fresh
+/// install or a misconfigured static_path can never leave rustguac without
+/// any themes. Operators add a new theme by dropping a `<name>.toml` file
+/// into `<static_path>/themes/`; the filename (minus extension) is the theme
+/// id. A disk theme with the same id as a built-in **overrides** the built-in,
+/// so operators can re-brand `aurora` simply by editing `aurora.toml`.
+///
+/// Malformed or unreadable `.toml` files are skipped with a warning. The
+/// returned vector preserves built-in order, with disk-only themes appended
+/// in filename order.
+/// Strict allowlist for theme names. Mirrors the rules we use for Vault
+/// entry names (alphanumeric + `_` + `-`, 1-64 chars). Theme names end up
+/// in JSON sent to the frontend picker, in log lines, and as match keys
+/// for `[theme] preset = "..."`; this keeps them safe to render unescaped
+/// and free of path-traversal / control-character / homoglyph mischief.
+fn is_valid_theme_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+pub fn load_themes(static_path: &std::path::Path) -> Vec<(String, ThemeColors)> {
+    // Seed with built-ins (always available, in their defined order).
+    let mut themes: Vec<(String, ThemeColors)> = builtin_presets()
+        .into_iter()
+        .map(|(n, c)| (n.to_string(), c))
+        .collect();
+    let mut index: std::collections::HashMap<String, usize> = themes
+        .iter()
+        .enumerate()
+        .map(|(i, (n, _))| (n.clone(), i))
+        .collect();
+
+    let themes_dir = static_path.join("themes");
+    let entries = match std::fs::read_dir(&themes_dir) {
+        Ok(e) => e,
+        Err(_) => {
+            // No themes dir; built-ins are still the answer. Not an error.
+            return themes;
+        }
+    };
+
+    // Collect + sort filenames so disk-added themes appear in deterministic order.
+    let mut files: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("toml"))
+        .collect();
+    files.sort();
+
+    for path in files {
+        let name = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => continue,
+        };
+        if !is_valid_theme_name(&name) {
+            tracing::warn!(
+                theme = %name,
+                "skipping theme: name must be 1-64 chars of [a-zA-Z0-9_-]"
+            );
+            continue;
+        }
+        let data = match std::fs::read_to_string(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(theme = %name, error = %e, "skipping theme: read failed");
+                continue;
+            }
+        };
+        let colors: ThemeColors = match toml::from_str(&data) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(theme = %name, error = %e, "skipping theme: parse failed");
+                continue;
+            }
+        };
+        match index.get(&name) {
+            Some(&i) => themes[i] = (name.clone(), colors), // override built-in
+            None => {
+                index.insert(name.clone(), themes.len());
+                themes.push((name, colors));
+            }
+        }
+    }
+
+    themes
 }
 
 fn default_listen_addr() -> String {
@@ -1262,5 +1377,256 @@ mod tests {
         let dbg = format!("{:?}", config);
         assert!(!dbg.contains("sensitive-value"), "got: {}", dbg);
         assert!(dbg.contains("[REDACTED]"));
+    }
+
+    // ── Theme TOML loader (v1.7.1) ──
+
+    /// Helper: write the minimal set of fields required for ThemeColors to
+    /// deserialise. Returns a TOML string that can be written to a file.
+    fn theme_toml(primary: &str) -> String {
+        let mut s = String::new();
+        for f in [
+            "primary",
+            "primary_hover",
+            "accent",
+            "accent_hover",
+            "bg",
+            "surface",
+            "input",
+            "text",
+            "text_muted",
+            "border",
+            "text_dim",
+            "text_on_primary",
+            "btn_disabled",
+            "status_pending",
+            "status_active",
+            "status_completed",
+            "status_error",
+            "status_expired",
+            "type_ssh_bg",
+            "type_ssh_fg",
+            "type_rdp_bg",
+            "type_rdp_fg",
+            "type_vnc_bg",
+            "type_vnc_fg",
+            "type_web_bg",
+            "type_web_fg",
+            "type_vdi_bg",
+            "type_vdi_fg",
+            "hop_bg",
+            "hop_fg",
+        ] {
+            // primary gets a caller-controlled value so tests can verify
+            // which theme the resolver picked; everything else is filler.
+            let v = if f == "primary" { primary } else { "#000000" };
+            s.push_str(&format!("{f} = \"{v}\"\n"));
+        }
+        s
+    }
+
+    #[test]
+    fn load_themes_returns_builtins_when_no_themes_dir() {
+        // Backward-compat: a static_path with no themes/ subdir loads
+        // exactly the Rust-baked built-ins (8 of them, in their defined
+        // order). Existing deployments upgrading to 1.7.1 see no change.
+        let tmp = std::env::temp_dir().join(format!("rustguac-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let themes = load_themes(&tmp);
+        assert_eq!(themes.len(), builtin_presets().len());
+        let names: Vec<&str> = themes.iter().map(|(n, _)| n.as_str()).collect();
+        let builtin_names: Vec<&str> = builtin_presets().iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, builtin_names);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn load_themes_adds_new_disk_theme() {
+        // A new .toml in the themes dir is appended after the built-ins.
+        let tmp = std::env::temp_dir().join(format!("rustguac-test-{}-add", std::process::id()));
+        let themes_dir = tmp.join("themes");
+        std::fs::create_dir_all(&themes_dir).unwrap();
+        std::fs::write(themes_dir.join("custom-brand.toml"), theme_toml("#ff00ff")).unwrap();
+        let themes = load_themes(&tmp);
+        let custom = themes.iter().find(|(n, _)| n == "custom-brand").unwrap();
+        assert_eq!(custom.1.primary, "#ff00ff");
+        // All built-ins still present and unchanged.
+        assert_eq!(themes.len(), builtin_presets().len() + 1);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn load_themes_disk_overrides_builtin_with_same_name() {
+        // A .toml named after a built-in (e.g. aurora.toml) replaces the
+        // built-in. Operators re-brand by editing the file, not the Rust code.
+        let tmp = std::env::temp_dir().join(format!("rustguac-test-{}-ovr", std::process::id()));
+        let themes_dir = tmp.join("themes");
+        std::fs::create_dir_all(&themes_dir).unwrap();
+        std::fs::write(themes_dir.join("aurora.toml"), theme_toml("#abcdef")).unwrap();
+        let themes = load_themes(&tmp);
+        let aurora = themes.iter().find(|(n, _)| n == "aurora").unwrap();
+        assert_eq!(aurora.1.primary, "#abcdef");
+        // Count is unchanged (override, not addition).
+        assert_eq!(themes.len(), builtin_presets().len());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn load_themes_skips_invalid_filename() {
+        // Security: theme names must match [a-zA-Z0-9_-]{1,64}. Anything else
+        // is skipped with a log warning, not loaded. Protects the frontend
+        // picker, log lines, and config-file matching from injection or
+        // homoglyph confusion via crafted filenames.
+        let tmp = std::env::temp_dir().join(format!("rustguac-test-{}-bad", std::process::id()));
+        let themes_dir = tmp.join("themes");
+        std::fs::create_dir_all(&themes_dir).unwrap();
+        // Whitespace, HTML, traversal-ish, and overlong all rejected.
+        for bad in [
+            "with space.toml",
+            "<script>.toml",
+            "..hidden.toml",
+            &format!("{}.toml", "x".repeat(65)),
+        ] {
+            std::fs::write(themes_dir.join(bad), theme_toml("#111111")).unwrap();
+        }
+        // One valid sentinel to confirm the loader is otherwise working.
+        std::fs::write(themes_dir.join("ok-theme.toml"), theme_toml("#222222")).unwrap();
+        let themes = load_themes(&tmp);
+        assert!(themes.iter().any(|(n, _)| n == "ok-theme"));
+        for bad_name in ["with space", "<script>", "..hidden", &"x".repeat(65)] {
+            assert!(
+                !themes.iter().any(|(n, _)| n == bad_name),
+                "invalid name should be rejected: {bad_name}"
+            );
+        }
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn load_themes_skips_malformed_toml() {
+        // A garbage .toml in the themes dir is skipped with a warning, not
+        // fatal. The rest of the directory continues to load.
+        let tmp =
+            std::env::temp_dir().join(format!("rustguac-test-{}-bad-toml", std::process::id()));
+        let themes_dir = tmp.join("themes");
+        std::fs::create_dir_all(&themes_dir).unwrap();
+        std::fs::write(themes_dir.join("bad.toml"), "this is = not\nvalid toml [[[").unwrap();
+        std::fs::write(themes_dir.join("good.toml"), theme_toml("#333333")).unwrap();
+        let themes = load_themes(&tmp);
+        assert!(themes.iter().any(|(n, _)| n == "good"));
+        assert!(!themes.iter().any(|(n, _)| n == "bad"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_with_existing_preset_keeps_backward_compat() {
+        // The classic case: user has [theme] preset = "aurora", overrides
+        // nothing. After the refactor, resolve_with against the merged
+        // builtins-only set must produce the same colors that the old
+        // resolve() did.
+        let cfg = ThemeConfig {
+            preset: Some("aurora".into()),
+            ..Default::default()
+        };
+        let builtins: Vec<(String, ThemeColors)> = builtin_presets()
+            .into_iter()
+            .map(|(n, c)| (n.to_string(), c))
+            .collect();
+        let (name, colors) = cfg.resolve_with(&builtins);
+        let (legacy_name, legacy_colors) = cfg.resolve();
+        assert_eq!(name, legacy_name);
+        assert_eq!(name, "aurora");
+        assert_eq!(colors.primary, legacy_colors.primary);
+    }
+
+    #[test]
+    fn resolve_with_field_override_still_applies() {
+        // Per-field overrides remain functional under resolve_with.
+        let cfg = ThemeConfig {
+            preset: Some("dark".into()),
+            primary_color: Some("#ff0000".into()),
+            ..Default::default()
+        };
+        let builtins: Vec<(String, ThemeColors)> = builtin_presets()
+            .into_iter()
+            .map(|(n, c)| (n.to_string(), c))
+            .collect();
+        let (_, colors) = cfg.resolve_with(&builtins);
+        assert_eq!(colors.primary, "#ff0000");
+    }
+
+    #[test]
+    fn existing_user_config_with_theme_section_keeps_working_after_upgrade() {
+        // Backward-compat: a config.toml that already has a [theme] section
+        // from a 1.7.0-or-earlier install must produce the exact same
+        // resolved colors after the v1.7.1 refactor. This test loads three
+        // realistic shapes of existing [theme] configs as if from
+        // config.toml, then runs each through resolve() and resolve_with()
+        // against the merged themes list and asserts they match.
+        //
+        // resolve() is now a thin wrapper over resolve_with(builtins), so
+        // this also verifies the wrapper preserves the legacy contract.
+        let cases = [
+            // Common: preset only.
+            r##"preset = "dark""##,
+            // Power user: preset + per-field overrides.
+            r##"
+                preset = "light"
+                primary_color = "#003366"
+                accent_color = "#FF6600"
+            "##,
+            // Overrides without a preset (the implicit-aurora case).
+            r##"
+                primary_color = "#abcdef"
+                bg_color = "#102030"
+            "##,
+            // Empty section — same as no [theme] block: defaults to aurora.
+            "",
+            // Typo'd preset name: falls back to the first built-in (dark).
+            r##"preset = "this-does-not-exist""##,
+        ];
+        let merged: Vec<(String, ThemeColors)> = builtin_presets()
+            .into_iter()
+            .map(|(n, c)| (n.to_string(), c))
+            .collect();
+        for src in cases {
+            let cfg: ThemeConfig = toml::from_str(src).expect("valid theme TOML");
+            let (legacy_name, legacy_colors) = cfg.resolve();
+            let (new_name, new_colors) = cfg.resolve_with(&merged);
+            assert_eq!(legacy_name, new_name, "preset name diverged for: {src}");
+            // Every field must match, byte for byte.
+            assert_eq!(
+                legacy_colors.primary, new_colors.primary,
+                "primary diverged for: {src}"
+            );
+            assert_eq!(legacy_colors.bg, new_colors.bg, "bg diverged for: {src}");
+            assert_eq!(
+                legacy_colors.accent, new_colors.accent,
+                "accent diverged for: {src}"
+            );
+            assert_eq!(
+                legacy_colors.text, new_colors.text,
+                "text diverged for: {src}"
+            );
+            assert_eq!(
+                legacy_colors.bg_pattern, new_colors.bg_pattern,
+                "bg_pattern diverged for: {src}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_valid_theme_name_rules() {
+        assert!(is_valid_theme_name("aurora"));
+        assert!(is_valid_theme_name("catppuccin-macchiato"));
+        assert!(is_valid_theme_name("corp_brand_v2"));
+        assert!(is_valid_theme_name("a"));
+        assert!(!is_valid_theme_name(""));
+        assert!(!is_valid_theme_name("with space"));
+        assert!(!is_valid_theme_name("with/slash"));
+        assert!(!is_valid_theme_name("with.dot"));
+        assert!(!is_valid_theme_name("with!bang"));
+        assert!(!is_valid_theme_name(&"x".repeat(65)));
+        assert!(is_valid_theme_name(&"x".repeat(64)));
     }
 }

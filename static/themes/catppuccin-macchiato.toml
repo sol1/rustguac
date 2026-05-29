@@ -1,0 +1,39 @@
+# Catppuccin Macchiato (lavender accent)
+#
+# Palette: https://github.com/catppuccin/catppuccin
+# Contributed by @dav0l in PR #148. Originally submitted against the
+# Rust `builtin_presets()` array; landed instead as the first user
+# theme under the disk-loaded `static/themes/*.toml` mechanism added
+# in v1.7.1.
+
+primary          = "#b7bdf8"
+primary_hover    = "#8aadf4"
+accent           = "#c6a0f6"
+accent_hover     = "#7dc4e4"
+bg               = "#24273a"
+surface          = "#363a4f"
+input            = "#1e2030"
+text             = "#cad3f5"
+text_muted       = "#a5adcb"
+border           = "#494d64"
+text_dim         = "#8087a2"
+text_on_primary  = "#24273a"
+btn_disabled     = "#5b6078"
+status_pending   = "#eed49f"
+status_active    = "#8bd5ca"
+status_completed = "#6e738d"
+status_error     = "#ed8796"
+status_expired   = "#8087a2"
+type_ssh_bg      = "#494d64"
+type_ssh_fg      = "#a6da95"
+type_rdp_bg      = "#494d64"
+type_rdp_fg      = "#f5a97f"
+type_vnc_bg      = "#494d64"
+type_vnc_fg      = "#c6a0f6"
+type_web_bg      = "#494d64"
+type_web_fg      = "#8aadf4"
+type_vdi_bg      = "#494d64"
+type_vdi_fg      = "#8bd5ca"
+hop_bg           = "#494d64"
+hop_fg           = "#a6da95"
+bg_pattern       = "none"

@@ -596,17 +596,19 @@ async fn run_server(config: Config, database: Db) {
     let drive_configured = DriveConfigured(config.drive.is_some());
     let site_title = SiteTitle(config.site_title.clone());
     let theme_data = {
-        // When [theme] is absent, resolve as if it were the default ThemeConfig.
-        // ThemeConfig::resolve() already defaults preset to "aurora" when
-        // preset is unset, so this gives "no [theme] section" the same
-        // behaviour as "[theme]\n" (empty section): aurora.
-        let (admin_preset, admin_colors) = config.theme.clone().unwrap_or_default().resolve();
+        // Load built-in themes merged with any user themes from
+        // <static_path>/themes/*.toml (see config::load_themes). When [theme]
+        // is absent, resolve_with defaults preset to "aurora" — same outcome
+        // as "[theme]\n" (empty section).
+        let themes = crate::config::load_themes(&static_path);
+        let (admin_preset, admin_colors) = config
+            .theme
+            .clone()
+            .unwrap_or_default()
+            .resolve_with(&themes);
         let logo_url = config.theme.as_ref().and_then(|t| t.logo_url.clone());
         let presets: std::collections::HashMap<String, crate::config::ThemeColors> =
-            crate::config::builtin_presets()
-                .into_iter()
-                .map(|(name, colors)| (name.to_string(), colors))
-                .collect();
+            themes.into_iter().collect();
         ThemeData {
             admin_preset,
             admin_colors,
