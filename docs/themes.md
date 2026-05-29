@@ -78,7 +78,7 @@ block. The override wins; the preset provides the rest.
 | `hop_bg` / `hop_fg` | Jump host badge |
 
 All colour values are CSS colour strings (`"#003366"`, `"rgb(0,51,102)"`,
-`"hsl(210 100% 20%)"` — anything CSS accepts).
+`"hsl(210 100% 20%)"`, anything CSS accepts).
 
 ### Example: corporate branding on top of a preset
 
@@ -105,8 +105,8 @@ users; selectable as `preset = "<name>"` in `config.toml`.
 A theme file is a flat TOML table with one entry per colour. The filename
 (minus `.toml`) is the theme id. There is **no** `name` field inside the
 file. Every field listed in the table below is required (the field names
-match the per-field overrides above, but **without** the `_color` suffix —
-e.g. `primary`, not `primary_color`); the sole exception is `bg_pattern`,
+match the per-field overrides above, but **without** the `_color` suffix
+(e.g. `primary`, not `primary_color`); the sole exception is `bg_pattern`,
 which defaults to `"none"` if omitted.
 
 ```toml
@@ -145,13 +145,13 @@ bg_pattern       = "none"
 ```
 
 A complete example ships with rustguac at
-`static/themes/catppuccin-macchiato.toml` — copy it and tweak.
+`static/themes/catppuccin-macchiato.toml`. Copy it and tweak.
 
 ### Naming rules
 
 Theme filenames (and therefore theme ids) must match
-`[a-zA-Z0-9_-]{1,64}`. Anything outside that set — spaces, dots,
-non-ASCII, control characters — is **rejected at load time with a log
+`[a-zA-Z0-9_-]{1,64}`. Anything outside that set (spaces, dots,
+non-ASCII, control characters) is **rejected at load time with a log
 warning** and the file is ignored. This keeps theme ids safe to render
 unescaped in the UI picker, safe in log lines, and free of any
 path-traversal or homoglyph mischief from crafted filenames.
