@@ -3394,7 +3394,7 @@ dependencies = [
 
 [[package]]
 name = "rustguac"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "aes 0.9.0",
  "axum",
