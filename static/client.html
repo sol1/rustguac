@@ -118,6 +118,75 @@
             border: 1px solid var(--border) !important;
         }
         #btn-reconnect:hover { background: var(--border); }
+        #fs-toggle {
+            display: none;
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 1500;
+            background: rgba(0,0,0,0.55);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-family: monospace;
+            font-size: 14px;
+            cursor: pointer;
+            opacity: 0.45;
+            transition: opacity 0.2s;
+        }
+        #fs-toggle:hover { opacity: 1; color: var(--accent); }
+        #fs-bar {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 32px;
+            background: rgba(20,20,30,0.92);
+            color: var(--text);
+            border-bottom: 1px solid var(--border);
+            z-index: 1500;
+            align-items: center;
+            padding: 0 12px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        #fs-bar.visible { display: flex; }
+        #fs-bar-title {
+            flex: 1;
+            color: var(--text-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding-right: 12px;
+        }
+        #fs-bar-buttons button {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 3px;
+            padding: 3px 10px;
+            margin-left: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        #fs-bar-buttons button:hover { background: var(--input); color: var(--accent); }
+        #fs-bar-buttons #fs-disconnect:hover { color: var(--primary); border-color: var(--primary); }
+        #fs-esc-notice {
+            display: none;
+            position: fixed;
+            top: 42px;
+            right: 12px;
+            z-index: 1600;
+            background: rgba(0,0,0,0.88);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-family: monospace;
+            font-size: 12px;
+            max-width: 320px;
+        }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 
@@ -175,6 +244,15 @@
         </div>
     </div>
     <div id="status">Loading...</div>
+    <button id="fs-toggle" title="Enter fullscreen">&#9974; Fullscreen</button>
+    <div id="fs-bar">
+        <div id="fs-bar-title"></div>
+        <div id="fs-bar-buttons">
+            <button id="fs-exit" title="Exit fullscreen">Exit fullscreen</button>
+            <button id="fs-disconnect" title="Disconnect">Disconnect</button>
+        </div>
+    </div>
+    <div id="fs-esc-notice"></div>
     <div id="display"></div>
 
     <script>
@@ -198,6 +276,10 @@
         // Connections entry. Used by the Reconnect button to launch a fresh
         // session against the same entry instead of reloading a dead one.
         var relaunchInfo = null;
+        // #154: fullscreen-on-connect flag + the entry display name we'll
+        // show in the in-fullscreen top bar. Populated from the same fetch.
+        var entryDisplayName = '';
+        var wantFullscreen = false;
 
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             var siteTitle = d.site_title || 'rustguac';
@@ -264,6 +346,8 @@
                         display_name: session.entry_display_name || ''
                     };
                 }
+                if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
+                if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 return showBanner(session.banner);
             })
             .then(function() { startGuacamole(); })
@@ -950,6 +1034,82 @@
                 } catch(e) { /* ignore capture errors */ }
             }
 
+            // ── Fullscreen (#154) ──
+            // The browser API requires a fresh user gesture to enter
+            // fullscreen, and navigation from connections.html consumes
+            // the prior gesture. So when the entry is marked
+            // fullscreen-on-connect we don't try to fire on page load.
+            // Instead we arm a one-shot listener for the next mousedown
+            // or keydown after CONNECTED. The manual gear-toggle button
+            // in the corner uses its own click gesture and works at any
+            // time once shown.
+            function rgFullscreenEl() {
+                return document.fullscreenElement
+                    || document.webkitFullscreenElement
+                    || document.mozFullScreenElement
+                    || document.msFullscreenElement || null;
+            }
+            function rgEnterFullscreen() {
+                var el = document.documentElement;
+                var req = el.requestFullscreen
+                    || el.webkitRequestFullscreen
+                    || el.mozRequestFullScreen
+                    || el.msRequestFullscreen;
+                if (!req) return;
+                var p;
+                try { p = req.call(el); } catch (e) { return; }
+                var onOk = function() {
+                    if (navigator.keyboard && navigator.keyboard.lock) {
+                        navigator.keyboard.lock(['Escape']).catch(rgShowEscNoticeOnce);
+                    } else {
+                        rgShowEscNoticeOnce();
+                    }
+                };
+                if (p && p.then) p.then(onOk).catch(function(){}); else onOk();
+            }
+            function rgExitFullscreen() {
+                try { if (navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock(); } catch (e) {}
+                var x = document.exitFullscreen
+                    || document.webkitExitFullscreen
+                    || document.mozCancelFullScreen
+                    || document.msExitFullscreen;
+                if (x) { try { x.call(document); } catch (e) {} }
+            }
+            function rgArmFullscreenGesture() {
+                var fire = function() {
+                    document.removeEventListener('mousedown', fire, true);
+                    document.removeEventListener('keydown', fire, true);
+                    rgEnterFullscreen();
+                };
+                document.addEventListener('mousedown', fire, true);
+                document.addEventListener('keydown', fire, true);
+            }
+            function rgShowEscNoticeOnce() {
+                if (sessionStorage.getItem('rustguac_esc_notice_seen')) return;
+                sessionStorage.setItem('rustguac_esc_notice_seen', '1');
+                var t = document.getElementById('fs-esc-notice');
+                if (!t) return;
+                t.textContent = 'Press Esc to exit fullscreen in this browser.';
+                t.style.display = 'block';
+                setTimeout(function() { t.style.display = 'none'; }, 6000);
+            }
+            function rgOnFullscreenChange() {
+                var inFs = !!rgFullscreenEl();
+                var tg = document.getElementById('fs-toggle');
+                var bar = document.getElementById('fs-bar');
+                if (tg) tg.style.display = inFs ? 'none' : 'block';
+                if (bar) bar.className = inFs ? 'visible' : '';
+            }
+            ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
+                .forEach(function(ev){ document.addEventListener(ev, rgOnFullscreenChange); });
+            document.getElementById('fs-toggle').addEventListener('click', rgEnterFullscreen);
+            document.getElementById('fs-exit').addEventListener('click', rgExitFullscreen);
+            document.getElementById('fs-disconnect').addEventListener('click', function() {
+                rgExitFullscreen();
+                try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
+                window.location.href = '/connections.html';
+            });
+
             client.onstatechange = function(state) {
                 switch (state) {
                     case Guacamole.Client.State.CONNECTING: statusEl.textContent = 'Connecting...'; statusEl.className = ''; break;
@@ -962,6 +1122,10 @@
                             // First capture after 3s (let display render)
                             setTimeout(captureAndUploadThumbnail, 3000);
                         }
+                        document.getElementById('fs-toggle').style.display = 'block';
+                        document.getElementById('fs-bar-title').textContent =
+                            entryDisplayName || ('Session ' + sessionId.substring(0,8));
+                        if (wantFullscreen) rgArmFullscreenGesture();
                         break;
                     case Guacamole.Client.State.DISCONNECTING:
                         statusEl.textContent = 'Disconnecting...'; statusEl.className = '';
@@ -976,6 +1140,8 @@
                         statusEl.textContent = 'Disconnected'; statusEl.className = '';
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                         document.getElementById('disconnected-overlay').className = 'visible';
+                        document.getElementById('fs-toggle').style.display = 'none';
+                        if (rgFullscreenEl()) rgExitFullscreen();
                         break;
                 }
             };
@@ -989,6 +1155,8 @@
                 document.getElementById('disconnected-title').textContent = 'Connection Error';
                 document.getElementById('disconnected-message').textContent = status.message || 'An error occurred.';
                 document.getElementById('disconnected-overlay').className = 'visible';
+                document.getElementById('fs-toggle').style.display = 'none';
+                if (rgFullscreenEl()) rgExitFullscreen();
             };
 
             // Wire tunnel events back into the client. Upstream Guacamole's

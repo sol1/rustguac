@@ -120,6 +120,7 @@ pub async fn cmd_import_guacamole(
             container_idle_timeout_mins: None,
             allow_sharing: None,
             auto_open_if_singleton: None,
+            fullscreen_on_connect: None,
         };
 
         // Place the entry into a subfolder matching its parent group path.
@@ -708,6 +709,7 @@ mod tests {
             container_idle_timeout_mins: None,
             allow_sharing: None,
             auto_open_if_singleton: None,
+            fullscreen_on_connect: None,
         };
         let mut entries = vec![
             (("".into(), "web".into()), entry()),

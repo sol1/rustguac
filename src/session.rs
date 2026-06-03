@@ -127,6 +127,10 @@ pub struct CreateSessionRequest {
     /// the entry's `allow_sharing` flag; ad-hoc sessions are never
     /// shareable (per GitHub-less admin gating requirement).
     pub allow_sharing: Option<bool>,
+    /// Open the client in fullscreen on connect (#154). Populated from
+    /// the source entry's `fullscreen_on_connect` flag; ad-hoc sessions
+    /// leave it None and the client behaves as if false.
+    pub fullscreen_on_connect: Option<bool>,
 }
 
 /// Session status in the lifecycle.
@@ -172,6 +176,10 @@ pub struct SessionInfo {
     pub entry_display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail_url: Option<String>,
+    /// Open the client in fullscreen on connect (#154). Read by client.html
+    /// from the /api/sessions/:id fetch; omitted when false/unset.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fullscreen_on_connect: bool,
 }
 
 /// Internal session state including the guacd connection.
@@ -229,6 +237,10 @@ pub struct Session {
     /// Connections card hides its Share button. Does not block admin
     /// shadow (`/shadow`), which has its own audit trail.
     pub share_allowed: bool,
+    /// Copied from the source entry's `fullscreen_on_connect` flag
+    /// (#154). Surfaced verbatim in `SessionInfo` so client.html can
+    /// trigger fullscreen on first user gesture after CONNECTED.
+    pub fullscreen_on_connect: bool,
 }
 
 /// A short-lived viewer token issued by an admin to shadow an active session.
@@ -417,6 +429,7 @@ impl Session {
             address_book_folder: self.address_book_folder.clone(),
             entry_display_name: self.entry_display_name.clone(),
             thumbnail_url: Some(format!("/api/sessions/{}/thumbnail", self.id)),
+            fullscreen_on_connect: self.fullscreen_on_connect,
         }
     }
 }
@@ -1310,6 +1323,7 @@ impl SessionManager {
             login_script_handle,
             shadow_tokens: Vec::new(),
             share_allowed,
+            fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
         };
 
         let info = session.info();
@@ -2072,6 +2086,7 @@ mod tests {
             login_script_handle: None,
             shadow_tokens: Vec::new(),
             share_allowed: true,
+            fullscreen_on_connect: false,
         }
     }
 

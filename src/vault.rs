@@ -197,6 +197,11 @@ pub struct AddressBookEntry {
     /// visible entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_open_if_singleton: Option<bool>,
+    /// GitHub #154: when true, the client enters fullscreen on first user
+    /// gesture after connect and locks the Escape key (Chromium) so it
+    /// reaches the remote session instead of exiting fullscreen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fullscreen_on_connect: Option<bool>,
 }
 
 impl AddressBookEntry {
@@ -332,6 +337,9 @@ pub struct EntryInfo {
     /// Auto-open on login when this is the user's only visible entry (#103).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_open_if_singleton: Option<bool>,
+    /// Open the client in fullscreen on connect (#154).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fullscreen_on_connect: Option<bool>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -393,6 +401,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             has_container_password: e.container_password.as_ref().is_some_and(|p| !p.is_empty()),
             allow_sharing: e.allow_sharing,
             auto_open_if_singleton: e.auto_open_if_singleton,
+            fullscreen_on_connect: e.fullscreen_on_connect,
         }
     }
 }

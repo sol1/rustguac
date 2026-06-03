@@ -721,6 +721,16 @@
                     this box is ticked, connect automatically (replaces the current tab — browsers
                     block new-tab popups without a click). Kiosk-style single-purpose accounts.
                 </div>
+                <label style="text-transform:none;letter-spacing:0;cursor:pointer;margin-top:0.8em">
+                    <input type="checkbox" id="em-fullscreen-on-connect" style="display:inline;width:auto;margin-right:0.5em">
+                    Open in fullscreen on connect
+                </label>
+                <div class="field-hint">
+                    On the first user gesture after the session connects, enter browser fullscreen
+                    and lock the Escape key so it reaches the remote session (Chromium-based
+                    browsers; Firefox / Safari fall back to standard fullscreen). Reduces the risk
+                    of users accidentally closing the rustguac tab.
+                </div>
             </div>
             <div id="em-move-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label>Move to folder
@@ -2916,6 +2926,7 @@
             document.getElementById('em-disable-paste').checked = false;
             document.getElementById('em-allow-sharing').checked = false;
             document.getElementById('em-auto-open-singleton').checked = false;
+            document.getElementById('em-fullscreen-on-connect').checked = false;
             document.getElementById('em-enable-drive').checked = false;
             document.getElementById('em-drive-warning').style.display = 'none';
             document.getElementById('em-remote-app').value = '';
@@ -3110,6 +3121,8 @@
                 document.getElementById('em-allow-sharing').checked = !!entryData.allow_sharing;
                 // Populate auto-open singleton flag
                 document.getElementById('em-auto-open-singleton').checked = !!entryData.auto_open_if_singleton;
+                // Populate fullscreen-on-connect flag
+                document.getElementById('em-fullscreen-on-connect').checked = !!entryData.fullscreen_on_connect;
                 // Populate hop list from jump_hosts array
                 if (entryData.jump_hosts && entryData.jump_hosts.length > 0) {
                     hopList = entryData.jump_hosts.map(function(h) {
@@ -3273,6 +3286,8 @@
             if (document.getElementById('em-allow-sharing').checked) entry.allow_sharing = true;
             // Auto-open if this is the user's only visible entry (#103)
             if (document.getElementById('em-auto-open-singleton').checked) entry.auto_open_if_singleton = true;
+            // Open in fullscreen on connect (#154)
+            if (document.getElementById('em-fullscreen-on-connect').checked) entry.fullscreen_on_connect = true;
 
             // Tunnel / jump host settings — multi-hop (all types)
             if (type === 'ssh' || type === 'rdp' || type === 'vnc' || type === 'web') {
