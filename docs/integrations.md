@@ -128,6 +128,100 @@ sudo systemctl restart rustguac
 
 Create groups in Authentik (e.g., `rustguac-admins`, `rustguac-operators`) and assign users to them. Then configure group-to-role mappings in the rustguac Admin page so that group membership automatically assigns roles on login. See [Roles and Access Control](roles-and-access-control.md) for details.
 
+### Microsoft Entra ID (Azure AD) setup guide
+
+Entra ID works with rustguac via OIDC, but the way it exposes group
+memberships is different from Authentik / Keycloak / JumpCloud and trips
+people up.
+
+**Key difference:** Entra ID does **not** have a `groups` OAuth scope.
+Groups come back as a **claim** in the ID token, configured per app
+registration. If you copy `extra_scopes = ["groups"]` from the Authentik
+config above into an Entra setup it will fail at login with:
+
+```
+AADSTS650053: The application asked for scope 'groups' that doesn't exist on the resource '00000003-0000-0000-c000-000000000000'
+```
+
+**1. Register the application** in the Entra portal:
+
+- Go to **Microsoft Entra ID > App registrations > New registration**
+- Name: `rustguac` (or whatever you prefer)
+- Supported account types: **Single tenant** (or whichever fits your
+  deployment)
+- Redirect URI: type **Web**, value `https://your-rustguac-host/auth/callback`
+- Note the **Application (client) ID** and **Directory (tenant) ID**
+
+**2. Create a client secret:**
+
+- In your new app registration, go to **Certificates & secrets > Client
+  secrets > New client secret**
+- Note the **Value** (it's only shown once)
+
+**3. Add a groups claim to the ID token:**
+
+This is the step that replaces Authentik's `groups` scope.
+
+- In your app registration, go to **Token configuration > Add groups claim**
+- Tick **ID token**
+- Pick the group set to emit:
+  - **Security groups** for security groups only (most common)
+  - **All groups (includes distribution lists and directory roles)** if
+    you need DLs too
+- Under the **Group ID** subsection: keep the default to emit group
+  **object IDs** (recommended; stable across rename), or expand the
+  optional settings and pick **sAMAccountName** if you'd prefer group
+  names. If you pick names, the group-to-role mappings you configure in
+  the rustguac Admin page must reference those names.
+- Save
+
+**4. Configure rustguac:**
+
+```toml
+[oidc]
+issuer_url = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+client_id = "{application-client-id}"
+redirect_uri = "https://your-rustguac-host/auth/callback"
+default_role = "operator"
+groups_claim = "groups"
+# DO NOT set extra_scopes = ["groups"] for Entra. Groups come from the
+# claim configured in step 3, not from a scope request. Leave extra_scopes
+# unset (or [] empty) unless you need other Entra scopes.
+```
+
+```bash
+echo 'OIDC_CLIENT_SECRET={your-client-secret}' >> /opt/rustguac/env
+chmod 600 /opt/rustguac/env
+sudo systemctl restart rustguac
+```
+
+Replace `{tenant-id}` with your Directory (tenant) ID from step 1. The
+`{tenant-id}/v2.0` issuer URL is required (the v1 endpoint won't return
+the claims rustguac expects).
+
+**5. (Optional) Group-to-role mappings:**
+
+After your first successful login, the groups you belong to appear in the
+**seen groups** list on the rustguac Admin page. From there you can map
+group object IDs (or names, if you chose sAMAccountName in step 3) to
+rustguac roles. See [Roles and Access Control](roles-and-access-control.md).
+
+### Troubleshooting
+
+- **`AADSTS650053: scope 'groups' doesn't exist`**: you have
+  `extra_scopes = ["groups"]` in your config. Remove it. Entra's groups
+  arrive via the claim configured in step 3 above, not a scope.
+- **No groups in the token after login**: confirm step 3 was saved
+  against the correct app registration, and that you're using the
+  `v2.0` issuer URL.
+- **Groups appear as object IDs, not names**: that's the default. Either
+  use the object IDs in your group-to-role mappings (stable, recommended)
+  or switch the claim to emit `sAMAccountName` in step 3 and use names.
+- **Login succeeds but `default_role` doesn't get applied**: `default_role`
+  only fires when no group-to-role mapping matches. Configure mappings on
+  the Admin page (or, for a single-user test, set `default_role = "admin"`
+  temporarily to bootstrap).
+
 ---
 
 ## Vault / OpenBao Connections
