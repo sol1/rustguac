@@ -149,8 +149,11 @@
             padding: 0 12px;
             font-family: monospace;
             font-size: 13px;
+            transform: translateY(-100%);
+            transition: transform 0.25s ease;
         }
         #fs-bar.visible { display: flex; }
+        #fs-bar.visible.revealed { transform: translateY(0); }
         #fs-bar-title {
             flex: 1;
             color: var(--text-muted);
@@ -1093,12 +1096,66 @@
                 t.style.display = 'block';
                 setTimeout(function() { t.style.display = 'none'; }, 6000);
             }
+            // Auto-hide top bar: show on enter for a few seconds, then
+            // slide up out of view to free the remote's top edge (xfce4
+            // panels, Windows taskbar, etc). Reveals again when the mouse
+            // approaches the top of the screen, hides again when it
+            // leaves the bar area.
+            var rgBarHideTimer = null;
+            function rgRevealBar() {
+                var bar = document.getElementById('fs-bar');
+                if (!bar || !bar.classList.contains('visible')) return;
+                bar.classList.add('revealed');
+                if (rgBarHideTimer) { clearTimeout(rgBarHideTimer); rgBarHideTimer = null; }
+            }
+            function rgScheduleBarHide(delayMs) {
+                if (rgBarHideTimer) clearTimeout(rgBarHideTimer);
+                rgBarHideTimer = setTimeout(function() {
+                    var bar = document.getElementById('fs-bar');
+                    if (bar) bar.classList.remove('revealed');
+                    rgBarHideTimer = null;
+                }, delayMs);
+            }
+            function rgOnFullscreenMouseMove(e) {
+                if (!rgFullscreenEl()) return;
+                var bar = document.getElementById('fs-bar');
+                if (!bar) return;
+                // Top 4px: reveal (and cancel any pending hide).
+                // Over the bar area (<= 36px): keep revealed, cancel hide.
+                // Below the bar with a small buffer (> 48px): schedule
+                // hide. The gap between 36 and 48 is hysteresis so a
+                // jittering pointer doesn't flicker the bar.
+                if (e.clientY <= 4) {
+                    rgRevealBar();
+                } else if (e.clientY <= 36) {
+                    if (rgBarHideTimer) { clearTimeout(rgBarHideTimer); rgBarHideTimer = null; }
+                } else if (bar.classList.contains('revealed') && e.clientY > 48) {
+                    // Only arm if no hide is already pending. Without this
+                    // gate, every mousemove in the session resets the
+                    // countdown and the bar never hides.
+                    if (!rgBarHideTimer) rgScheduleBarHide(600);
+                }
+            }
             function rgOnFullscreenChange() {
                 var inFs = !!rgFullscreenEl();
                 var tg = document.getElementById('fs-toggle');
                 var bar = document.getElementById('fs-bar');
                 if (tg) tg.style.display = inFs ? 'none' : 'block';
-                if (bar) bar.className = inFs ? 'visible' : '';
+                if (bar) {
+                    if (inFs) {
+                        bar.classList.add('visible');
+                        // Show for a moment so the user knows it's there,
+                        // then auto-hide.
+                        setTimeout(rgRevealBar, 50);
+                        rgScheduleBarHide(2500);
+                        document.addEventListener('mousemove', rgOnFullscreenMouseMove);
+                    } else {
+                        bar.classList.remove('visible');
+                        bar.classList.remove('revealed');
+                        if (rgBarHideTimer) { clearTimeout(rgBarHideTimer); rgBarHideTimer = null; }
+                        document.removeEventListener('mousemove', rgOnFullscreenMouseMove);
+                    }
+                }
             }
             ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
                 .forEach(function(ev){ document.addEventListener(ev, rgOnFullscreenChange); });
