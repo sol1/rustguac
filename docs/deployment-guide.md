@@ -41,7 +41,7 @@ sudo apt install ./rustguac_amd64.deb
 
 This installs rustguac + guacd to `/opt/rustguac` with systemd services.
 
-### Docker
+### Docker (recommended for non-Debian-13 hosts)
 
 ```bash
 docker pull ghcr.io/sol1/rustguac:latest
@@ -53,7 +53,9 @@ docker run -d \
   ghcr.io/sol1/rustguac:latest
 ```
 
-See [installation.md](installation.md) for all options including bare-metal script and Docker.
+The Docker image bundles guacd + FreeRDP + dependencies, so it runs cleanly on Ubuntu, RHEL, Rocky, Arch, and other distros where the bare-metal `.deb` would hit a FreeRDP ABI mismatch. See [installation.md](installation.md#other-linux-distributions) for the full story on non-Debian-13 targets.
+
+See [installation.md](installation.md) for all install options.
 
 ## Step 2: Initial Configuration
 

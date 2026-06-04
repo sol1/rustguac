@@ -1,5 +1,12 @@
 # Installation
 
+> **Target platform**: rustguac is built and tested against **Debian 13
+> (Trixie)**. The pre-built `.deb` package and the `install.sh` script
+> both assume FreeRDP 3.15+ (Debian 13's `freerdp3-dev`). On other Linux
+> distributions, the recommended path is the Docker image (Option C),
+> which avoids the FreeRDP ABI issue entirely. See
+> [Other Linux distributions](#other-linux-distributions) below.
+
 ## Option A: Debian package (recommended)
 
 Pre-built `.deb` packages are available from the [releases page](https://github.com/sol1/rustguac/releases) for Debian 13 (Trixie) and compatible distributions.
@@ -253,6 +260,98 @@ EOF
 
 ./dev.sh start
 ```
+
+## Other Linux distributions
+
+rustguac is built and tested against Debian 13 (Trixie). On other Linux
+distributions the FreeRDP ABI is typically different, and the prebuilt
+`.deb` will fail at runtime even if it installs cleanly. The most common
+symptom is RDP sessions working visually but drive redirection and audio
+failing with messages in the guacd log like:
+
+```
+Cannot create static channel "rdpdr": failed to load "guac-common-svc" plugin for FreeRDP.
+Cannot create static channel "rdpsnd": failed to load "guac-common-svc" plugin for FreeRDP.
+```
+
+That is FreeRDP's plugin loader silently failing symbol resolution
+against a different FreeRDP version than what guacd was compiled against.
+
+### Recommended: Docker (Option C above)
+
+The Docker image bundles guacd, FreeRDP, and all dependencies as a single
+artifact and runs cleanly on any host that can run a recent Docker
+daemon. This is the supported path for Ubuntu, RHEL/Rocky/Alma, Arch,
+and any other non-Debian-13 distribution.
+
+```bash
+docker pull sol1/rustguac:latest
+```
+
+See [Option C: Docker](#option-c-docker) above for the full setup.
+
+### Untested: building from source on Ubuntu 24.04 LTS
+
+If you really need a bare-metal install on Ubuntu 24.04, you can build
+locally, but be aware that **Ubuntu 24.04 ships FreeRDP 3.5.1**, which
+is older than what our `patches/` directory targets (FreeRDP 3.15+ as
+shipped by Debian 13). The patches will fail to apply or apply against
+the wrong lines.
+
+Two options:
+
+**Option 1: skip the patches and build against system FreeRDP 3.5.**
+
+```bash
+# Build deps
+sudo apt-get install -y \
+    git build-essential autoconf automake libtool pkg-config cmake \
+    libcairo2-dev libjpeg-dev libpng-dev libwebp-dev libssh2-1-dev \
+    libssl-dev libvncserver-dev libpango1.0-dev libpulse-dev \
+    libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+    libtelnet-dev libwebsockets-dev freerdp3-dev uuid-dev \
+    chromium-browser tigervnc-standalone-server cryptsetup \
+    curl ca-certificates
+
+# Rust toolchain (1.96+ required for rusqlite 0.40 build)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# Build guacd against system FreeRDP 3.5 (skip our 3.15+ patches)
+git clone https://github.com/sol1/rustguac.git
+git clone https://github.com/apache/guacamole-server.git
+cd guacamole-server
+git checkout 2980cf0   # same pin rustguac uses
+autoreconf -fi
+./configure --prefix=/opt/rustguac --with-rdp
+make -j"$(nproc)"
+sudo make install
+
+# Build rustguac
+cd ../rustguac
+cargo build --release
+bash build-deb.sh
+sudo dpkg -i ../rustguac_*_amd64.deb
+```
+
+Drive redirection, audio, and clipboard should work. The 3.15-specific
+bugs our patches address are not present in 3.5.x, so the unpatched
+build is fine for that vintage of FreeRDP.
+
+**Option 2: install FreeRDP 3.15+ from a third-party source** (e.g. a
+PPA or build from source) and then run `install.sh` normally. Out of
+scope for this guide.
+
+Both paths are **untested by us**: we don't run CI against Ubuntu 24.04
+and we don't ship `.deb`s for it. Issues experienced on Ubuntu will be
+triaged as best-effort and will generally close with a pointer back to
+the Docker image. If you do run rustguac on Ubuntu successfully (or
+unsuccessfully), reports via GitHub issues are welcome and help inform
+whether we eventually add a CI target.
+
+### Other distributions
+
+For RPM-based distros see [Option D: RPM package (build from source)](#option-d-rpm-package-build-from-source).
+For everything else, the Docker image is the path of least resistance.
 
 ## System dependencies
 
