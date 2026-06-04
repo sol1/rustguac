@@ -118,24 +118,6 @@
             border: 1px solid var(--border) !important;
         }
         #btn-reconnect:hover { background: var(--border); }
-        #fs-toggle {
-            display: none;
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            z-index: 1500;
-            background: rgba(0,0,0,0.55);
-            color: var(--text-muted);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 4px 10px;
-            font-family: monospace;
-            font-size: 14px;
-            cursor: pointer;
-            opacity: 0.45;
-            transition: opacity 0.2s;
-        }
-        #fs-toggle:hover { opacity: 1; color: var(--accent); }
         #fs-bar {
             display: none;
             position: fixed;
@@ -247,7 +229,6 @@
         </div>
     </div>
     <div id="status">Loading...</div>
-    <button id="fs-toggle" title="Enter fullscreen">&#9974; Fullscreen</button>
     <div id="fs-bar">
         <div id="fs-bar-title"></div>
         <div id="fs-bar-buttons">
@@ -528,6 +509,7 @@
                     '<div style="display:flex;align-items:center;gap:0.6em;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
                         '<h3 style="margin:0;flex:1;color:var(--primary);font-size:1.1em;">Session</h3>' +
                         '<button id="cp-home" style="background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.9em;padding:0.35em 0.8em;border-radius:3px;cursor:pointer;" title="Return to the Connections page">&#127968; Home</button>' +
+                        '<button id="cp-fullscreen" style="background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.9em;padding:0.35em 0.8em;border-radius:3px;cursor:pointer;" title="Enter fullscreen">&#9974; Fullscreen</button>' +
                         '<button id="cp-close" style="background:none;border:none;color:var(--text-dim);font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
                     '</div>' +
                     '<div style="flex:1;display:flex;flex-direction:column;padding:1em;gap:0.8em;overflow-y:auto;min-height:0;">' +
@@ -556,6 +538,10 @@
                     // socket closes; user can explicitly terminate from
                     // Connections' active-session card.
                     window.location.href = '/connections.html';
+                });
+                document.getElementById('cp-fullscreen').addEventListener('click', function() {
+                    rgEnterFullscreen();
+                    if (panelOpen) toggleClipboardPanel();
                 });
                 document.getElementById('cp-send').addEventListener('click', function() {
                     if (clipboardTextarea.value) sendClipboardToRemote(clipboardTextarea.value);
@@ -1043,9 +1029,9 @@
             // the prior gesture. So when the entry is marked
             // fullscreen-on-connect we don't try to fire on page load.
             // Instead we arm a one-shot listener for the next mousedown
-            // or keydown after CONNECTED. The manual gear-toggle button
-            // in the corner uses its own click gesture and works at any
-            // time once shown.
+            // or keydown after CONNECTED. The Ctrl+Alt+Shift menu's
+            // fullscreen button uses its own click gesture and works at
+            // any time once shown.
             function rgFullscreenEl() {
                 return document.fullscreenElement
                     || document.webkitFullscreenElement
@@ -1138,9 +1124,7 @@
             }
             function rgOnFullscreenChange() {
                 var inFs = !!rgFullscreenEl();
-                var tg = document.getElementById('fs-toggle');
                 var bar = document.getElementById('fs-bar');
-                if (tg) tg.style.display = inFs ? 'none' : 'block';
                 if (bar) {
                     if (inFs) {
                         bar.classList.add('visible');
@@ -1159,7 +1143,6 @@
             }
             ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
                 .forEach(function(ev){ document.addEventListener(ev, rgOnFullscreenChange); });
-            document.getElementById('fs-toggle').addEventListener('click', rgEnterFullscreen);
             document.getElementById('fs-exit').addEventListener('click', rgExitFullscreen);
             document.getElementById('fs-disconnect').addEventListener('click', function() {
                 rgExitFullscreen();
@@ -1179,7 +1162,6 @@
                             // First capture after 3s (let display render)
                             setTimeout(captureAndUploadThumbnail, 3000);
                         }
-                        document.getElementById('fs-toggle').style.display = 'block';
                         document.getElementById('fs-bar-title').textContent =
                             entryDisplayName || ('Session ' + sessionId.substring(0,8));
                         if (wantFullscreen) rgArmFullscreenGesture();
@@ -1197,7 +1179,6 @@
                         statusEl.textContent = 'Disconnected'; statusEl.className = '';
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                         document.getElementById('disconnected-overlay').className = 'visible';
-                        document.getElementById('fs-toggle').style.display = 'none';
                         if (rgFullscreenEl()) rgExitFullscreen();
                         break;
                 }
@@ -1212,7 +1193,6 @@
                 document.getElementById('disconnected-title').textContent = 'Connection Error';
                 document.getElementById('disconnected-message').textContent = status.message || 'An error occurred.';
                 document.getElementById('disconnected-overlay').className = 'visible';
-                document.getElementById('fs-toggle').style.display = 'none';
                 if (rgFullscreenEl()) rgExitFullscreen();
             };
 
