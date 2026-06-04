@@ -431,6 +431,24 @@ Clipboard copy and paste can be independently disabled per connections entry. Th
 
 These work for all session types (SSH, RDP, VNC, Web), not just web sessions. See [Security: Clipboard control](security.md#clipboard-control) for details.
 
+## In-session keyboard shortcuts
+
+The session page supports a small set of browser-side shortcuts:
+
+- Click **? Shortcuts** in the session view for an in-app shortcut reference popover.
+
+| Shortcut | Action | Notes |
+|----------|--------|-------|
+| `Ctrl+Alt+Shift` | Toggle the clipboard side panel | Works globally on the session page (capture phase), including when the remote display is focused. |
+| `Ctrl+V` (Windows/Linux) or `Cmd+V` (macOS) | Sync browser clipboard text to the remote session, then send paste | If clipboard API access is available, rustguac reads local clipboard text and sends it to the remote before forwarding the paste key event. |
+| `Esc` (browser fullscreen) | Exit fullscreen | Browser-native fullscreen key. rustguac may request keyboard lock while in fullscreen; if lock is unavailable, an on-screen notice reminds users to press Esc. |
+
+Additional behavior:
+
+- No dedicated keyboard combo is currently assigned for entering fullscreen. Users can use entry-level fullscreen-on-connect, or open the `Ctrl+Alt+Shift` clipboard panel and click its **Fullscreen** button (next to **Home**).
+- All other key presses are passed through to the remote host by Guacamole keyboard handling.
+- Clipboard policy flags still apply: `disable_copy` and `disable_paste` can block corresponding clipboard flows regardless of local shortcuts.
+
 ## URL placeholders
 
 The entry URL supports credential placeholders that are URL-encoded and substituted before Chromium navigates:
