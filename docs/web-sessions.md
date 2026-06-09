@@ -435,8 +435,6 @@ These work for all session types (SSH, RDP, VNC, Web), not just web sessions. Se
 
 The session page supports a small set of browser-side shortcuts:
 
-- Click **? Shortcuts** in the session view for an in-app shortcut reference popover.
-
 | Shortcut | Action | Notes |
 |----------|--------|-------|
 | `Ctrl+Alt+Shift` | Toggle the clipboard side panel | Works globally on the session page (capture phase), including when the remote display is focused. |

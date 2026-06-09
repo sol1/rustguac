@@ -107,7 +107,7 @@ Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reac
 
 Spawns a headless Xvnc display and Chromium in kiosk mode, then connects guacd via VNC to the local display. The user sees a full browser session in their own browser. Each session gets an isolated Chromium profile directory.
 
-Web sessions support native autofill, per-entry domain allowlisting, login scripts (CDP-based automation), clipboard control, in-session shortcuts/help UI, and Chromium security hardening. See [Web Browser Sessions](web-sessions.md) for the full guide with examples.
+Web sessions support native autofill, per-entry domain allowlisting, login scripts (CDP-based automation), clipboard control, and Chromium security hardening. See [Web Browser Sessions](web-sessions.md) for the full guide with examples.
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach web targets through bastion hosts.
 
