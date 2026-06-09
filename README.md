@@ -75,6 +75,7 @@ guacd (C, from guacamole-server)
 - **Connections** with folder-based organisation and OIDC group access control
 - **Active Sessions** section with live thumbnail previews
 - **Session ended overlay** with Reconnect/Close buttons
+- **Clipboard panel controls** (Home + Fullscreen)
 - **8 built-in themes** with CSS gradient backgrounds, or configure your own
 - **Reports page** with session analytics, history, and CSV export
 
