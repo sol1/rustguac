@@ -851,6 +851,100 @@ pub async fn list_recordings(
     }
 }
 
+/// GET /api/typescripts - List SSH typescript recordings (#159). Requires
+/// poweruser+ role.
+///
+/// **List only by design.** Unlike `.guac` recordings, the typescript
+/// content is never served or downloadable through the web UI: a
+/// typescript captures the full terminal output (which can include
+/// passwords typed at prompts or secrets printed to screen). A poweruser
+/// can see *that* a session was recorded (connection, time, size) for
+/// accountability, but retrieving the actual log requires direct access
+/// to the rustguac host or storage. There is deliberately no serve or
+/// delete endpoint, so there is also no name parameter and no
+/// path-traversal surface.
+pub async fn list_typescripts(
+    State(manager): State<AppState>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> impl IntoResponse {
+    match &identity {
+        Some(Extension(id)) if id.has_role("poweruser") => {}
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "requires poweruser or admin role"})),
+            )
+                .into_response();
+        }
+    }
+
+    let ts_path = match manager
+        .config()
+        .recording
+        .as_ref()
+        .and_then(|r| r.typescript_path.clone())
+    {
+        Some(p) => p,
+        // Typescript recording not configured: empty list, not an error.
+        None => return Json(json!([])).into_response(),
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        let mut items = Vec::new();
+        let entries = match std::fs::read_dir(&ts_path) {
+            Ok(e) => e,
+            Err(_) => return items,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            // Each session writes "NAME" + "NAME.timing"; list only the
+            // data file so one row == one session.
+            if name.ends_with(".timing") {
+                continue;
+            }
+            let meta = match std::fs::metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let modified = meta
+                .modified()
+                .ok()
+                .map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    dt.to_rfc3339()
+                })
+                .unwrap_or_default();
+            items.push(json!({
+                "name": name,
+                "size_bytes": meta.len(),
+                "modified": modified,
+            }));
+        }
+        items.sort_by(|a, b| {
+            let ma = a["modified"].as_str().unwrap_or("");
+            let mb = b["modified"].as_str().unwrap_or("");
+            mb.cmp(ma)
+        });
+        items
+    })
+    .await
+    {
+        Ok(items) => Json(json!(items)).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to list typescripts"})),
+        )
+            .into_response(),
+    }
+}
+
 // ── Report endpoints ──
 
 #[derive(Deserialize)]

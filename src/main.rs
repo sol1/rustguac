@@ -869,6 +869,8 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/recordings", get(api::list_recordings))
         .route("/api/recordings/{name}", get(api::serve_recording))
         .route("/api/recordings/{name}", delete(api::delete_recording))
+        // #159: typescript register is list-only by design (no serve/delete).
+        .route("/api/typescripts", get(api::list_typescripts))
         .route("/api/reports/sessions", get(api::report_sessions))
         .route("/api/reports/sessions/csv", get(api::report_sessions_csv))
         .route(

@@ -179,6 +179,17 @@
     </div>
     <div id="recording-list"></div>
 
+    <div id="typescript-section" style="display:none;max-width:1200px;margin-top:2em">
+        <h2 style="margin-bottom:0.2em">SSH Typescripts</h2>
+        <p style="color:var(--text-muted);font-size:0.9em;margin-top:0;max-width:70ch">
+            Plain-text audit logs of SSH terminal sessions. Listed here for
+            accountability; the content is not downloadable through the web UI.
+            Retrieving a typescript requires direct access to the rustguac host
+            or storage.
+        </p>
+        <div id="typescript-list"></div>
+    </div>
+
     <script>
         function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
         var _themePresets={},_adminPreset='aurora';
@@ -264,6 +275,31 @@
                 allRecordings = recordings;
                 renderRecordings(recordings);
             });
+        }
+
+        // #159: list-only typescript register. No play/download/delete:
+        // the section only shows that a recording exists.
+        function refreshTypescripts() {
+            fetch('/api/typescripts', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) { return res.ok ? res.json() : []; })
+            .then(function(items) {
+                var section = document.getElementById('typescript-section');
+                var list = document.getElementById('typescript-list');
+                if (!items || !items.length) { section.style.display = 'none'; return; }
+                section.style.display = '';
+                var html = '<table><thead><tr><th>Name</th><th>Size</th><th>Date</th></tr></thead><tbody>';
+                items.forEach(function(t) {
+                    var date = t.modified ? new Date(t.modified).toLocaleString() : '';
+                    html += '<tr>' +
+                        '<td>' + escapeHtml(t.name || '') + '</td>' +
+                        '<td>' + formatBytes(t.size_bytes) + '</td>' +
+                        '<td>' + date + '</td>' +
+                        '</tr>';
+                });
+                html += '</tbody></table>';
+                list.innerHTML = html;
+            })
+            .catch(function() { /* feature off or unauthorised, leave hidden */ });
         }
 
         var allRecordings = [];
@@ -530,8 +566,10 @@
         }
 
         refreshRecordings();
+        refreshTypescripts();
         // Don't auto-refresh recordings as aggressively as sessions
         setInterval(refreshRecordings, 15000);
+        setInterval(refreshTypescripts, 15000);
     </script>
 </body>
 </html>

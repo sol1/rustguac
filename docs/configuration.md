@@ -208,6 +208,14 @@ is produced by guacd, so the path must be writable by the guacd process
 Docker it is inside the container). guacd writes two files per session,
 `NAME` and `NAME.timing`.
 
+When typescripts exist, the Recordings page shows a **SSH Typescripts**
+section (poweruser+) listing each one with its name, size, and time. This
+is **list-only by design**: the text content is never downloadable through
+the web UI (a typescript can contain passwords typed at prompts or secrets
+printed to screen), so a poweruser can confirm a session was recorded
+while retrieving the actual log still requires direct access to the
+rustguac host or storage.
+
 ```toml
 [recording]
 typescript_path = "/opt/rustguac/data/typescripts"
