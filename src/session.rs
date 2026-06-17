@@ -675,6 +675,26 @@ impl SessionManager {
                 let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
 
+                // SSH typescript recording (#159): rustguac expands the
+                // name template (guacd uses it verbatim) so audit files
+                // are identifiable per user + connection.
+                let typescript = self.config.ssh_typescript().map(|(path, name, create)| {
+                    let template = name.as_deref().unwrap_or(DEFAULT_TYPESCRIPT_NAME);
+                    let connection = req
+                        .entry_display_name
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(&hostname);
+                    let expanded = expand_typescript_name(
+                        template,
+                        &username,
+                        &hostname,
+                        connection,
+                        &session_id,
+                        Utc::now(),
+                    );
+                    (path, expanded, create)
+                });
                 let params = guacd::ConnectionParams::Ssh(guacd::SshParams {
                     hostname: hostname.clone(),
                     port,
@@ -689,6 +709,12 @@ impl SessionManager {
                     sftp_disable_upload: !drive_cfg.allow_upload,
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
+                    typescript_path: typescript.as_ref().map(|(p, _, _)| p.clone()),
+                    typescript_name: typescript.as_ref().map(|(_, n, _)| n.clone()),
+                    create_typescript_path: typescript
+                        .as_ref()
+                        .map(|(_, _, c)| *c)
+                        .unwrap_or(false),
                 });
                 (
                     params, hostname, username, None, None, ssh_banner, None, None, None,
@@ -1790,6 +1816,65 @@ impl SessionManager {
     }
 }
 
+/// Default typescript filename template when `[recording].typescript_name`
+/// is unset. Produces audit-friendly per-session names (#159).
+const DEFAULT_TYPESCRIPT_NAME: &str = "{connection}-{user}-{date}-{time}";
+
+/// Expand rustguac's brace tokens in a typescript filename template (#159).
+///
+/// guacd uses the typescript name verbatim (it appends a numeric suffix
+/// only to avoid clobbering an existing file), so rustguac does this
+/// substitution itself to produce audit-friendly, per-session filenames
+/// like `coreswitch01-alice-20260610-143022`. Every substituted value is
+/// sanitised to `[A-Za-z0-9_-]`, so the result is always a safe basename:
+/// no path separators, no traversal, no surprises from OIDC usernames or
+/// free-text entry names.
+///
+/// Tokens: `{user}`, `{connection}`, `{host}`, `{date}` (UTC YYYYMMDD),
+/// `{time}` (UTC HHMMSS), `{session}` (first 8 chars of the session id).
+/// Unknown braces are left untouched.
+fn expand_typescript_name(
+    template: &str,
+    username: &str,
+    hostname: &str,
+    connection: &str,
+    session_id: &Uuid,
+    when: DateTime<Utc>,
+) -> String {
+    fn sanitize(s: &str) -> String {
+        let mapped: String = s
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let collapsed = mapped
+            .split('-')
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        if collapsed.is_empty() {
+            "unknown".to_string()
+        } else {
+            collapsed
+        }
+    }
+
+    let short_session: String = session_id.simple().to_string().chars().take(8).collect();
+
+    template
+        .replace("{user}", &sanitize(username))
+        .replace("{connection}", &sanitize(connection))
+        .replace("{host}", &sanitize(hostname))
+        .replace("{date}", &when.format("%Y%m%d").to_string())
+        .replace("{time}", &when.format("%H%M%S").to_string())
+        .replace("{session}", &short_session)
+}
+
 /// Parse autofill credentials JSON and substitute $USERNAME/$PASSWORD placeholders.
 /// Returns None if autofill is not configured or the JSON is invalid.
 fn parse_autofill_credentials(
@@ -1947,6 +2032,75 @@ pub(crate) fn check_share_token_match(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Typescript filename templating (#159) ──
+
+    fn ts_when() -> DateTime<Utc> {
+        // 2026-06-10 14:30:22 UTC
+        DateTime::from_timestamp(1_781_101_822, 0).unwrap()
+    }
+
+    fn ts_id() -> Uuid {
+        Uuid::parse_str("0123abcd-1111-2222-3333-444455556666").unwrap()
+    }
+
+    #[test]
+    fn typescript_name_expands_all_tokens() {
+        let got = expand_typescript_name(
+            "{connection}-{user}-{date}-{time}-{host}-{session}",
+            "alice",
+            "switch01",
+            "Core Switch 01",
+            &ts_id(),
+            ts_when(),
+        );
+        assert_eq!(
+            got,
+            "Core-Switch-01-alice-20260610-143022-switch01-0123abcd"
+        );
+    }
+
+    #[test]
+    fn typescript_name_default_template() {
+        let got = expand_typescript_name(
+            DEFAULT_TYPESCRIPT_NAME,
+            "bob",
+            "rtr-2",
+            "Edge Router",
+            &ts_id(),
+            ts_when(),
+        );
+        assert_eq!(got, "Edge-Router-bob-20260610-143022");
+    }
+
+    #[test]
+    fn typescript_name_sanitises_path_traversal_and_oidc_email() {
+        // A crafted entry name must not escape the typescript dir, and an
+        // OIDC email username must reduce to a safe basename.
+        let got = expand_typescript_name(
+            "{connection}-{user}",
+            "alice@sol1.com.au",
+            "h",
+            "../../etc/cron.d/evil",
+            &ts_id(),
+            ts_when(),
+        );
+        assert!(!got.contains('/'), "no path separators: {got}");
+        assert!(!got.contains(".."), "no traversal: {got}");
+        assert_eq!(got, "etc-cron-d-evil-alice-sol1-com-au");
+    }
+
+    #[test]
+    fn typescript_name_empty_value_falls_back_to_unknown() {
+        let got = expand_typescript_name("{user}", "", "h", "c", &ts_id(), ts_when());
+        assert_eq!(got, "unknown");
+    }
+
+    #[test]
+    fn typescript_name_unknown_token_left_literal() {
+        let got = expand_typescript_name("pre-{bogus}-{user}", "x", "h", "c", &ts_id(), ts_when());
+        assert_eq!(got, "pre-{bogus}-x");
+    }
 
     fn make_shadow(raw: &str, issued_by: &str, expires_at: DateTime<Utc>) -> ShadowToken {
         use sha2::{Digest, Sha256};

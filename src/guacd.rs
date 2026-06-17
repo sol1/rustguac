@@ -43,6 +43,18 @@ pub struct SshParams {
     pub sftp_disable_upload: bool,
     pub disable_copy: bool,
     pub disable_paste: bool,
+    /// SSH typescript recording (#159). guacd writes the raw terminal
+    /// session to a plain-text file (compatible with `scriptreplay`).
+    /// An empty `typescript_path` disables it (guacd records nothing).
+    /// These are guacd-side paths: the guacd process must be able to
+    /// write to `typescript_path`.
+    pub typescript_path: Option<String>,
+    /// Base filename for the typescript, already expanded by rustguac
+    /// (guacd does not substitute tokens here). Empty falls back to
+    /// guacd's own default of "typescript".
+    pub typescript_name: Option<String>,
+    /// Ask guacd to create `typescript_path` if it doesn't exist.
+    pub create_typescript_path: bool,
 }
 
 /// VNC connection parameters to pass to guacd.
@@ -200,6 +212,14 @@ pub async fn connect_and_handshake(
                 "locale" => "en_US.UTF-8".into(),
                 "server-alive-interval" => "0".into(),
                 "command" => String::new(),
+                "typescript-path" => p.typescript_path.clone().unwrap_or_default(),
+                "typescript-name" => p.typescript_name.clone().unwrap_or_default(),
+                "create-typescript-path" => if p.create_typescript_path {
+                    "true"
+                } else {
+                    "false"
+                }
+                .into(),
                 _ => {
                     tracing::debug!("Unknown guacd SSH parameter '{}', sending empty", name);
                     String::new()

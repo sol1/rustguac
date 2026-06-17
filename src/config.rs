@@ -201,6 +201,25 @@ pub struct RecordingConfig {
     /// How often (in seconds) to run the rotation check. Default: 300 (5 min).
     #[serde(default = "default_rotation_interval_secs")]
     pub rotation_interval_secs: u64,
+    /// Directory guacd writes SSH typescript (raw terminal text) files to
+    /// (#159). When unset, no typescript is recorded. This is a guacd-side
+    /// path: the guacd process must be able to write here. Applies to all
+    /// SSH sessions, independent of the graphical (.guac) recording above.
+    #[serde(default)]
+    pub typescript_path: Option<PathBuf>,
+    /// Base filename template for the typescript. guacd itself does NOT
+    /// substitute tokens in this name (it uses it verbatim and appends a
+    /// numeric suffix to avoid collisions), so rustguac expands its own
+    /// brace tokens before passing it on: `{user}`, `{connection}`
+    /// (address-book entry name, falls back to hostname), `{host}`,
+    /// `{date}` (UTC YYYYMMDD), `{time}` (UTC HHMMSS), `{session}` (short
+    /// session id). Substituted values are sanitised to `[A-Za-z0-9_-]`.
+    /// Defaults to `{connection}-{user}-{date}-{time}` when unset.
+    #[serde(default)]
+    pub typescript_name: Option<String>,
+    /// Ask guacd to create `typescript_path` if it doesn't already exist.
+    #[serde(default)]
+    pub create_typescript_path: bool,
 }
 
 fn default_max_disk_percent() -> u8 {
@@ -219,6 +238,9 @@ impl Default for RecordingConfig {
             max_disk_percent: default_max_disk_percent(),
             max_recordings: 0,
             rotation_interval_secs: default_rotation_interval_secs(),
+            typescript_path: None,
+            typescript_name: None,
+            create_typescript_path: false,
         }
     }
 }
@@ -1216,6 +1238,19 @@ impl Config {
         } else {
             &self.recording_path
         }
+    }
+
+    /// SSH typescript recording settings (#159), if `[recording]
+    /// typescript_path` is configured. Returns `(path, name, create)`
+    /// ready to hand to guacd; `None` means no typescript.
+    pub fn ssh_typescript(&self) -> Option<(String, Option<String>, bool)> {
+        let rec = self.recording.as_ref()?;
+        let path = rec.typescript_path.as_ref()?;
+        Some((
+            path.to_string_lossy().into_owned(),
+            rec.typescript_name.clone(),
+            rec.create_typescript_path,
+        ))
     }
 
     /// Whether recording is globally enabled. Defaults to true.

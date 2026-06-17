@@ -181,6 +181,9 @@ Controls session recording behaviour and disk management.
 | `max_disk_percent` | integer | `80` | Delete oldest recordings when disk usage exceeds this percent. 0 = disabled. |
 | `max_recordings` | integer | `0` | Keep at most this many recordings globally. 0 = unlimited. |
 | `rotation_interval_secs` | integer | `300` | How often (seconds) to run the rotation check. |
+| `typescript_path` | string | (unset) | Directory for SSH typescript (raw terminal text) files. Unset = disabled. See below. |
+| `typescript_name` | string | `{connection}-{user}-{date}-{time}` | Filename template for typescripts. Tokens listed below. |
+| `create_typescript_path` | bool | `false` | Ask guacd to create `typescript_path` if it does not exist. |
 
 ```toml
 [recording]
@@ -189,6 +192,58 @@ max_disk_percent = 80
 max_recordings = 1000
 rotation_interval_secs = 300
 ```
+
+### SSH typescript recording
+
+The graphical recording above captures the session as a replayable
+Guacamole stream. For SSH sessions you can additionally write a
+**typescript**: a plain-text log of the full terminal output, compatible
+with the standard `script` / `scriptreplay` tools and trivially
+greppable. This is aimed at audit and compliance (a human-readable record
+of what was typed and seen on a switch or server).
+
+Set `typescript_path` to enable it for all SSH sessions. The typescript
+is produced by guacd, so the path must be writable by the guacd process
+(on a bare-metal install that is the `rustguac-guacd` service user; in
+Docker it is inside the container). guacd writes two files per session,
+`NAME` and `NAME.timing`.
+
+```toml
+[recording]
+typescript_path = "/opt/rustguac/data/typescripts"
+typescript_name = "{connection}-{user}-{date}-{time}"
+create_typescript_path = true
+```
+
+**Filename tokens.** guacd does not template typescript names itself (it
+uses the name verbatim and only appends a numeric suffix to avoid
+overwriting an existing file). rustguac therefore expands its own tokens
+in `typescript_name` before handing it over, so each file is identifiable:
+
+| Token | Expands to |
+|-------|-----------|
+| `{user}` | Session username |
+| `{connection}` | Address-book entry name (falls back to the hostname for ad-hoc sessions) |
+| `{host}` | Target hostname |
+| `{date}` | Connect date, UTC `YYYYMMDD` |
+| `{time}` | Connect time, UTC `HHMMSS` |
+| `{session}` | First 8 characters of the session id |
+
+Substituted values are sanitised to `[A-Za-z0-9_-]` (everything else
+becomes `-`), so usernames like `alice@example.com` and free-text entry
+names are always reduced to a safe basename with no path separators.
+Unknown `{tokens}` are left untouched.
+
+> **Note:** these are rustguac's own tokens, not guacd's, and they are
+> unrelated to [credential variables](credential-variables.md) (which use
+> `$name` syntax and apply only to connection-entry credential fields).
+> guacd's own `${GUAC_*}` tokens are **not** interpreted for typescripts.
+
+Keystroke logging in the *graphical* recording (guacd's
+`recording-include-keys`, parseable by `guaclog`) is a separate mechanism
+that depends on guacd-driven graphical recording, which rustguac does not
+use (it records the proxied stream itself). It is therefore not wired up;
+the typescript is the supported text-audit path.
 
 ## `[vdi]` section
 
