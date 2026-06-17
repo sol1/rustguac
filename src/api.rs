@@ -886,8 +886,10 @@ pub async fn list_typescripts(
     {
         Some(p) => p,
         // Typescript recording not configured: empty list, not an error.
-        None => return Json(json!([])).into_response(),
+        None => return Json(json!({"path": null, "items": []})).into_response(),
     };
+    // Host path shown in the UI so operators know where the files live.
+    let ts_path_str = ts_path.display().to_string();
 
     match tokio::task::spawn_blocking(move || {
         let mut items = Vec::new();
@@ -936,7 +938,7 @@ pub async fn list_typescripts(
     })
     .await
     {
-        Ok(items) => Json(json!(items)).into_response(),
+        Ok(items) => Json(json!({"path": ts_path_str, "items": items})).into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": "failed to list typescripts"})),

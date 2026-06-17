@@ -178,6 +178,7 @@
         <input type="text" id="rec-search" placeholder="Search recordings (user, entry, folder...)" style="width:100%;padding:0.5em;background:var(--input);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:1em;border-radius:3px;box-sizing:border-box">
     </div>
     <div id="recording-list"></div>
+    <div id="rec-pagination" style="max-width:1200px;margin-top:0.8em;font-family:monospace;font-size:0.9em"></div>
 
     <div id="typescript-section" style="display:none;max-width:1200px;margin-top:2em">
         <h2 style="margin-bottom:0.2em">SSH Typescripts</h2>
@@ -187,7 +188,9 @@
             Retrieving a typescript requires direct access to the rustguac host
             or storage.
         </p>
+        <p id="typescript-path" style="color:var(--text-muted);font-size:0.85em;margin-top:0"></p>
         <div id="typescript-list"></div>
+        <div id="typescript-pagination" style="margin-top:0.8em;font-family:monospace;font-size:0.9em"></div>
     </div>
 
     <script>
@@ -273,31 +276,55 @@
             })
             .then(function(recordings) {
                 allRecordings = recordings;
-                renderRecordings(recordings);
+                // Preserve the active search filter + current page on refresh.
+                renderRecordings(filterRecordings(recSearchQuery()));
             });
         }
 
         // #159: list-only typescript register. No play/download/delete:
         // the section only shows that a recording exists.
+        var tsItems = [];
+        var tsPage = 1;
+
+        document.getElementById('typescript-pagination').addEventListener('click', function(e) {
+            var act = e.target.getAttribute('data-ts-page');
+            if (!act) return;
+            tsPage += (act === 'next' ? 1 : -1);
+            renderTsPage();
+        });
+
+        function renderTsPage() {
+            var list = document.getElementById('typescript-list');
+            var pager = document.getElementById('typescript-pagination');
+            var pages = Math.max(1, Math.ceil(tsItems.length / PAGE_SIZE));
+            if (tsPage > pages) tsPage = pages;
+            if (tsPage < 1) tsPage = 1;
+            var slice = tsItems.slice((tsPage - 1) * PAGE_SIZE, (tsPage - 1) * PAGE_SIZE + PAGE_SIZE);
+            var html = '<table><thead><tr><th>Name</th><th>Size</th><th>Date</th></tr></thead><tbody>';
+            slice.forEach(function(t) {
+                var date = t.modified ? new Date(t.modified).toLocaleString() : '';
+                html += '<tr>' +
+                    '<td>' + escapeHtml(t.name || '') + '</td>' +
+                    '<td>' + formatBytes(t.size_bytes) + '</td>' +
+                    '<td>' + date + '</td>' +
+                    '</tr>';
+            });
+            html += '</tbody></table>';
+            list.innerHTML = html;
+            renderPager(pager, tsPage, tsItems.length, 'ts-page', 'typescript');
+        }
+
         function refreshTypescripts() {
             fetch('/api/typescripts', { headers: apiHeaders(), credentials: 'same-origin' })
-            .then(function(res) { return res.ok ? res.json() : []; })
-            .then(function(items) {
+            .then(function(res) { return res.ok ? res.json() : { items: [] }; })
+            .then(function(data) {
                 var section = document.getElementById('typescript-section');
-                var list = document.getElementById('typescript-list');
-                if (!items || !items.length) { section.style.display = 'none'; return; }
+                tsItems = (data && data.items) || [];
+                if (!tsItems.length) { section.style.display = 'none'; return; }
                 section.style.display = '';
-                var html = '<table><thead><tr><th>Name</th><th>Size</th><th>Date</th></tr></thead><tbody>';
-                items.forEach(function(t) {
-                    var date = t.modified ? new Date(t.modified).toLocaleString() : '';
-                    html += '<tr>' +
-                        '<td>' + escapeHtml(t.name || '') + '</td>' +
-                        '<td>' + formatBytes(t.size_bytes) + '</td>' +
-                        '<td>' + date + '</td>' +
-                        '</tr>';
-                });
-                html += '</tbody></table>';
-                list.innerHTML = html;
+                var pathEl = document.getElementById('typescript-path');
+                pathEl.textContent = data.path ? ('Stored at ' + data.path + ' on the rustguac host.') : '';
+                renderTsPage();
             })
             .catch(function() { /* feature off or unauthorised, leave hidden */ });
         }
@@ -305,11 +332,16 @@
         var allRecordings = [];
         var recSortCol = 'modified';
         var recSortAsc = false;
+        var PAGE_SIZE = 50;
+        var recPage = 1;
+        var recView = [];   // current filtered + sorted list being paginated
 
-        document.getElementById('rec-search').addEventListener('input', function() {
-            var q = this.value.toLowerCase();
-            if (!q) { renderRecordings(allRecordings); return; }
-            var filtered = allRecordings.filter(function(r) {
+        function recSearchQuery() {
+            return (document.getElementById('rec-search').value || '').toLowerCase();
+        }
+        function filterRecordings(q) {
+            if (!q) return allRecordings;
+            return allRecordings.filter(function(r) {
                 return (r.name || '').toLowerCase().indexOf(q) >= 0 ||
                        (r.user || '').toLowerCase().indexOf(q) >= 0 ||
                        (r.entry_display_name || '').toLowerCase().indexOf(q) >= 0 ||
@@ -317,7 +349,31 @@
                        (r.folder || '').toLowerCase().indexOf(q) >= 0 ||
                        (r.session_type || '').toLowerCase().indexOf(q) >= 0;
             });
-            renderRecordings(filtered);
+        }
+
+        // Render a Prev/Next pager into `el`. `total` items, `size` per page.
+        function renderPager(el, page, total, dataAttr, noun) {
+            var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+            if (pages <= 1) {
+                el.innerHTML = '<span style="color:var(--text-muted)">' + total + ' ' + noun + (total === 1 ? '' : 's') + '</span>';
+                return;
+            }
+            el.innerHTML =
+                '<button class="btn-small" data-' + dataAttr + '="prev"' + (page <= 1 ? ' disabled' : '') + '>Prev</button>' +
+                '<span style="margin:0 0.8em;color:var(--text-muted)">Page ' + page + ' of ' + pages + ' (' + total + ' ' + noun + 's)</span>' +
+                '<button class="btn-small" data-' + dataAttr + '="next"' + (page >= pages ? ' disabled' : '') + '>Next</button>';
+        }
+
+        document.getElementById('rec-search').addEventListener('input', function() {
+            recPage = 1;
+            renderRecordings(filterRecordings(recSearchQuery()));
+        });
+
+        document.getElementById('rec-pagination').addEventListener('click', function(e) {
+            var act = e.target.getAttribute('data-rec-page');
+            if (!act) return;
+            recPage += (act === 'next' ? 1 : -1);
+            renderRecPage();
         });
 
         function sortRecordings(recs, col, asc) {
@@ -331,12 +387,22 @@
         }
 
         function renderRecordings(recordings) {
+            recView = sortRecordings(recordings, recSortCol, recSortAsc);
+            renderRecPage();
+        }
+
+        function renderRecPage() {
             var container = document.getElementById('recording-list');
-            if (recordings.length === 0) {
+            var pager = document.getElementById('rec-pagination');
+            if (recView.length === 0) {
                 container.innerHTML = '<p class="empty">No recordings found.</p>';
+                pager.innerHTML = '';
                 return;
             }
-            var sorted = sortRecordings(recordings, recSortCol, recSortAsc);
+            var pages = Math.max(1, Math.ceil(recView.length / PAGE_SIZE));
+            if (recPage > pages) recPage = pages;
+            if (recPage < 1) recPage = 1;
+            var slice = recView.slice((recPage - 1) * PAGE_SIZE, (recPage - 1) * PAGE_SIZE + PAGE_SIZE);
             function sortHeader(label, col) {
                 var arrow = recSortCol === col ? (recSortAsc ? ' &#9650;' : ' &#9660;') : '';
                 return '<th style="cursor:pointer" data-sort-col="' + col + '">' + label + arrow + '</th>';
@@ -350,7 +416,7 @@
                 sortHeader('Date', 'modified') +
                 '<th></th><th></th><th></th>' +
                 '</tr></thead><tbody>';
-            sorted.forEach(function(r) {
+            slice.forEach(function(r) {
                 var date = r.modified ? new Date(r.modified).toLocaleString() : (r.created_at ? new Date(r.created_at).toLocaleString() : '');
                 var entryName = r.entry_display_name || r.address_book_entry || r.name;
                 var typeBadge = r.session_type ? '<span style="color:var(--type-' + r.session_type + '-fg)">' + r.session_type + '</span>' : '';
@@ -368,6 +434,7 @@
             });
             html += '</tbody></table>';
             container.innerHTML = html;
+            renderPager(pager, recPage, recView.length, 'rec-page', 'recording');
         }
 
         document.getElementById('recording-list').addEventListener('click', function(e) {
@@ -375,14 +442,8 @@
                 var col = e.target.getAttribute('data-sort-col');
                 if (recSortCol === col) { recSortAsc = !recSortAsc; }
                 else { recSortCol = col; recSortAsc = true; }
-                renderRecordings(allRecordings.filter(function(r) {
-                    var q = document.getElementById('rec-search').value.toLowerCase();
-                    if (!q) return true;
-                    return (r.name || '').toLowerCase().indexOf(q) >= 0 ||
-                           (r.user || '').toLowerCase().indexOf(q) >= 0 ||
-                           (r.entry_display_name || '').toLowerCase().indexOf(q) >= 0 ||
-                           (r.folder || '').toLowerCase().indexOf(q) >= 0;
-                }));
+                recPage = 1;
+                renderRecordings(filterRecordings(recSearchQuery()));
                 return;
             }
         });
