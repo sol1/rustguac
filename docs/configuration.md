@@ -202,10 +202,18 @@ with the standard `script` / `scriptreplay` tools and trivially
 greppable. This is aimed at audit and compliance (a human-readable record
 of what was typed and seen on a switch or server).
 
-Set `typescript_path` to enable it for all SSH sessions. The typescript
-is produced by guacd, so the path must be writable by the guacd process
-(on a bare-metal install that is the `rustguac-guacd` service user; in
-Docker it is inside the container). guacd writes two files per session,
+Typescript recording is **per-connection opt-in and off by default**. Two
+things are required: `typescript_path` must be set here (the global "where"),
+and the individual connection entry must have **Enable typescript recording
+for this session** ticked in its Recording Settings (Connections page, SSH
+entries only). A connection with the box unticked, or any session that is not
+SSH, writes no typescript. Ad-hoc SSH sessions from the Sessions page have no
+entry and so never record a typescript.
+
+The typescript is produced by guacd, so `typescript_path` must be writable by
+the guacd process. On a standard install guacd runs as the same `rustguac`
+user as the main service, so a path it owns just works; `create_typescript_path
+= true` lets guacd create the directory. guacd writes two files per session,
 `NAME` and `NAME.timing`.
 
 When typescripts exist, the Recordings page shows a **SSH Typescripts**
@@ -252,6 +260,34 @@ Keystroke logging in the *graphical* recording (guacd's
 that depends on guacd-driven graphical recording, which rustguac does not
 use (it records the proxied stream itself). It is therefore not wired up;
 the typescript is the supported text-audit path.
+
+#### Encryption at rest (LUKS)
+
+Typescripts are written in plain text. For encryption at rest with no extra
+infrastructure, point `typescript_path` at a subdirectory of the
+LUKS-encrypted drive volume rustguac already manages (see the
+[`[drive]` section](#drive-section)). rustguac opens and mounts that volume at
+startup (key fetched from Vault) and unmounts it at shutdown, so the directory
+is available whenever rustguac is running, and the files are encrypted on the
+block device at rest (powered off, disk theft, block-device backups).
+
+```toml
+[drive]
+drive_path = "/mnt/rustguac-drives"
+luks_device = "/dev/disk/by-uuid/..."   # your LUKS volume
+luks_key_path = "secret/rustguac/luks"  # Vault KV path holding the key
+
+[recording]
+typescript_path = "/mnt/rustguac-drives/typescripts"
+create_typescript_path = true
+```
+
+This is the recommended way to protect typescripts at rest today. Note its
+limits: while rustguac is running the volume is mounted, so the files are
+plain text to anyone with host access (the same threat model as the drive
+feature), and it is one key for the whole volume rather than per-connection.
+Per-file, per-connection-key encryption is tracked as a separate feature
+request, pending demand.
 
 ## `[vdi]` section
 

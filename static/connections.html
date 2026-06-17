@@ -656,6 +656,12 @@
                         </label>
                         <div class="field-hint">0 = unlimited. Oldest recordings are deleted when the limit is exceeded.</div>
                     </div>
+                    <div id="em-typescript-row" style="display:none;margin-top:0.6em;padding-top:0.5em;border-top:1px dashed var(--border)">
+                        <label>
+                            <input type="checkbox" id="em-record-typescript" style="display:inline;width:auto;margin-right:0.4em"> Enable typescript recording for this session
+                        </label>
+                        <div class="field-hint">SSH only. Writes a plain-text terminal log via guacd, for audit. Requires <code>[recording] typescript_path</code> set on the server. Off by default.</div>
+                    </div>
                 </div>
             </div>
             <div id="em-video-perf-section" style="display:none;margin-top:0.8em;padding-top:0.8em;border-top:1px solid var(--border)">
@@ -2489,6 +2495,8 @@
             document.getElementById('em-tunnel-section').style.display = val === 'vdi' ? 'none' : '';
             // Show recording settings for all types
             document.getElementById('em-recording-section').style.display = '';
+            // Typescript recording is SSH-only (#159)
+            document.getElementById('em-typescript-row').style.display = val === 'ssh' ? '' : 'none';
         });
 
         // Toggle tunnel fields visibility
@@ -2947,6 +2955,7 @@
             document.getElementById('em-enable-recording').checked = true;
             document.getElementById('em-max-recordings').value = '0';
             document.getElementById('em-recording-sub').style.display = 'none';
+            document.getElementById('em-record-typescript').checked = false;
             document.getElementById('em-recording-fields').style.display = 'none';
             document.getElementById('em-recording-arrow').innerHTML = '&#9654;';
             hopList = [];
@@ -3100,6 +3109,13 @@
                     document.getElementById('em-recording-sub').style.display = '';
                     document.getElementById('em-enable-recording').checked = true;
                     document.getElementById('em-max-recordings').value = entryData.max_recordings;
+                    document.getElementById('em-recording-fields').style.display = '';
+                    document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
+                }
+                // Typescript recording flag (SSH only; #159)
+                document.getElementById('em-typescript-row').style.display = type === 'ssh' ? '' : 'none';
+                document.getElementById('em-record-typescript').checked = !!entryData.record_typescript;
+                if (entryData.record_typescript) {
                     document.getElementById('em-recording-fields').style.display = '';
                     document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
                 }
@@ -3267,6 +3283,10 @@
                 entry.enable_recording = document.getElementById('em-enable-recording').checked;
                 var maxRec = parseInt(document.getElementById('em-max-recordings').value) || 0;
                 if (maxRec > 0) entry.max_recordings = maxRec;
+            }
+            // Typescript recording (SSH only; #159). Off by default.
+            if (type === 'ssh' && document.getElementById('em-record-typescript').checked) {
+                entry.record_typescript = true;
             }
 
             // Video performance settings (RDP only)

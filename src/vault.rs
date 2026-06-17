@@ -122,6 +122,11 @@ pub struct AddressBookEntry {
     /// Maximum number of recordings to keep for this entry (0 = unlimited).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_recordings: Option<u32>,
+    /// Enable SSH typescript recording for this entry (#159). Default off
+    /// (per-connection opt-in). Only effective for SSH sessions and only
+    /// when `[recording].typescript_path` is configured globally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_typescript: Option<bool>,
     /// Login script filename (relative to login_scripts_dir) to run after browser spawns.
     /// Only applicable to web sessions. The script receives CDP port and credentials
     /// via environment variables and stdin JSON.
@@ -274,6 +279,9 @@ pub struct EntryInfo {
     /// Maximum recordings to keep for this entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_recordings: Option<u32>,
+    /// Enable SSH typescript recording for this entry (#159).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_typescript: Option<bool>,
     /// Login script filename (web sessions only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub login_script: Option<String>,
@@ -381,6 +389,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             remote_app_args: e.remote_app_args.clone(),
             enable_recording: e.enable_recording,
             max_recordings: e.max_recordings,
+            record_typescript: e.record_typescript,
             login_script: e.login_script.clone(),
             autofill: e.autofill.clone(),
             allowed_domains: e.allowed_domains.clone(),

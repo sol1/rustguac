@@ -77,6 +77,9 @@ pub struct CreateSessionRequest {
     pub remote_app_args: Option<String>,
     // Recording overrides
     pub enable_recording: Option<bool>,
+    /// Enable SSH typescript recording for this session (#159). Default
+    /// off; SSH only; requires `[recording].typescript_path` configured.
+    pub record_typescript: Option<bool>,
     /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
     pub address_book_entry: Option<String>,
     /// Address book folder name (for reporting).
@@ -675,26 +678,32 @@ impl SessionManager {
                 let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
 
-                // SSH typescript recording (#159): rustguac expands the
-                // name template (guacd uses it verbatim) so audit files
-                // are identifiable per user + connection.
-                let typescript = self.config.ssh_typescript().map(|(path, name, create)| {
-                    let template = name.as_deref().unwrap_or(DEFAULT_TYPESCRIPT_NAME);
-                    let connection = req
-                        .entry_display_name
-                        .as_deref()
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or(&hostname);
-                    let expanded = expand_typescript_name(
-                        template,
-                        &username,
-                        &hostname,
-                        connection,
-                        &session_id,
-                        Utc::now(),
-                    );
-                    (path, expanded, create)
-                });
+                // SSH typescript recording (#159): per-connection opt-in
+                // (default off), and only when a global typescript_path is
+                // configured. rustguac expands the name template (guacd
+                // uses it verbatim) so audit files are identifiable per
+                // user + connection.
+                let typescript = self
+                    .config
+                    .ssh_typescript()
+                    .filter(|_| req.record_typescript == Some(true))
+                    .map(|(path, name, create)| {
+                        let template = name.as_deref().unwrap_or(DEFAULT_TYPESCRIPT_NAME);
+                        let connection = req
+                            .entry_display_name
+                            .as_deref()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(&hostname);
+                        let expanded = expand_typescript_name(
+                            template,
+                            &username,
+                            &hostname,
+                            connection,
+                            &session_id,
+                            Utc::now(),
+                        );
+                        (path, expanded, create)
+                    });
                 let params = guacd::ConnectionParams::Ssh(guacd::SshParams {
                     hostname: hostname.clone(),
                     port,
