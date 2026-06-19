@@ -8,7 +8,7 @@ description = "Lightweight Rust replacement for Apache Guacamole client"
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+tower-http = { version = "0.7", features = ["fs", "cors", "trace"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
