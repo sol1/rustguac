@@ -19,6 +19,9 @@ fn apply_keepalive(stream: &TcpStream) {
     if let Err(e) = sock.set_tcp_keepalive(&keepalive) {
         tracing::warn!(error = %e, "failed to enable TCP keepalive on guacd socket");
     }
+    if let Err(e) = sock.set_tcp_nodelay(true) {
+        tracing::warn!(error = %e, "failed to set TCP_NODELAY on guacd socket");
+    }
 }
 
 /// Combined trait for async bidirectional streams.

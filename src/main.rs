@@ -1129,6 +1129,11 @@ async fn run_server(config: Config, database: Db) {
         if let Err(e) = socket2::SockRef::from(&std_listener).set_tcp_keepalive(&keepalive) {
             tracing::warn!(error = %e, "failed to enable TCP keepalive on TLS listener");
         }
+        // Disable Nagle so display frames and sync acks flow to the browser
+        // without coalescing. Linux propagates this to accepted sockets.
+        if let Err(e) = socket2::SockRef::from(&std_listener).set_tcp_nodelay(true) {
+            tracing::warn!(error = %e, "failed to set TCP_NODELAY on TLS listener");
+        }
 
         axum_server::from_tcp_rustls(std_listener, rustls_config)
             .expect("Failed to wrap listener")
@@ -1141,6 +1146,11 @@ async fn run_server(config: Config, database: Db) {
             .expect("Failed to bind listener");
         if let Err(e) = socket2::SockRef::from(&listener).set_tcp_keepalive(&keepalive) {
             tracing::warn!(error = %e, "failed to enable TCP keepalive on listener");
+        }
+        // Disable Nagle so display frames and sync acks flow to the browser
+        // without coalescing. Linux propagates this to accepted sockets.
+        if let Err(e) = socket2::SockRef::from(&listener).set_tcp_nodelay(true) {
+            tracing::warn!(error = %e, "failed to set TCP_NODELAY on listener");
         }
 
         axum::serve(
