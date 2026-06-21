@@ -1,0 +1,18 @@
+diff --git a/src/terminal/terminal-handlers.c b/src/terminal/terminal-handlers.c
+index c1f9836e..80e1894c 100644
+--- a/src/terminal/terminal-handlers.c
++++ b/src/terminal/terminal-handlers.c
+@@ -1611,6 +1611,13 @@ int guac_terminal_osc(guac_terminal* term, unsigned char c) {
+         else if (operation == 4)
+             term->char_handler = guac_terminal_xterm_palette;
+ 
++        /* Silently consume unrecognized OSC sequences (e.g. systemd OSC 3008
++         * context sequences) by ignoring all content until the String
++         * Terminator, rather than reverting to echo mode and printing garbage.
++         * See: https://issues.apache.org/jira/browse/GUACAMOLE-2213 */
++        else
++            term->char_handler = guac_terminal_apc;
++
+         /* Reset parameter for next OSC */
+         operation = 0;
+ 
