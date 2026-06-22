@@ -257,7 +257,7 @@
                     statusTd.className = u.disabled ? 'status-disabled' : 'status-active';
                     tr.appendChild(statusTd);
 
-                    tr.appendChild(td(u.last_login_at || 'never'));
+                    tr.appendChild(td(u.last_login_at ? localTime(u.last_login_at) : 'never'));
 
                     // Actions
                     var actTd = document.createElement('td');
@@ -316,6 +316,19 @@
             return el;
         }
 
+        // Render a backend timestamp in the viewer's local time. The DB stores
+        // UTC via SQLite datetime('now') as "YYYY-MM-DD HH:MM:SS" with no zone
+        // marker, so we tag it as UTC before localizing. Already-zoned ISO
+        // strings (e.g. "...Z") pass through unchanged. Unparseable values fall
+        // back to the raw string.
+        function localTime(s) {
+            if (!s) return '';
+            var iso = s.indexOf('T') === -1 ? s.replace(' ', 'T') : s;
+            if (!/[zZ]|[+-]\d\d:?\d\d$/.test(iso)) iso += 'Z';
+            var d = new Date(iso);
+            return isNaN(d.getTime()) ? s : d.toLocaleString();
+        }
+
         // ── Group Mappings ──
 
         function loadMappings() {
@@ -351,7 +364,7 @@
                     roleTd.appendChild(sel);
                     tr.appendChild(roleTd);
 
-                    tr.appendChild(td(m.created_at));
+                    tr.appendChild(td(localTime(m.created_at)));
 
                     var actTd = document.createElement('td');
                     var delBtn = document.createElement('button');
@@ -420,7 +433,7 @@
                     tr.appendChild(td(t.max_role || 'none'));
                     tr.appendChild(td(t.expires_at ? t.expires_at.substring(0, 10) : 'never'));
                     tr.appendChild(td(t.created_at ? t.created_at.substring(0, 10) : ''));
-                    tr.appendChild(td(t.last_used_at || 'never'));
+                    tr.appendChild(td(t.last_used_at ? localTime(t.last_used_at) : 'never'));
 
                     var statusTd = document.createElement('td');
                     if (t.disabled) {
@@ -560,7 +573,7 @@
                 entries.forEach(function(e) {
                     var tr = document.createElement('tr');
                     tr.className = 'audit-row';
-                    tr.appendChild(td(e.created_at || ''));
+                    tr.appendChild(td(localTime(e.created_at)));
                     tr.appendChild(td(e.user_email || ''));
                     tr.appendChild(td(e.token_name || ''));
                     tr.appendChild(td(e.action || ''));
@@ -607,7 +620,7 @@
                 entries.forEach(function(e) {
                     var tr = document.createElement('tr');
                     tr.className = 'audit-row';
-                    tr.appendChild(td(e.created_at || ''));
+                    tr.appendChild(td(localTime(e.created_at)));
                     tr.appendChild(td(e.user_email || ''));
                     tr.appendChild(td(e.action || ''));
                     tr.appendChild(td(e.scope || ''));
