@@ -70,7 +70,9 @@ Three new connection parameters:
 
 ## 004-h264-display-worker.patch
 
-**Feature:** H.264 passthrough via guac_display worker integration. When the RDP server sends AVC420/AVC444 encoded frames (H.264), the raw NAL units are passed through to the browser's WebCodecs VideoDecoder instead of being decoded server-side and re-encoded as JPEG/PNG/WebP.
+**Feature:** H.264 passthrough via guac_display worker integration. When the RDP server sends AVC420 encoded frames (H.264), the raw NAL units are passed through to the browser's WebCodecs VideoDecoder instead of being decoded server-side and re-encoded as JPEG/PNG/WebP.
+
+**AVC420 only — AVC444 is deliberately disabled.** The passthrough forwards a single H.264 bitstream per surface command. AVC420 carries a complete YUV420 frame, which WebCodecs decodes directly. AVC444 instead splits the image across two bitstreams (`bitstream[0]` luma/main view + `bitstream[1]` auxiliary chroma) to reconstruct YUV444; the passthrough only forwards `bitstream[0]`, so a Windows host that negotiated AVC444 renders as a corrupted luma+chroma split — two blocks with green and magenta casts. We therefore advertise `GfxH264` **without** `GfxAVC444`/`GfxAVC444v2` so the server always uses AVC420. (RemoteFX/RFX is unaffected — it is a separate codec path and renders correctly.) Properly supporting AVC444 would require decoding both bitstreams and recombining the chroma planes in the browser (e.g. a second VideoDecoder + a WebGL merge shader), which is not implemented.
 
 **Architecture:** The SurfaceCommand callback intercepts H.264 data and stores it on the display layer. During the normal frame flush cycle (`guac_display_plan_apply`), the H.264 data is sent to clients as a custom `h264` instruction before worker threads start encoding. All IMG operations for the H.264 layer are skipped, eliminating the decode→re-encode overhead.
 
@@ -86,7 +88,7 @@ This approach avoids the socket contention issue that occurred when H.264 was se
 | `src/libguac/display-layer-list.c` | Free H.264 data in layer cleanup |
 | `src/libguac/display-plan.c` | Send H.264 data during plan apply, skip IMG ops for H.264 layers |
 | `src/protocols/rdp/channels/rdpgfx.c` | Wrap SurfaceCommand to store H.264 on display layer after GDI decode |
-| `src/protocols/rdp/settings.c` | Enable GfxH264 and GfxAVC444 in FreeRDP settings |
+| `src/protocols/rdp/settings.c` | Enable GfxH264 (AVC420) in FreeRDP settings; leave GfxAVC444 disabled (see AVC420-only note above) |
 
 **Requires:** RDP server with H.264 support (xrdp with x264, or Windows with AVC hardware encoder). Browser must support WebCodecs VideoDecoder (Chrome/Edge 94+, Firefox 130+).
 
