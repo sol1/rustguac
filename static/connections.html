@@ -686,6 +686,19 @@
                         <input type="checkbox" id="em-enable-h264" style="display:inline;width:auto;margin-right:0.4em"> H.264 Passthrough
                         <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Passes H.264 video direct to browser (low latency, hardware decoded). Requires GFX enabled and xrdp with x264 on the target server.</div>
                     </label>
+                    <div class="field-hint" style="margin-top:0.8em;margin-bottom:0.5em">Desktop appearance. Off by default to save bandwidth; enable for a normal-looking Windows desktop.</div>
+                    <label style="margin-top:0.3em">
+                        <input type="checkbox" id="em-enable-wallpaper" style="display:inline;width:auto;margin-right:0.4em"> Show Wallpaper
+                        <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Displays the remote desktop background image instead of a solid colour.</div>
+                    </label>
+                    <label style="margin-top:0.3em">
+                        <input type="checkbox" id="em-enable-theming" style="display:inline;width:auto;margin-right:0.4em"> Enable Theming
+                        <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Renders window borders and controls with the desktop's visual styles.</div>
+                    </label>
+                    <label style="margin-top:0.3em">
+                        <input type="checkbox" id="em-enable-full-window-drag" style="display:inline;width:auto;margin-right:0.4em"> Full-Window Drag
+                        <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Shows window contents while dragging instead of just an outline.</div>
+                    </label>
                 </div>
             </div>
             <div id="em-clipboard-section" style="margin-top:0.8em">
@@ -2928,6 +2941,9 @@
             document.getElementById('em-enable-desktop-comp').checked = false;
             document.getElementById('em-force-lossless').checked = false;
             document.getElementById('em-enable-h264').checked = false;
+            document.getElementById('em-enable-wallpaper').checked = false;
+            document.getElementById('em-enable-theming').checked = false;
+            document.getElementById('em-enable-full-window-drag').checked = false;
             document.getElementById('em-video-perf-fields').style.display = 'none';
             document.getElementById('em-video-perf-arrow').innerHTML = '&#9654;';
             document.getElementById('em-disable-copy').checked = false;
@@ -3125,7 +3141,10 @@
                     document.getElementById('em-enable-desktop-comp').checked = !!entryData.enable_desktop_composition;
                     document.getElementById('em-force-lossless').checked = !!entryData.force_lossless;
                     document.getElementById('em-enable-h264').checked = !!entryData.enable_h264;
-                    if (entryData.enable_gfx || entryData.enable_desktop_composition || entryData.force_lossless || entryData.enable_h264) {
+                    document.getElementById('em-enable-wallpaper').checked = !!entryData.enable_wallpaper;
+                    document.getElementById('em-enable-theming').checked = !!entryData.enable_theming;
+                    document.getElementById('em-enable-full-window-drag').checked = !!entryData.enable_full_window_drag;
+                    if (entryData.enable_gfx || entryData.enable_desktop_composition || entryData.force_lossless || entryData.enable_h264 || entryData.enable_wallpaper || entryData.enable_theming || entryData.enable_full_window_drag) {
                         document.getElementById('em-video-perf-fields').style.display = '';
                         document.getElementById('em-video-perf-arrow').innerHTML = '&#9660;';
                     }
@@ -3295,6 +3314,9 @@
                 if (document.getElementById('em-enable-desktop-comp').checked) entry.enable_desktop_composition = true;
                 if (document.getElementById('em-force-lossless').checked) entry.force_lossless = true;
                 if (document.getElementById('em-enable-h264').checked) entry.enable_h264 = true;
+                if (document.getElementById('em-enable-wallpaper').checked) entry.enable_wallpaper = true;
+                if (document.getElementById('em-enable-theming').checked) entry.enable_theming = true;
+                if (document.getElementById('em-enable-full-window-drag').checked) entry.enable_full_window_drag = true;
             }
 
             // Clipboard settings (all types)

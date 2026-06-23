@@ -103,6 +103,12 @@ pub struct CreateSessionRequest {
     pub enable_gfx: Option<bool>,
     /// Enable desktop composition (DWM) for RDP.
     pub enable_desktop_composition: Option<bool>,
+    /// Show the remote desktop wallpaper (RDP).
+    pub enable_wallpaper: Option<bool>,
+    /// Enable window/control theming (RDP).
+    pub enable_theming: Option<bool>,
+    /// Show window contents while dragging (RDP).
+    pub enable_full_window_drag: Option<bool>,
     /// Force lossless encoding (PNG only) for RDP.
     pub force_lossless: Option<bool>,
     /// Enable H.264 passthrough for RDP.
@@ -811,6 +817,9 @@ impl SessionManager {
                     disable_paste: req.disable_paste.unwrap_or(false),
                     enable_gfx: req.enable_gfx.unwrap_or(false),
                     enable_desktop_composition: req.enable_desktop_composition.unwrap_or(false),
+                    enable_wallpaper: req.enable_wallpaper.unwrap_or(false),
+                    enable_theming: req.enable_theming.unwrap_or(false),
+                    enable_full_window_drag: req.enable_full_window_drag.unwrap_or(false),
                     force_lossless: req.force_lossless.unwrap_or(false),
                     enable_h264: req.enable_h264.unwrap_or(false),
                 }));
@@ -1077,6 +1086,9 @@ impl SessionManager {
                     disable_paste: req.disable_paste.unwrap_or(false),
                     enable_gfx: true,
                     enable_desktop_composition: true,
+                    enable_wallpaper: false,
+                    enable_theming: false,
+                    enable_full_window_drag: false,
                     force_lossless: false,
                     enable_h264: true,
                 }));

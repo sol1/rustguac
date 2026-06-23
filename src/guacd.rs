@@ -108,6 +108,12 @@ pub struct RdpParams {
     pub enable_gfx: bool,
     /// Enable desktop composition (DWM). Required for smooth video overlay rendering.
     pub enable_desktop_composition: bool,
+    /// Show the remote desktop wallpaper. Disabled by default to save bandwidth.
+    pub enable_wallpaper: bool,
+    /// Enable window/control theming (visual styles). Disabled by default to save bandwidth.
+    pub enable_theming: bool,
+    /// Show window contents while dragging. Disabled by default to save bandwidth.
+    pub enable_full_window_drag: bool,
     /// Force lossless encoding (PNG only). Better for text-heavy workloads.
     pub force_lossless: bool,
     /// Enable H.264 passthrough. Raw H.264 NAL units sent to browser WebCodecs decoder.
@@ -263,10 +269,15 @@ pub async fn connect_and_handshake(
                 "ignore-cert" => if p.ignore_cert { "true" } else { "false" }.into(),
                 "disable-auth" => "false".into(),
                 "cursor" => "local".into(),
-                "enable-wallpaper" => "false".into(),
-                "enable-theming" => "false".into(),
+                "enable-wallpaper" => if p.enable_wallpaper { "true" } else { "false" }.into(),
+                "enable-theming" => if p.enable_theming { "true" } else { "false" }.into(),
                 "enable-font-smoothing" => "true".into(),
-                "enable-full-window-drag" => "false".into(),
+                "enable-full-window-drag" => if p.enable_full_window_drag {
+                    "true"
+                } else {
+                    "false"
+                }
+                .into(),
                 "enable-desktop-composition" => if p.enable_desktop_composition {
                     "true"
                 } else {

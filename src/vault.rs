@@ -156,6 +156,15 @@ pub struct AddressBookEntry {
     /// Enable desktop composition (DWM). Improves video overlay rendering in RDP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_desktop_composition: Option<bool>,
+    /// Show the remote desktop wallpaper. Disabled by default to save bandwidth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_wallpaper: Option<bool>,
+    /// Enable window/control theming (visual styles). Disabled by default to save bandwidth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_theming: Option<bool>,
+    /// Show window contents while dragging. Disabled by default to save bandwidth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_full_window_drag: Option<bool>,
     /// Force lossless encoding (PNG only). Better for text-heavy, low-bandwidth sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub force_lossless: Option<bool>,
@@ -309,6 +318,15 @@ pub struct EntryInfo {
     /// Enable desktop composition (DWM).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_desktop_composition: Option<bool>,
+    /// Show the remote desktop wallpaper.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_wallpaper: Option<bool>,
+    /// Enable window/control theming (visual styles).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_theming: Option<bool>,
+    /// Show window contents while dragging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_full_window_drag: Option<bool>,
     /// Force lossless encoding (PNG only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force_lossless: Option<bool>,
@@ -399,6 +417,9 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             credential_variables: entry_credential_variables(e),
             enable_gfx: e.enable_gfx,
             enable_desktop_composition: e.enable_desktop_composition,
+            enable_wallpaper: e.enable_wallpaper,
+            enable_theming: e.enable_theming,
+            enable_full_window_drag: e.enable_full_window_drag,
             force_lossless: e.force_lossless,
             enable_h264: e.enable_h264,
             container_image: e.container_image.clone(),
