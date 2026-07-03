@@ -76,7 +76,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots"], de
 webpki-roots = "1"
 
 # SSH tunneling (jump host / bastion)
-russh = "0.61"
+russh = "0.62"
 
 # Docker (VDI container management)
 bollard = "0.21"
