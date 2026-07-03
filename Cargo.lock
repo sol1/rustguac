@@ -1955,7 +1955,7 @@ checksum = "ae8e22120c32fb4d19ec55fba35015f57095cd95a2e3b732e44457f5915b2ee8"
 dependencies = [
  "num-integer",
  "num-traits",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rand_core 0.10.1",
 ]
 
@@ -2897,9 +2897,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
+checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
  "chacha20",
  "getrandom 0.4.2",
@@ -3206,7 +3206,7 @@ dependencies = [
  "pkcs5",
  "pkcs8 0.11.0",
  "polyval",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rand_core 0.10.1",
  "rsa 0.10.0-rc.18",
  "russh-cryptovec",
@@ -3288,7 +3288,7 @@ dependencies = [
  "openidconnect",
  "pbkdf2",
  "pulldown-cmark",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rcgen",
  "reqwest",
  "rusqlite",
