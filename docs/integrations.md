@@ -222,6 +222,34 @@ rustguac roles. See [Roles and Access Control](roles-and-access-control.md).
   the Admin page (or, for a single-user test, set `default_role = "admin"`
   temporarily to bootstrap).
 
+### Outbound HTTP proxy (egress)
+
+If rustguac has to reach your identity provider through an outbound HTTP proxy (for example Squid), no code change or config option is needed. The OIDC client honours the standard proxy environment variables, so set them in the service environment and restart.
+
+```bash
+# For systemd (same env file as the client secret above)
+cat >> /opt/rustguac/env <<'EOF'
+HTTPS_PROXY=http://squid.internal:3128
+HTTP_PROXY=http://squid.internal:3128
+NO_PROXY=127.0.0.1,localhost,.internal
+EOF
+systemctl restart rustguac
+```
+
+The proxy URL scheme is `http://` (that is your connection to Squid), even though the OIDC issuer is `https`. rustguac reaches an `https` issuer through the proxy with an HTTP `CONNECT` tunnel, which Squid allows by default. The variables are read once when rustguac builds its HTTP client at startup, so a restart is required after changing them.
+
+Two things to watch:
+
+- **Vault/OpenBao egress uses the same variables.** rustguac's Vault client shares the proxy configuration, so a service-wide `HTTPS_PROXY` also routes Vault traffic through Squid. If your Vault is internal, add its host to `NO_PROXY` (as with `.internal` above). Connections to guacd are local TCP and are never proxied.
+- **TLS interception (SSL bump).** If Squid re-signs TLS, rustguac must trust Squid's CA. Either add it to the system trust store (`update-ca-certificates`) or point rustguac at it directly:
+
+  ```toml
+  [oidc]
+  ca_cert = "/etc/rustguac/squid-ca.pem"
+  ```
+
+  Do not use `tls_skip_verify = true` to work around a bump: it disables certificate verification entirely and exposes your `client_secret` and tokens to man-in-the-middle. If Squid is a plain `CONNECT` tunnel with no bump, the provider's certificate passes through end to end and nothing extra is needed.
+
 ---
 
 ## Vault / OpenBao Connections
