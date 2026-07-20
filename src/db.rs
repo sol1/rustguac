@@ -1,6 +1,6 @@
 //! SQLite database layer for admin/API key management.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rand::RngExt;
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
@@ -300,6 +300,30 @@ fn generate_key() -> String {
 }
 
 /// Create a new admin. Returns the plaintext API key (shown once).
+/// Parse a stored `expires_at` value for expiry enforcement.
+///
+/// Accepts RFC 3339 (with offset), ISO without a zone and SQLite
+/// `datetime('now')` format (both treated as UTC), and a bare `YYYY-MM-DD`
+/// date (treated as end-of-day UTC). Returns `None` for anything unparseable
+/// so callers can **fail closed** (treat an unparseable expiry as expired)
+/// rather than the previous behaviour of silently ignoring it, which let a
+/// malformed value authenticate forever.
+fn parse_expires_at(s: &str) -> Option<DateTime<Utc>> {
+    let s = s.trim();
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"] {
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(Utc.from_utc_datetime(&ndt));
+        }
+    }
+    if let Ok(nd) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(Utc.from_utc_datetime(&nd.and_hms_opt(23, 59, 59)?));
+    }
+    None
+}
+
 pub fn add_admin(
     db: &Db,
     name: &str,
@@ -384,10 +408,11 @@ pub fn validate_api_key(
     }
 
     if let Some(ref exp) = admin.expires_at {
-        if let Ok(expires) = exp.parse::<DateTime<Utc>>() {
-            if Utc::now() > expires {
-                return Err(AuthError::Expired);
-            }
+        // Fail closed: an unparseable expiry is treated as expired rather than
+        // ignored, so a malformed value cannot authenticate indefinitely.
+        match parse_expires_at(exp) {
+            Some(expires) if Utc::now() <= expires => {}
+            _ => return Err(AuthError::Expired),
         }
     }
 
@@ -939,10 +964,11 @@ pub fn validate_user_token(db: &Db, token: &str) -> Result<(User, UserApiToken),
     }
 
     if let Some(ref exp) = token_info.expires_at {
-        if let Ok(expires) = exp.parse::<DateTime<Utc>>() {
-            if Utc::now() > expires {
-                return Err(AuthError::Expired);
-            }
+        // Fail closed: an unparseable expiry is treated as expired rather than
+        // ignored, so a malformed value cannot authenticate indefinitely.
+        match parse_expires_at(exp) {
+            Some(expires) if Utc::now() <= expires => {}
+            _ => return Err(AuthError::Expired),
         }
     }
 
@@ -1814,5 +1840,44 @@ mod tests {
         for n in &names {
             assert!(got.contains(n), "missing: {n:?}");
         }
+    }
+
+    #[test]
+    fn parse_expires_at_accepts_expected_formats() {
+        assert!(parse_expires_at("2030-01-01T00:00:00Z").is_some()); // RFC 3339
+        assert!(parse_expires_at("2030-01-01 00:00:00").is_some()); // SQLite datetime
+        assert!(parse_expires_at("2030-01-01T00:00:00").is_some()); // ISO, no zone
+        assert!(parse_expires_at("2030-12-31").is_some()); // bare date
+                                                           // Garbage / empty must be None so the caller fails closed.
+        assert!(parse_expires_at("not-a-date").is_none());
+        assert!(parse_expires_at("").is_none());
+        assert!(parse_expires_at("2026-13-40").is_none());
+        // Bare date resolves to end-of-day UTC, not midnight.
+        assert_eq!(
+            parse_expires_at("2030-06-15").unwrap(),
+            Utc.with_ymd_and_hms(2030, 6, 15, 23, 59, 59).unwrap()
+        );
+    }
+
+    #[test]
+    fn admin_key_expiry_fails_closed() {
+        let db = test_db();
+        // Past expiry -> expired.
+        let k = add_admin(&db, "past", None, Some("2000-01-01T00:00:00Z")).unwrap();
+        assert!(matches!(
+            validate_api_key(&db, &k, None),
+            Err(AuthError::Expired)
+        ));
+        // Malformed expiry -> expired (fail closed; previously authenticated forever).
+        let k = add_admin(&db, "garbage", None, Some("whenever")).unwrap();
+        assert!(matches!(
+            validate_api_key(&db, &k, None),
+            Err(AuthError::Expired)
+        ));
+        // Future expiry and no expiry -> valid.
+        let k = add_admin(&db, "future", None, Some("2999-01-01T00:00:00Z")).unwrap();
+        assert!(validate_api_key(&db, &k, None).is_ok());
+        let k = add_admin(&db, "none", None, None).unwrap();
+        assert!(validate_api_key(&db, &k, None).is_ok());
     }
 }
