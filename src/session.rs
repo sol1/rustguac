@@ -140,6 +140,10 @@ pub struct CreateSessionRequest {
     /// the source entry's `fullscreen_on_connect` flag; ad-hoc sessions
     /// leave it None and the client behaves as if false.
     pub fullscreen_on_connect: Option<bool>,
+    /// Auto-hide the clipboard/files side tabs when idle (they reappear
+    /// when the pointer nears the left edge). Populated from the source
+    /// entry; ad-hoc sessions leave it None (client behaves as if false).
+    pub autohide_side_tabs: Option<bool>,
 }
 
 /// Session status in the lifecycle.
@@ -189,6 +193,10 @@ pub struct SessionInfo {
     /// from the /api/sessions/:id fetch; omitted when false/unset.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub fullscreen_on_connect: bool,
+    /// Auto-hide the clipboard/files side tabs when idle. Read by
+    /// client.html from the /api/sessions/:id fetch; omitted when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub autohide_side_tabs: bool,
 }
 
 /// Internal session state including the guacd connection.
@@ -250,6 +258,10 @@ pub struct Session {
     /// (#154). Surfaced verbatim in `SessionInfo` so client.html can
     /// trigger fullscreen on first user gesture after CONNECTED.
     pub fullscreen_on_connect: bool,
+    /// Copied from the source entry's `autohide_side_tabs` flag.
+    /// Surfaced in `SessionInfo` so client.html can auto-hide the
+    /// clipboard/files side tabs.
+    pub autohide_side_tabs: bool,
 }
 
 /// A short-lived viewer token issued by an admin to shadow an active session.
@@ -439,6 +451,7 @@ impl Session {
             entry_display_name: self.entry_display_name.clone(),
             thumbnail_url: Some(format!("/api/sessions/{}/thumbnail", self.id)),
             fullscreen_on_connect: self.fullscreen_on_connect,
+            autohide_side_tabs: self.autohide_side_tabs,
         }
     }
 }
@@ -1371,6 +1384,7 @@ impl SessionManager {
             shadow_tokens: Vec::new(),
             share_allowed,
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
+            autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
         };
 
         let info = session.info();
@@ -2262,6 +2276,7 @@ mod tests {
             shadow_tokens: Vec::new(),
             share_allowed: true,
             fullscreen_on_connect: false,
+            autohide_side_tabs: false,
         }
     }
 

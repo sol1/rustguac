@@ -216,6 +216,10 @@ pub struct AddressBookEntry {
     /// reaches the remote session instead of exiting fullscreen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fullscreen_on_connect: Option<bool>,
+    /// When true, the clipboard/files side tabs auto-hide when idle and
+    /// reappear when the pointer nears the left edge of the display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autohide_side_tabs: Option<bool>,
 }
 
 impl AddressBookEntry {
@@ -366,6 +370,9 @@ pub struct EntryInfo {
     /// Open the client in fullscreen on connect (#154).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fullscreen_on_connect: Option<bool>,
+    /// Auto-hide the clipboard/files side tabs when idle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autohide_side_tabs: Option<bool>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -432,6 +439,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             allow_sharing: e.allow_sharing,
             auto_open_if_singleton: e.auto_open_if_singleton,
             fullscreen_on_connect: e.fullscreen_on_connect,
+            autohide_side_tabs: e.autohide_side_tabs,
         }
     }
 }

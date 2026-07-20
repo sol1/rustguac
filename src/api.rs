@@ -2483,6 +2483,7 @@ pub async fn ab_connect_entry(
         container_password: ab_entry.container_password,
         allow_sharing: ab_entry.allow_sharing,
         fullscreen_on_connect: ab_entry.fullscreen_on_connect,
+        autohide_side_tabs: ab_entry.autohide_side_tabs,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -4142,6 +4143,7 @@ pub async fn quick_connect(
             container_password: ab_entry.container_password,
             allow_sharing: ab_entry.allow_sharing,
             fullscreen_on_connect: ab_entry.fullscreen_on_connect,
+            autohide_side_tabs: ab_entry.autohide_side_tabs,
         };
 
         tracing::info!(
@@ -4247,6 +4249,7 @@ pub async fn quick_connect(
         container_password: None,
         allow_sharing: None,
         fullscreen_on_connect: None,
+        autohide_side_tabs: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

@@ -264,6 +264,9 @@
         // show in the in-fullscreen top bar. Populated from the same fetch.
         var entryDisplayName = '';
         var wantFullscreen = false;
+        // Per-entry autohide of the clipboard/files side tabs; populated from
+        // the same /api/sessions/:id fetch and read when the tabs are built.
+        var wantAutohideTabs = false;
 
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             var siteTitle = d.site_title || 'rustguac';
@@ -332,6 +335,7 @@
                 }
                 if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
+                if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 return showBanner(session.banner);
             })
             .then(function() { startGuacamole(); })
@@ -666,6 +670,41 @@
             fileTab.addEventListener('mouseleave', function() { fileTab.style.opacity = '0.6'; });
             fileTab.addEventListener('click', function() { toggleFilePanel(); });
             document.body.appendChild(fileTab);
+
+            // ── Auto-hide side tabs (per-entry autohide_side_tabs) ──
+            // When enabled, the Clipboard/Files tabs slide off the left edge
+            // when idle and reappear when the pointer nears the left edge.
+            var autohideSideTabs = wantAutohideTabs;
+            if (autohideSideTabs) {
+                var SIDE_EDGE_PX = 40, SIDE_HIDE_MS = 1800;
+                var sideTabsShown = true, sideTabsHideTimer = null;
+                toggleTab.style.transition = 'left 0.2s ease, opacity 0.2s';
+                fileTab.style.transition = 'left 0.2s ease, opacity 0.2s';
+                var applySideTabs = function(show) {
+                    var l = show ? '-1px' : '-64px';
+                    toggleTab.style.left = l;
+                    fileTab.style.left = l;
+                    sideTabsShown = show;
+                };
+                var scheduleSideTabsHide = function() {
+                    if (sideTabsHideTimer) return; // do not reset an in-flight timer
+                    sideTabsHideTimer = setTimeout(function() {
+                        sideTabsHideTimer = null;
+                        if (!panelOpen && !filePanelOpen) applySideTabs(false);
+                    }, SIDE_HIDE_MS);
+                };
+                document.addEventListener('mousemove', function(e) {
+                    if (panelOpen || filePanelOpen) return; // panels manage tab visibility
+                    if (e.clientX <= SIDE_EDGE_PX) {
+                        if (sideTabsHideTimer) { clearTimeout(sideTabsHideTimer); sideTabsHideTimer = null; }
+                        if (!sideTabsShown) applySideTabs(true);
+                    } else if (sideTabsShown) {
+                        scheduleSideTabsHide();
+                    }
+                });
+                // Visible briefly on connect, then auto-hide.
+                scheduleSideTabsHide();
+            }
 
             function buildFilePanel() {
                 if (filePanel) return;

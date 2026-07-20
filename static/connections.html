@@ -750,6 +750,15 @@
                     browsers; Firefox / Safari fall back to standard fullscreen). Reduces the risk
                     of users accidentally closing the rustguac tab.
                 </div>
+                <label style="text-transform:none;letter-spacing:0;cursor:pointer;margin-top:0.8em">
+                    <input type="checkbox" id="em-autohide-side-tabs" style="display:inline;width:auto;margin-right:0.5em">
+                    Auto-hide clipboard/files side tabs
+                </label>
+                <div class="field-hint">
+                    Hide the Clipboard and Files tabs pinned to the left edge when idle; they
+                    reappear when you move the pointer to the left edge of the session. Reduces
+                    on-screen clutter over the remote display.
+                </div>
             </div>
             <div id="em-move-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label>Move to folder
@@ -2951,6 +2960,7 @@
             document.getElementById('em-allow-sharing').checked = false;
             document.getElementById('em-auto-open-singleton').checked = false;
             document.getElementById('em-fullscreen-on-connect').checked = false;
+            document.getElementById('em-autohide-side-tabs').checked = false;
             document.getElementById('em-enable-drive').checked = false;
             document.getElementById('em-drive-warning').style.display = 'none';
             document.getElementById('em-remote-app').value = '';
@@ -3158,6 +3168,8 @@
                 document.getElementById('em-auto-open-singleton').checked = !!entryData.auto_open_if_singleton;
                 // Populate fullscreen-on-connect flag
                 document.getElementById('em-fullscreen-on-connect').checked = !!entryData.fullscreen_on_connect;
+                // Populate autohide-side-tabs flag
+                document.getElementById('em-autohide-side-tabs').checked = !!entryData.autohide_side_tabs;
                 // Populate hop list from jump_hosts array
                 if (entryData.jump_hosts && entryData.jump_hosts.length > 0) {
                     hopList = entryData.jump_hosts.map(function(h) {
@@ -3330,6 +3342,8 @@
             if (document.getElementById('em-auto-open-singleton').checked) entry.auto_open_if_singleton = true;
             // Open in fullscreen on connect (#154)
             if (document.getElementById('em-fullscreen-on-connect').checked) entry.fullscreen_on_connect = true;
+            // Auto-hide the clipboard/files side tabs when idle
+            if (document.getElementById('em-autohide-side-tabs').checked) entry.autohide_side_tabs = true;
 
             // Tunnel / jump host settings — multi-hop (all types)
             if (type === 'ssh' || type === 'rdp' || type === 'vnc' || type === 'web') {
