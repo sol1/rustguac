@@ -499,9 +499,13 @@ pub async fn list_vdi_containers(
 }
 
 /// GET /api/vdi/containers/:name/thumbnail — Serve a VDI container's thumbnail.
+/// Owner-or-admin only: a caller may only read the thumbnail of a container
+/// derived from their own username (admins may read any). Returns 404 for
+/// non-owners so container existence is not leaked.
 pub async fn get_vdi_container_thumbnail(
     State(manager): State<AppState>,
     Path(name): Path<String>,
+    identity: Option<Extension<AuthIdentity>>,
 ) -> impl IntoResponse {
     // Prevent path traversal: container names are alphanumeric + hyphens only
     if !name
@@ -510,6 +514,30 @@ pub async fn get_vdi_container_thumbnail(
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
+
+    // Ownership: container names are `rustguac-vdi-{username}` or
+    // `rustguac-vdi-{username}-{entry}`, where {username} is derived from the
+    // caller's identity exactly as in list_vdi_containers. A caller may only
+    // read their own container's thumbnail; admins may read any.
+    let Some(Extension(id)) = identity else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let current_user = id
+        .display_name()
+        .split('@')
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect::<String>();
+    let owns = !current_user.is_empty()
+        && (name == format!("rustguac-vdi-{}", current_user)
+            || name.starts_with(&format!("rustguac-vdi-{}-", current_user)));
+    if !id.has_role("admin") && !owns {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     let path = manager.vdi_thumbnail_path(&name);
     match tokio::fs::read(&path).await {
         Ok(data) => (
