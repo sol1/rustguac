@@ -14,7 +14,7 @@ set -euo pipefail
 PREFIX="/opt/rustguac"
 GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
 GUACD_BRANCH="main"
-GUACD_COMMIT="2980cf0"  # Pin to known-good commit
+GUACD_COMMIT="6719b20d"  # Pin to known-good commit
 BUILD_DIR="/tmp/rustguac-build-$$"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

@@ -9,7 +9,7 @@ permissions:
 
 env:
   GUACD_REPO: https://github.com/apache/guacamole-server.git
-  GUACD_COMMIT: 2980cf0  # Pin to known-good commit (before GUACAMOLE-2221 broke -Werror)
+  GUACD_COMMIT: 6719b20d  # Pin: guacamole-server main @ 1.6.0-302 (uplifted 2026-07; -Werror verified clean, patch 006 upstreamed)
 
 jobs:
   # ---------------------------------------------------------------------------

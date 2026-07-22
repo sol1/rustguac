@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 # Pin to known-good commit to avoid upstream -Werror breakage
 RUN git clone https://github.com/apache/guacamole-server.git \
-    && cd guacamole-server && git checkout 2980cf0
+    && cd guacamole-server && git checkout 6719b20d
 
 # Apply patches for FreeRDP 3.x / Debian 13 compatibility
 COPY patches/ /build/patches/

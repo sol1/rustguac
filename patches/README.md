@@ -118,25 +118,6 @@ GFX sessions have not reproduced the artifact.
 |------|-----|
 | `src/protocols/rdp/gdi.c` | Mark layer dirty + `RefreshRect` after resize in `guac_rdp_gdi_desktop_resize()` |
 
-## 006-terminal-osc-consume.patch
-
-**Problem:** Unrecognized OSC (Operating System Command) sequences cause guacd's
-terminal emulator to revert to echo mode and print the sequence's raw bytes as
-garbage. A common trigger is systemd's OSC 3008 context sequences.
-
-**Fix:** In `guac_terminal_osc()`, route any unrecognized OSC operation to the
-APC handler (`guac_terminal_apc`), which silently consumes input until the
-String Terminator, instead of falling back to echo. See
-[GUACAMOLE-2213](https://issues.apache.org/jira/browse/GUACAMOLE-2213).
-
-Ported from [pletch/guacamole-server@18a2f92](https://github.com/pletch/guacamole-server/commit/18a2f92c) (`fixes-1.6.0`).
-
-**Files patched:**
-
-| File | Fix |
-|------|-----|
-| `src/terminal/terminal-handlers.c` | Route unrecognized OSC sequences to `guac_terminal_apc` in `guac_terminal_osc()` |
-
 ## 007-rdp-disp-mod16.patch
 
 **Problem:** When the negotiated RDP display dimensions aren't a multiple of 16,

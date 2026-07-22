@@ -320,7 +320,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 git clone https://github.com/sol1/rustguac.git
 git clone https://github.com/apache/guacamole-server.git
 cd guacamole-server
-git checkout 2980cf0   # same pin rustguac uses
+git checkout 6719b20d   # same pin rustguac uses
 autoreconf -fi
 ./configure --prefix=/opt/rustguac --with-rdp
 make -j"$(nproc)"
