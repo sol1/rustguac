@@ -69,7 +69,7 @@ ssh-key = { version = "0.6", features = ["ed25519"] }
 tower_governor = "0.8"
 
 # Base64 decoding (JWT payload for OIDC groups)
-base64 = "0.22"
+base64 = "0.23"
 
 # HTTP client (Vault API)
 reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots"], default-features = false }
