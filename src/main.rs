@@ -88,6 +88,14 @@ enum Command {
         name: String,
     },
 
+    /// Map an OIDC group to a role (admin, poweruser, operator, viewer)
+    MapGroup {
+        #[arg(long)]
+        group: String,
+        #[arg(long)]
+        role: String,
+    },
+
     /// Rotate an admin's API key (generates new key, invalidates old)
     RotateKey {
         #[arg(long)]
@@ -217,6 +225,7 @@ async fn main() {
         Some(Command::DisableAdmin { name }) => cmd_disable_admin(&database, &name),
         Some(Command::EnableAdmin { name }) => cmd_enable_admin(&database, &name),
         Some(Command::DeleteAdmin { name }) => cmd_delete_admin(&database, &name),
+        Some(Command::MapGroup { group, role }) => cmd_map_group(&database, &group, &role),
         Some(Command::RotateKey { name }) => cmd_rotate_key(&database, &name),
         Some(Command::GenerateCert {
             hostname,
@@ -469,6 +478,20 @@ fn cmd_delete_user(database: &Db, email: &str) {
             eprintln!("User '{}' not found.", email);
             std::process::exit(1);
         }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_map_group(database: &Db, group: &str, role: &str) {
+    if !["admin", "poweruser", "operator", "viewer"].contains(&role) {
+        eprintln!("Role must be admin, poweruser, operator, or viewer.");
+        std::process::exit(1);
+    }
+    match db::create_group_mapping(database, group, role) {
+        Ok(_) => println!("Group '{}' mapped to role '{}'.", group, role),
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -1390,6 +1413,9 @@ fn rewrite_branding(html: &str, site_title: &str, logo_url: Option<&str>) -> Str
 
 #[cfg(test)]
 mod tests {
+    use assert_cmd::Command;
+    use std::path::Path;
+
     use super::*;
 
     #[test]
@@ -1471,5 +1497,32 @@ mod tests {
             saw_429,
             "no requests were throttled — rate-limit not applied"
         );
+    }
+    #[test]
+    fn cli_map_group() {
+        if std::path::Path::new("tests/cli/rustguac.db").exists() {
+            std::fs::remove_file("tests/cli/rustguac.db")
+                .expect("Failed to delete old test configuration file");
+        }
+        let mut cmd = Command::cargo_bin("rustguac").unwrap();
+        cmd.current_dir("tests/cli")
+            .args(&[
+                "--config",
+                "config.toml",
+                "map-group",
+                "--group",
+                "superhumans",
+                "--role",
+                "admin",
+            ])
+            .assert()
+            .success();
+        let database =
+            db::init_db(Path::new("tests/cli/rustguac.db")).expect("Failed to open database");
+        let mappings = db::list_group_mappings(&database).expect("Failed to list group mappings");
+        assert_eq!(mappings.len(), 1);
+        let mapping = &mappings[0];
+        assert_eq!(mapping.oidc_group, "superhumans");
+        assert_eq!(mapping.role, "admin");
     }
 }
