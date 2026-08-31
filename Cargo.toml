@@ -93,3 +93,6 @@ serde_urlencoded = "0.7"
 
 [build-dependencies]
 pulldown-cmark = "0.13"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
