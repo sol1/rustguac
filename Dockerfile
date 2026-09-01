@@ -224,11 +224,13 @@ fi
 echo "guacd started (pid=$GUACD_PID)"
 
 # Trap signals to shut down both processes
-trap 'kill $GUACD_PID 2>/dev/null; wait; exit 0' TERM INT
+trap 'kill $GUACD_PID 2>/dev/null; kill $RUSTGUAC_PID 2>/dev/null; wait; exit 0' TERM INT
 
 # Run rustguac in foreground
 echo "Starting rustguac..."
-exec /opt/rustguac/bin/rustguac --config "$CONFIG_PATH" serve
+/opt/rustguac/bin/rustguac --config "$CONFIG_PATH" serve
+RUSTGUAC_PID=$!
+wait $RUSTGUAC_PID
 SCRIPT
 RUN chmod +x /opt/rustguac/entrypoint.sh
 
