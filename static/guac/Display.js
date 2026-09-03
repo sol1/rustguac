@@ -984,6 +984,87 @@ Guacamole.Display = function() {
     };
 
     /**
+     * Draws a decoded H.264 frame to the given layer, preserving the order of
+     * the instruction stream.
+     *
+     * Decoding is asynchronous, so drawing directly from the decoder's output
+     * callback paints each frame whenever decode happens to finish -- which may
+     * be after the img, copy and rect operations that followed it in the
+     * stream. The result is stale video repainted over newer content: visible
+     * as ghosting on servers that interleave H.264 with other codecs within a
+     * frame, and invisible on servers that send only H.264, where there is
+     * nothing to interleave with.
+     *
+     * This schedules a blocked task at the correct position in the queue and
+     * unblocks it once the frame is decoded, exactly as draw() does for images
+     * that are still loading.
+     *
+     * @param {!Guacamole.Layer} layer
+     *     The layer to draw upon.
+     *
+     * @param {!Guacamole.H264Decoder} decoder
+     *     The decoder to submit the frame to.
+     *
+     * @param {!number} x
+     *     The destination X coordinate.
+     *
+     * @param {!number} y
+     *     The destination Y coordinate.
+     *
+     * @param {!number} width
+     *     The width of the decoded picture.
+     *
+     * @param {!number} height
+     *     The height of the decoded picture.
+     *
+     * @param {!ArrayBuffer} nalData
+     *     The Annex B H.264 access unit to decode.
+     *
+     * @param {!boolean} isKeyFrame
+     *     Whether the access unit contains an IDR slice.
+     *
+     * @param {Array} [rects]
+     *     The regions of the decoded picture that are valid, if the server
+     *     supplied them.
+     */
+    this.drawH264 = function(layer, decoder, x, y, width, height, nalData,
+            isKeyFrame, rects, view) {
+
+        var token = null;
+
+        var task = scheduleTask(function __display_draw_h264() {
+            decoder.drawDecoded(token);
+        }, true);
+
+        /* Unblocking runs the display queue synchronously, and the decoder may
+         * invoke this from within decode() itself -- at which point token is
+         * still null and the draw task would run against nothing, discarding a
+         * frame that decoded perfectly well. Hold any such call until decode()
+         * has returned and token is assigned. */
+        var decoding = true;
+        var readyDuringDecode = false;
+
+        var unblock = function __display_h264_ready() {
+            if (decoding)
+                readyDuringDecode = true;
+            else
+                task.unblock();
+        };
+
+        /* The decoder unblocks the task once the frame is available, or
+         * immediately if it cannot be decoded at all -- an unblocked task is
+         * required either way, or this frame and every frame behind it stalls
+         * in the queue. */
+        token = decoder.decode(layer, x, y, width, height, nalData,
+                isKeyFrame, rects, unblock, view);
+
+        decoding = false;
+        if (readyDuringDecode)
+            task.unblock();
+
+    };
+
+    /**
      * Plays the video at the specified URL within this layer. The video
      * will be loaded automatically, and this and any future operations will
      * wait for the video to finish loading. Future operations will not be

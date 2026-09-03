@@ -14,28 +14,51 @@
     Run on the Windows RDP target server (not the rustguac server).
     Requires administrator privileges. A reboot is recommended after.
 
-.PARAMETER EnableGPU
-    Enable hardware GPU encoding. Requires a DirectX 11+ GPU
-    (NVIDIA, Intel iGPU, or AMD). If no compatible GPU is present,
-    Windows falls back to software encoding automatically.
+.PARAMETER NoGPU
+    Disable hardware GPU encoding. Hardware encoding is ON by default: without
+    it Windows encodes H.264 in software regardless of the GPU present, which
+    caps the source frame rate and degrades audio sync for every client.
+
+.PARAMETER AVC444
+    Enable AVC 4:4:4. Incompatible with rustguac's H.264 passthrough, which
+    forwards a single bitstream -- use only for mstsc-only hosts.
+
+.PARAMETER Report
+    Print the current settings and detected GPUs, then exit without changing
+    anything.
 
 .PARAMETER SkipReboot
     Don't prompt for reboot after applying settings.
 
 .EXAMPLE
-    # Standard setup (software encoding)
+    # Standard setup (hardware encoding enabled, AVC420 for rustguac)
     .\setup-rdp-performance.ps1
 
-    # With GPU hardware encoding
-    .\setup-rdp-performance.ps1 -EnableGPU
+    # Show what is currently configured, change nothing
+    .\setup-rdp-performance.ps1 -Report
+
+    # Force software encoding
+    .\setup-rdp-performance.ps1 -NoGPU
 
 .NOTES
     For rustguac - see docs/rdp-video-performance.md
     Tested on: Windows Server 2022, Windows Server 2025, Windows 11
+
+    If PowerShell refuses to run this ("not digitally signed"), the file is
+    carrying the mark-of-the-web from being copied onto the host. Clear it:
+
+        Unblock-File .\setup-rdp-performance.ps1
+
+    Under an AllSigned policy, bypass for a single invocation instead of
+    weakening the machine-wide policy:
+
+        powershell -ExecutionPolicy Bypass -File .\setup-rdp-performance.ps1
 #>
 
 param(
-    [switch]$EnableGPU,
+    [switch]$NoGPU,
+    [switch]$AVC444,
+    [switch]$Report,
     [switch]$SkipReboot
 )
 
@@ -55,16 +78,70 @@ function Set-RegValue {
     Write-Host "  Set $Name = $Value" -ForegroundColor Green
 }
 
+function Get-RegValue {
+    param([string]$Path, [string]$Name)
+    try {
+        $v = Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop
+        return $v.$Name
+    } catch {
+        return "<not set>"
+    }
+}
+
 Write-Host "`n=== RDP Performance Configuration ===" -ForegroundColor Cyan
 Write-Host "Target: $(hostname) ($((Get-CimInstance Win32_OperatingSystem).Caption))"
 Write-Host ""
+
+# ── Report mode: show what is actually configured, change nothing ──
+if ($Report) {
+    $ts = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+    $ws = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations"
+
+    Write-Host "--- Current settings ---" -ForegroundColor Yellow
+    foreach ($n in @("AVC444ModePreferred", "AVCHardwareEncodePreferred",
+                     "bEnumerateHWBeforeSW", "SelectTransport",
+                     "fClientDisableUDP", "MaxCompressionLevel",
+                     "VisualExperiencePolicy", "ImageQuality")) {
+        Write-Host ("  {0,-30} {1}" -f $n, (Get-RegValue $ts $n))
+    }
+    Write-Host ("  {0,-30} {1}" -f "DWMFRAMEINTERVAL", (Get-RegValue $ws "DWMFRAMEINTERVAL"))
+
+    Write-Host "`n--- GPUs ---" -ForegroundColor Yellow
+    Get-CimInstance Win32_VideoController | ForEach-Object {
+        Write-Host "  - $($_.Name) [driver $($_.DriverVersion)]"
+    }
+
+    Write-Host "`nSelectTransport: 0 = both UDP and TCP, 1 = TCP only, 2 = UDP only" -ForegroundColor Gray
+    Write-Host "Hardware encoding requires AVCHardwareEncodePreferred = 1 AND a reboot." -ForegroundColor Gray
+    Write-Host "Confirm it is actually in use via Task Manager > Performance > GPU >" -ForegroundColor Gray
+    Write-Host "Video Encode during an active session. 0% means software encoding." -ForegroundColor Gray
+    return
+}
 
 # ── AVC 4:4:4 H.264 Encoding ──
 Write-Host "--- Enabling AVC 4:4:4 (H.264 full-colour) ---" -ForegroundColor Yellow
 $tsPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
 
-Set-RegValue -Path $tsPath -Name "AVC444ModePreferred" -Value 1
-Set-RegValue -Path $tsPath -Name "SelectTransport" -Value 1  # Prefer UDP for better video
+# AVC444 splits the image across two H.264 bitstreams (luma/main plus an
+# auxiliary chroma view). rustguac's passthrough forwards a single bitstream,
+# so an AVC444 stream renders as a corrupted luma/chroma split. Windows only
+# offers H.264 at all when guacd advertises the AVC444 capability
+# (GUAC_RDP_H264_AVC444=1), but it must then decline the preference and send
+# AVC420 -- which is what setting this to 0 does.
+#
+# Pass -AVC444 only for hosts used exclusively with mstsc, never with rustguac.
+if ($AVC444) {
+    Write-Host "  (AVC444 requested -- incompatible with rustguac H.264 passthrough)" -ForegroundColor Yellow
+    Set-RegValue -Path $tsPath -Name "AVC444ModePreferred" -Value 1
+} else {
+    Set-RegValue -Path $tsPath -Name "AVC444ModePreferred" -Value 0
+}
+
+# 0 = both UDP and TCP, 1 = TCP only, 2 = UDP only. UDP carries video and audio
+# far better for mstsc; forcing TCP here degrades exactly the frame rate and
+# audio sync this script is meant to improve. guacd uses TCP regardless, so
+# allowing both costs it nothing.
+Set-RegValue -Path $tsPath -Name "SelectTransport" -Value 0
 Set-RegValue -Path $tsPath -Name "MaxCompressionLevel" -Value 2  # Optimized compression
 
 # ── 60 FPS Frame Rate ──
@@ -75,7 +152,7 @@ $wsPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations"
 Set-RegValue -Path $wsPath -Name "DWMFRAMEINTERVAL" -Value 15
 
 # ── GPU Hardware Encoding ──
-if ($EnableGPU) {
+if (-not $NoGPU) {
     Write-Host "`n--- Enabling GPU hardware encoding ---" -ForegroundColor Yellow
     Set-RegValue -Path $tsPath -Name "AVCHardwareEncodePreferred" -Value 1
     Set-RegValue -Path $tsPath -Name "bEnumerateHWBeforeSW" -Value 1
@@ -91,7 +168,7 @@ if ($EnableGPU) {
         Write-Host "    - $($_.Name) [$status]" -ForegroundColor Gray
     }
 } else {
-    Write-Host "`n--- GPU encoding: skipped (use -EnableGPU to enable) ---" -ForegroundColor Gray
+    Write-Host "`n--- GPU encoding: skipped (-NoGPU given) ---" -ForegroundColor Gray
 }
 
 # ── Desktop Composition (DWM) ──
@@ -111,7 +188,9 @@ Set-RegValue -Path $rfxPath -Name "fEnableRemoteFXAdvancedRemoteApp" -Value 1
 Set-RegValue -Path $rfxPath -Name "VisualExperiencePolicy" -Value 1
 
 # Set image quality to highest
-Set-RegValue -Path $rfxPath -Name "ImageQuality" -Value 1  # 1=Low, 2=Medium, 3=High
+# 1=Low, 2=Medium, 3=High. Verify in gpedit under "Configure image quality
+# for RemoteFX Adaptive Graphics" -- the policy shows the value in words.
+Set-RegValue -Path $rfxPath -Name "ImageQuality" -Value 3
 
 # ── Audio ──
 Write-Host "`n--- Configuring audio ---" -ForegroundColor Yellow
@@ -147,10 +226,17 @@ Write-Host "  Frame rate:             60 FPS" -ForegroundColor Green
 Write-Host "  Desktop composition:    Enabled" -ForegroundColor Green
 Write-Host "  RemoteFX:               Enabled" -ForegroundColor Green
 Write-Host "  Audio:                  Dynamic quality" -ForegroundColor Green
-if ($EnableGPU) {
+if (-not $NoGPU) {
     Write-Host "  GPU hardware encoding:  Enabled" -ForegroundColor Green
+    Write-Host "    Verify after reboot: Task Manager > Performance > GPU >" -ForegroundColor Gray
+    Write-Host "    Video Encode during a session. 0% means it fell back to software." -ForegroundColor Gray
 } else {
-    Write-Host "  GPU hardware encoding:  Not enabled (use -EnableGPU)" -ForegroundColor Yellow
+    Write-Host "  GPU hardware encoding:  Not enabled (-NoGPU)" -ForegroundColor Yellow
+}
+if ($AVC444) {
+    Write-Host "  AVC 4:4:4:              Enabled (breaks rustguac passthrough)" -ForegroundColor Yellow
+} else {
+    Write-Host "  AVC 4:2:0:              Enabled (required for rustguac passthrough)" -ForegroundColor Green
 }
 
 Write-Host "`n=== Done ===" -ForegroundColor Cyan

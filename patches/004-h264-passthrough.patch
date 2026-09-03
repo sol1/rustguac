@@ -1,0 +1,1208 @@
+diff --git a/src/libguac/display-flush.c b/src/libguac/display-flush.c
+index aef8208d..9d2aa539 100644
+--- a/src/libguac/display-flush.c
++++ b/src/libguac/display-flush.c
+@@ -391,6 +391,14 @@ void guac_display_end_multiple_frames(guac_display* display, int frames) {
+     removed_layers = display->pending_frame_removed_layers;
+     display->pending_frame_removed_layers = NULL;
+ 
++    /* Flush any queued H.264 passthrough frames. This MUST happen outside the
++     * "plan != NULL" check below: a session that is passing H.264 through
++     * without decoding has no dirty pixels, so no plan is produced, yet its
++     * frames still need to be sent. The worker threads are still idle at this
++     * point (guac_display_plan_apply() below is what wakes them), so writing to
++     * the client socket here does not contend with them. */
++    int h264_sent = PFW_guac_display_flush_h264(display);
++
+     /* Awaken worker threads to perform the rest of the tasks required for the
+      * frame (if any such tasks remain) */
+     if (plan != NULL) {
+@@ -404,7 +412,7 @@ void guac_display_end_multiple_frames(guac_display* display, int frames) {
+      * then we must still send at least one operation to awaken the workers,
+      * flush any layer changes, and mark the end of the frame with a "sync",
+      * even though there is no display plan to optimize.  */
+-    if (frame_nonempty) {
++    if (frame_nonempty || h264_sent) {
+         guac_display_plan_operation end_frame_op = {
+             .type = GUAC_DISPLAY_PLAN_OPERATION_NOP
+         };
+diff --git a/src/libguac/display-layer-list.c b/src/libguac/display-layer-list.c
+index 867dcf04..5c373809 100644
+--- a/src/libguac/display-layer-list.c
++++ b/src/libguac/display-layer-list.c
+@@ -258,6 +258,7 @@ guac_display_layer* guac_display_add_layer(guac_display* display, guac_layer* la
+     display_layer->opaque = opaque;
+ 
+     pthread_mutex_init(&display_layer->path_lock, NULL);
++    pthread_mutex_init(&display_layer->h264_queue_lock, NULL);
+ 
+     /* Init tracking of pending and last frames (NOTE: We need not acquire the
+      * display-wide last_frame.lock here as this new layer will not actually be
+@@ -363,7 +364,18 @@ void guac_display_free_removed_layers(guac_display* display,
+         guac_mem_free(current->last_frame.buffer);
+         guac_mem_free(current->pending_frame_cells);
+ 
++        /* Free any queued H.264 frames */
++        struct guac_h264_frame* h264_frame = current->h264_queue;
++        while (h264_frame != NULL) {
++            struct guac_h264_frame* next = h264_frame->next;
++            guac_mem_free(h264_frame->data);
++            guac_mem_free(h264_frame->rects);
++            guac_mem_free(h264_frame);
++            h264_frame = next;
++        }
++
+         pthread_mutex_destroy(&current->path_lock);
++        pthread_mutex_destroy(&current->h264_queue_lock);
+ 
+         if (layer->index != 0) {
+ 
+diff --git a/src/libguac/display-layer.c b/src/libguac/display-layer.c
+index 283f9f34..d5deaa6e 100644
+--- a/src/libguac/display-layer.c
++++ b/src/libguac/display-layer.c
+@@ -20,6 +20,9 @@
+ #include "display-priv.h"
+ #include "guacamole/assert.h"
+ #include "guacamole/display.h"
++#include <guacamole/client.h>
++#include <guacamole/timestamp.h>
++#include "guacamole/mem.h"
+ #include "guacamole/rect.h"
+ #include "guacamole/rwlock.h"
+ 
+@@ -334,3 +337,81 @@ void guac_display_layer_close_cairo(guac_display_layer* layer, guac_display_laye
+     guac_rwlock_release_lock(&display->pending_frame.lock);
+ 
+ }
++
++void guac_display_layer_set_h264(guac_display_layer* layer,
++        const unsigned char* data, uint32_t length, int is_keyframe,
++        int x, int y, int width, int height,
++        const guac_rect* rects, int num_rects, int view) {
++
++    int dropped = 0;
++
++    /* Build the queue entry before taking any lock. This is the expensive part
++     * (two allocations and a copy of the whole NAL unit) and it touches
++     * nothing shared, so holding a lock across it would serialise the protocol
++     * thread against the render thread for no reason. */
++    struct guac_h264_frame* frame = guac_mem_alloc(sizeof(struct guac_h264_frame));
++    frame->data = guac_mem_alloc(length);
++    memcpy(frame->data, data, length);
++    frame->length = length;
++    frame->is_keyframe = is_keyframe;
++    frame->view = view;
++    guac_rect_init(&frame->rect, x, y, width, height);
++    frame->next = NULL;
++
++    /* Copy the region rects, if any. The caller's array belongs to FreeRDP and
++     * is freed as soon as the surface command returns. */
++    if (rects != NULL && num_rects > 0) {
++        size_t rects_size = guac_mem_ckd_mul_or_die(num_rects, sizeof(guac_rect));
++        frame->rects = guac_mem_alloc(rects_size);
++        memcpy(frame->rects, rects, rects_size);
++        frame->num_rects = num_rects;
++    }
++    else {
++        frame->rects = NULL;
++        frame->num_rects = 0;
++    }
++
++    /* The queue has its own lock precisely so that this thread never waits on
++     * the render thread. See the h264_queue_lock documentation: for RDP this
++     * is the thread that acknowledges EGFX frames, and delaying it throttles
++     * the server. */
++    pthread_mutex_lock(&layer->h264_queue_lock);
++
++    /* Append to queue */
++    if (layer->h264_queue_tail != NULL)
++        layer->h264_queue_tail->next = frame;
++    else
++        layer->h264_queue = frame;
++    layer->h264_queue_tail = frame;
++    layer->h264_queue_length++;
++
++    /* Cap queue at 120 frames (~2 seconds at 60fps) to prevent unbounded
++     * growth if frame flushes are stalled. Drop oldest frame from head. */
++    while (layer->h264_queue_length > 120 && layer->h264_queue != NULL) {
++        struct guac_h264_frame* old = layer->h264_queue;
++        layer->h264_queue = old->next;
++        if (layer->h264_queue == NULL)
++            layer->h264_queue_tail = NULL;
++        guac_mem_free(old->data);
++        guac_mem_free(old->rects);
++        guac_mem_free(old);
++        layer->h264_queue_length--;
++        dropped++;
++    }
++
++    pthread_mutex_unlock(&layer->h264_queue_lock);
++
++    /* Report drops outside the lock -- logging may block on I/O, and this lock
++     * is on the path of every surface command.
++     *
++     * Dropping a frame breaks the H.264 reference chain: every subsequent
++     * inter-coded frame references data the client's decoder never received,
++     * so it discards queued work until the next IDR. That is invisible in the
++     * client's own accounting -- frames the decoder allocates and then drops
++     * never reach its output callback -- so it must be reported here. */
++    if (dropped > 0)
++        guac_client_log(layer->display->client, GUAC_LOG_WARNING,
++                "H.264 queue exceeded 120 frames; dropped %i. The reference "
++                "chain is broken until the next keyframe.", dropped);
++
++}
+diff --git a/src/libguac/display-plan.c b/src/libguac/display-plan.c
+index 13ee2d5c..a7a760ee 100644
+--- a/src/libguac/display-plan.c
++++ b/src/libguac/display-plan.c
+@@ -23,11 +23,16 @@
+ #include "guacamole/client.h"
+ #include "guacamole/display.h"
+ #include "guacamole/fifo.h"
++#include "guacamole/layer.h"
+ #include "guacamole/mem.h"
+ #include "guacamole/protocol.h"
++#include "guacamole/rect.h"
+ #include "guacamole/socket.h"
++#include "guacamole/stream.h"
+ #include "guacamole/timestamp.h"
+ 
++#include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <cairo/cairo.h>
+ 
+@@ -369,6 +374,196 @@ void guac_display_plan_free(guac_display_plan* plan) {
+     guac_mem_free(plan);
+ }
+ 
++/**
++ * Sends raw H.264 NAL unit data from the given layer to all connected clients
++ * as a custom "h264" instruction followed by blob data and an end instruction.
++ * After sending, the layer's H.264 data is freed and set to NULL.
++ *
++ * @param client
++ *     The Guacamole client to send to.
++ *
++ * @param socket
++ *     The socket to write instructions to.
++ *
++ * @param layer
++ *     The display layer containing H.264 data to send.
++ */
++/**
++ * Sends a single H.264 frame to all connected clients as a custom "h264"
++ * instruction followed by blob data and an end instruction.
++ */
++/**
++ * Writes a single integer as a length-prefixed argument of the Guacamole
++ * instruction currently being written to the given socket.
++ */
++static void guac_h264_write_arg(guac_socket* socket, int value) {
++
++    char buf[16];
++    char len_buf[8];
++
++    int n = snprintf(buf, sizeof(buf), "%d", value);
++    snprintf(len_buf, sizeof(len_buf), ",%d.", n);
++
++    guac_socket_write_string(socket, len_buf);
++    guac_socket_write_string(socket, buf);
++
++}
++
++static void guac_display_plan_send_h264_frame(guac_client* client,
++        guac_socket* socket, guac_display_layer* layer,
++        struct guac_h264_frame* frame) {
++
++    guac_stream* stream = guac_client_alloc_stream(client);
++
++    /* Build h264 instruction:
++     *
++     *   h264 <stream> <layer> <keyframe> <x> <y> <width> <height>
++     *        <view> <numrects> [<x> <y> <width> <height>]...
++     *
++     * <view> identifies what the access unit carries: 0 is a displayable
++     * picture (AVC420, or the main view of AVC444), 1 and 2 are the auxiliary
++     * chroma views of AVC444 in its v1 and v2 layouts. An auxiliary view is
++     * not an image and MUST NOT be drawn, but it MUST still be decoded: both
++     * views belong to one H.264 sequence, and skipping either leaves later
++     * pictures referencing data the decoder never received.
++     *
++     * The trailing region rects identify which parts of the decoded picture
++     * are actually valid. A client MUST draw only those regions; the picture
++     * is full-surface sized, and on a server that mixes codecs the remainder
++     * holds no meaningful content. A count of zero means the whole picture is
++     * valid, which is the case for servers (such as xrdp) that encode the
++     * entire surface as H.264. */
++    int header[] = {
++        stream->index,
++        layer->layer->index,
++        frame->is_keyframe,
++        frame->rect.left,
++        frame->rect.top,
++        guac_rect_width(&frame->rect),
++        guac_rect_height(&frame->rect)
++    };
++
++    guac_socket_instruction_begin(socket);
++    guac_socket_write_string(socket, "4.h264");
++
++    for (int i = 0; i < 7; i++)
++        guac_h264_write_arg(socket, header[i]);
++
++    guac_h264_write_arg(socket, frame->view);
++    guac_h264_write_arg(socket, frame->num_rects);
++
++    for (int i = 0; i < frame->num_rects; i++) {
++        guac_rect* rect = &frame->rects[i];
++        guac_h264_write_arg(socket, rect->left);
++        guac_h264_write_arg(socket, rect->top);
++        guac_h264_write_arg(socket, guac_rect_width(rect));
++        guac_h264_write_arg(socket, guac_rect_height(rect));
++    }
++
++    guac_socket_write_string(socket, ";");
++    guac_socket_instruction_end(socket);
++
++    /* Send H.264 NAL unit data as blob stream */
++    guac_protocol_send_blobs(socket, stream, frame->data, frame->length);
++    guac_protocol_send_end(socket, stream);
++    guac_client_free_stream(client, stream);
++
++}
++
++/**
++ * Sends all queued H.264 frames from the given layer to connected clients,
++ * freeing each frame after sending. Frames are sent in order to preserve
++ * the H.264 reference chain.
++ *
++ * @return
++ *     The number of frames sent.
++ */
++static int guac_display_plan_flush_h264(guac_client* client,
++        guac_socket* socket, guac_display_layer* layer) {
++
++    int sent = 0;
++
++    /* Detach the whole queue up front rather than walking it in place. The
++     * protocol thread may append to the queue at any time, and sending
++     * involves socket writes -- holding the queue lock across those would
++     * reintroduce exactly the stall this lock exists to avoid. Frames appended
++     * during the send are simply carried by the next flush. */
++    pthread_mutex_lock(&layer->h264_queue_lock);
++
++    struct guac_h264_frame* frame = layer->h264_queue;
++    layer->h264_queue = NULL;
++    layer->h264_queue_tail = NULL;
++    layer->h264_queue_length = 0;
++
++    pthread_mutex_unlock(&layer->h264_queue_lock);
++
++    while (frame != NULL) {
++        struct guac_h264_frame* next = frame->next;
++
++        /* Skip P-frames until first keyframe has been sent */
++        if (!frame->is_keyframe && !layer->h264_keyframe_sent) {
++            guac_client_log(client, GUAC_LOG_DEBUG,
++                    "H.264: dropping %u byte delta (no keyframe yet)",
++                    frame->length);
++            guac_mem_free(frame->data);
++            guac_mem_free(frame->rects);
++            guac_mem_free(frame);
++            frame = next;
++            continue;
++        }
++
++        guac_display_plan_send_h264_frame(client, socket, layer, frame);
++
++        if (frame->is_keyframe)
++            layer->h264_keyframe_sent = 1;
++
++        guac_client_log(client, GUAC_LOG_DEBUG,
++                "H.264: sent %u bytes, %s, %dx%d",
++                frame->length,
++                frame->is_keyframe ? "KEYFRAME" : "delta",
++                guac_rect_width(&frame->rect),
++                guac_rect_height(&frame->rect));
++
++        guac_mem_free(frame->data);
++        guac_mem_free(frame->rects);
++        guac_mem_free(frame);
++        frame = next;
++        sent++;
++    }
++
++    if (sent > 0)
++        guac_client_log(client, GUAC_LOG_DEBUG,
++                "H.264 passthrough: flushed %d frames", sent);
++
++    return sent;
++
++}
++
++int PFW_guac_display_flush_h264(guac_display* display) {
++
++    guac_client* client = display->client;
++    int sent_any = 0;
++
++    /* Walk the layers of the pending frame directly rather than the display
++     * plan. A layer carrying an H.264 stream may have no plan operations at
++     * all (that is the entire point of skipping the decode), and with no dirty
++     * pixels anywhere guac_display_plan_create() returns NULL and
++     * guac_display_plan_apply() is never reached. */
++    for (guac_display_layer* layer = display->pending_frame.layers;
++            layer != NULL; layer = layer->pending_frame.next) {
++
++        /* No unlocked pre-check for an empty queue here: the protocol thread
++         * may be appending concurrently, and guac_display_plan_flush_h264()
++         * takes the queue lock and returns zero for an empty queue anyway. */
++        if (guac_display_plan_flush_h264(client, client->socket, layer) > 0)
++            sent_any = 1;
++
++    }
++
++    return sent_any;
++
++}
++
+ void guac_display_plan_apply(guac_display_plan* plan) {
+ 
+     guac_display* display = plan->display;
+@@ -386,6 +581,7 @@ void guac_display_plan_apply(guac_display_plan* plan) {
+     for (int i = 0; i < plan->length; i++) {
+ 
+         guac_display_layer* display_layer = op->layer;
++
+         switch (op->type) {
+ 
+             case GUAC_DISPLAY_PLAN_OPERATION_COPY:
+diff --git a/src/libguac/display-priv.h b/src/libguac/display-priv.h
+index 5980a861..7927f790 100644
+--- a/src/libguac/display-priv.h
++++ b/src/libguac/display-priv.h
+@@ -317,6 +317,72 @@ struct guac_display_render_thread {
+ 
+ };
+ 
++/**
++ * A queued H.264 frame awaiting delivery to clients. Frames are queued
++ * because guac_display may defer frame flushes, and H.264 requires ALL
++ * frames in sequence (losing a P-frame breaks the reference chain).
++ */
++struct guac_h264_frame {
++    unsigned char* data;
++    uint32_t length;
++    int is_keyframe;
++
++    /**
++     * Which view of the H.264 stream this access unit carries, as one of the
++     * GUAC_H264_VIEW_* constants. AVC444 encodes a picture as two views within
++     * a single H.264 sequence, and both must reach the client's decoder in
++     * order or its reference chain breaks -- but only the main view is a
++     * displayable image.
++     */
++    int view;
++
++    /**
++     * The bounds of the surface this frame decodes to. Retained for logging
++     * and as a fallback when the server supplies no region rects.
++     */
++    guac_rect rect;
++
++    /**
++     * The regions within the decoded picture that this frame actually
++     * updates, in surface coordinates.
++     *
++     * An H.264 picture is always full-surface sized, but a server that mixes
++     * codecs encodes only part of the screen as H.264 -- the remainder of the
++     * picture is not valid content. Clients MUST draw only these regions, or
++     * they will overwrite areas delivered via other codecs. May be NULL, in
++     * which case the whole picture is valid (as with xrdp, which encodes the
++     * entire surface as H.264).
++     */
++    guac_rect* rects;
++
++    /**
++     * The number of entries in rects, or zero if rects is NULL.
++     */
++    int num_rects;
++
++    struct guac_h264_frame* next;
++};
++
++/**
++ * Sends all queued H.264 frames for all layers of the given display, marking
++ * each layer that had frames sent with the regions those frames covered, so
++ * that the display plan knows to suppress image operations for those regions.
++ *
++ * The pending frame write lock MUST be held when calling this function, and the
++ * worker threads MUST be idle (this function writes directly to the client
++ * socket).
++ *
++ * @param display
++ *     The display whose layers should be flushed.
++ *
++ * @return
++ *     Non-zero if H.264 frames were sent for at least one layer, zero
++ *     otherwise. A caller must treat a non-zero return as making the frame
++ *     non-empty, so that a frame boundary ("sync") is still sent for frames
++ *     whose only content was H.264.
++ */
++int PFW_guac_display_flush_h264(guac_display* display);
++
+ /**
+  * Approximation of how often a region of a layer is modified, as well as what
+  * changes have been made to that region since the last frame. This information
+@@ -620,6 +686,62 @@ struct guac_display_layer {
+      */
+     guac_display_layer* next_removed;
+ 
++    /* ---------------- H.264 PASSTHROUGH DATA ---------------- */
++
++    /**
++     * Head of the queue of pending H.264 frames. Frames are appended by
++     * guac_display_layer_set_h264() and consumed during plan application.
++     * Frames are queued because guac_display may defer frame flushes, and
++     * H.264 requires ALL frames in sequence (losing a P-frame breaks the
++     * reference chain).
++     *
++     * IMPORTANT: h264_queue_lock MUST be acquired before modifying or reading
++     * this member.
++     */
++    struct guac_h264_frame* h264_queue;
++
++    /**
++     * Lock guarding the H.264 frame queue: h264_queue, h264_queue_tail, and
++     * h264_queue_length.
++     *
++     * This is deliberately NOT the display-level pending_frame.lock. The
++     * render thread holds that lock for the duration of the frame flush,
++     * including the dispatch of image encoding to worker threads. Queueing an
++     * H.264 frame under it therefore blocked the protocol thread behind
++     * unrelated encoding work.
++     *
++     * For RDP that protocol thread is the one processing EGFX PDUs and
++     * sending RDPGFX_FRAME_ACKNOWLEDGE. A server applies flow control to
++     * unacknowledged frames, so blocking that thread throttles the rate at
++     * which the server sends frames at all -- the stall appears as a low
++     * source frame rate rather than as a stall in guacd, which makes it look
++     * like a problem at the far end.
++     *
++     * The queue needs no coordination with the rest of the pending frame: it
++     * is a separate list, appended by the protocol thread and detached
++     * wholesale by the render thread during the flush.
++     */
++    pthread_mutex_t h264_queue_lock;
++
++    /**
++     * Tail of the H.264 frame queue for O(1) append.
++     */
++    struct guac_h264_frame* h264_queue_tail;
++
++    /**
++     * Number of frames currently in the H.264 queue.
++     */
++    int h264_queue_length;
++
++    /**
++     * Non-zero if at least one H.264 keyframe has been sent to clients for
++     * this layer. P-frames are only sent after a keyframe has established
++     * the decoder reference state.
++     */
++    int h264_keyframe_sent;
++
++
++
+ };
+ 
+ typedef struct guac_display_state {
+diff --git a/src/libguac/guacamole/display.h b/src/libguac/guacamole/display.h
+index 9894042a..4c298fb7 100644
+--- a/src/libguac/guacamole/display.h
++++ b/src/libguac/guacamole/display.h
+@@ -417,6 +417,74 @@ guac_display_layer* guac_display_alloc_buffer(guac_display* display, int opaque)
+  */
+ void guac_display_free_layer(guac_display_layer* display_layer);
+ 
++/**
++ * Stores raw H.264 NAL unit data on the given layer for passthrough to
++ * clients during the next frame flush. When H.264 data is set, the display
++ * will send it directly to clients instead of encoding the layer's pixel data
++ * as JPEG/PNG/WebP for the affected region.
++ *
++ * This function acquires the display's pending_frame lock internally and must
++ * NOT be called while that lock is already held by the calling thread.
++ *
++ * @param layer
++ *     The layer to set H.264 data on.
++ *
++ * @param data
++ *     The raw H.264 NAL unit data (Annex B format).
++ *
++ * @param length
++ *     The length of the H.264 data in bytes.
++ *
++ * @param is_keyframe
++ *     Non-zero if this data contains an IDR (keyframe), zero otherwise.
++ *
++ * @param x
++ *     The X coordinate of the region this data covers.
++ *
++ * @param y
++ *     The Y coordinate of the region this data covers.
++ *
++ * @param width
++ *     The width of the region this data covers, in pixels.
++ *
++ * @param height
++ *     The height of the region this data covers, in pixels.
++ *
++ * @param rects
++ *     The regions within the decoded picture that this frame actually
++ *     updates, in surface coordinates, or NULL if the entire picture is
++ *     valid. An H.264 picture is always full-surface sized, but a server
++ *     mixing codecs encodes only part of the screen as H.264; clients must
++ *     draw only these regions or they will overwrite content delivered via
++ *     other codecs. The array is copied.
++ *
++ * @param num_rects
++ *     The number of entries in rects, or zero if rects is NULL.
++ */
++/**
++ * An ordinary AVC420 access unit, or the main view of an AVC444 stream. A
++ * complete YUV420 picture, displayable as-is.
++ */
++#define GUAC_H264_VIEW_MAIN 0
++
++/**
++ * The auxiliary view of an AVC444 stream, in the v1 chroma layout. Not an
++ * image: its planes carry chroma samples that refine the main view to 4:4:4.
++ * It must still be decoded, since it is part of the same H.264 sequence and
++ * later pictures reference it.
++ */
++#define GUAC_H264_VIEW_CHROMA_V1 1
++
++/**
++ * The auxiliary view of an AVC444 stream, in the v2 chroma layout.
++ */
++#define GUAC_H264_VIEW_CHROMA_V2 2
++
++void guac_display_layer_set_h264(guac_display_layer* layer,
++        const unsigned char* data, uint32_t length, int is_keyframe,
++        int x, int y, int width, int height,
++        const guac_rect* rects, int num_rects, int view);
++
+ /**
+  * Returns a layer representing the current mouse cursor icon. Changes to the
+  * contents of this layer will affect the remote mouse cursor after the current
+diff --git a/src/protocols/rdp/channels/rdpgfx.c b/src/protocols/rdp/channels/rdpgfx.c
+index 327e7c2b..c49737d7 100644
+--- a/src/protocols/rdp/channels/rdpgfx.c
++++ b/src/protocols/rdp/channels/rdpgfx.c
+@@ -24,14 +24,389 @@
+ #include "settings.h"
+ 
+ #include <freerdp/client/rdpgfx.h>
++#include <freerdp/channels/rdpgfx.h>
+ #include <freerdp/freerdp.h>
+ #include <freerdp/gdi/gfx.h>
+ #include <freerdp/event.h>
+ #include <guacamole/client.h>
++#include <guacamole/display.h>
++#include <guacamole/rect.h>
+ 
+ #include <stdlib.h>
+ #include <string.h>
+ 
++/**
++ * Checks whether an H.264 access unit contains an IDR slice, and optionally
++ * reports the set of NAL unit types present.
++ *
++ * Only an IDR slice (type 5) makes a frame independently decodable. An SPS
++ * (type 7) is a parameter set that encoders commonly repeat alongside ordinary
++ * inter-coded frames, so treating it as sufficient marks delta frames as
++ * keyframes. That flag becomes the WebCodecs EncodedVideoChunk type on the
++ * client, and handing a decoder a delta frame labelled "key" makes it discard
++ * queued work -- dropping already-allocated VideoFrames before they reach
++ * close(), and stalling playback until a genuine sync point arrives.
++ *
++ * @param data
++ *     The Annex B access unit to inspect.
++ *
++ * @param length
++ *     The length of data, in bytes.
++ *
++ * @param types_seen
++ *     If non-NULL, receives a bitmask of the NAL unit types encountered, where
++ *     bit N corresponds to type N. Types above 31 are not represented.
++ *
++ * @return
++ *     Non-zero if an IDR slice is present, zero otherwise.
++ */
++static int guac_rdp_h264_is_keyframe(const BYTE* data, UINT32 length,
++        UINT32* types_seen) {
++
++    int has_idr = 0;
++
++    if (types_seen != NULL)
++        *types_seen = 0;
++
++    for (UINT32 i = 0; i + 3 < length; i++) {
++        if (data[i] == 0 && data[i+1] == 0) {
++            int offset = -1;
++            if (data[i+2] == 1)
++                offset = i + 3;
++            else if (i + 4 < length && data[i+2] == 0 && data[i+3] == 1)
++                offset = i + 4;
++            if (offset >= 0 && (UINT32) offset < length) {
++                int nal_type = data[offset] & 0x1F;
++                if (types_seen != NULL && nal_type < 32)
++                    *types_seen |= (1u << nal_type);
++                if (nal_type == 5)
++                    has_idr = 1;
++            }
++        }
++    }
++
++    return has_idr;
++
++}
++
++/**
++ * Copies the region rects of an H.264 metablock into a newly allocated array of
++ * guac_rect, converting from FreeRDP's RECTANGLE_16 (left/top/right/bottom) to
++ * the left/top/width/height form taken by guac_rect_init().
++ *
++ * These regions identify which parts of the decoded picture are actually
++ * valid. The picture is always full-surface sized, so a server that encodes
++ * only part of the screen as H.264 -- as Windows does when mixing codecs --
++ * leaves the remainder holding no meaningful content. Forwarding the regions
++ * lets the client draw only those parts instead of blitting the whole picture
++ * over regions delivered by other codecs.
++ *
++ * @param meta
++ *     The metablock whose region rects should be copied.
++ *
++ * @param num_rects
++ *     Pointer to an int that will receive the number of rects copied.
++ *
++ * @return
++ *     A newly allocated array of guac_rect which must be freed by the caller,
++ *     or NULL if the metablock contains no regions.
++ */
++static guac_rect* guac_rdp_h264_copy_rects(const RDPGFX_H264_METABLOCK* meta,
++        int* num_rects) {
++
++    *num_rects = 0;
++
++    if (meta == NULL || meta->numRegionRects == 0 || meta->regionRects == NULL)
++        return NULL;
++
++    guac_rect* rects = malloc(meta->numRegionRects * sizeof(guac_rect));
++    if (rects == NULL)
++        return NULL;
++
++    for (UINT32 i = 0; i < meta->numRegionRects; i++) {
++        const RECTANGLE_16* src = &meta->regionRects[i];
++        guac_rect_init(&rects[i], src->left, src->top,
++                src->right - src->left, src->bottom - src->top);
++    }
++
++    *num_rects = (int) meta->numRegionRects;
++    return rects;
++
++}
++
++/**
++ * Wrapper for the FreeRDP GDI SurfaceCommand callback. Intercepts AVC420
++ * and AVC444 commands to store raw H.264 NAL units on the display layer
++ * for passthrough to clients during the next frame flush.
++ *
++ * The original handler is always called to perform GDI decoding, which
++ * updates the pixel buffer and dirty tracking. The H.264 data is sent
++ * to clients by the display worker pipeline (in guac_display_plan_apply)
++ * instead of encoding the pixel data as JPEG/PNG/WebP.
++ */
++static UINT guac_rdp_gfx_surface_command(RdpgfxClientContext* context,
++        const RDPGFX_SURFACE_COMMAND* cmd) {
++
++    /* gfx->custom points to rdpGdi (set by gdi_graphics_pipeline_init) */
++    rdpGdi* gdi = (rdpGdi*) context->custom;
++    rdpContext* rdp_context = gdi->context;
++    guac_client* client = ((rdp_freerdp_context*) rdp_context)->client;
++    guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
++
++    /* Log the codec of every surface command, not just H.264 ones. Without
++     * this there is no way to tell a server that is sending no H.264 from one
++     * that is mixing H.264 with progressive/clear/planar commands -- both look
++     * identical from the H.264-only trace output. Codec IDs are those of
++     * MS-RDPEGFX (see RDPGFX_CODECID_* in freerdp/channels/rdpgfx.h), in
++     * decimal: 0=UNCOMPRESSED, 3=CAVIDEO(RFX), 8=CLEARCODEC, 9=CAPROGRESSIVE,
++     * 10=PLANAR, 11=AVC420, 12=ALPHA, 13=CAPROGRESSIVE_V2, 14=AVC444,
++     * 15=AVC444v2. */
++    guac_client_log(client, GUAC_LOG_TRACE,
++            "GFX surface command: surface=%u, codec=%u, %ux%u at %u,%u",
++            cmd->surfaceId, cmd->codecId,
++            cmd->width, cmd->height, cmd->left, cmd->top);
++
++    /* Save H.264 NAL data BEFORE calling the original handler. The original
++     * GDI handler may free or modify cmd->extra data during AVC decoding,
++     * so we must copy it while it's still valid. */
++    /* An AVC444 command carries two views in one H.264 sequence, so a single
++     * surface command can yield two access units that must both reach the
++     * client, in order. */
++    unsigned char* saved_h264[2] = { NULL, NULL };
++    UINT32 saved_length[2] = { 0, 0 };
++    int saved_keyframe[2] = { 0, 0 };
++    guac_rect* saved_rects[2] = { NULL, NULL };
++    int saved_num_rects[2] = { 0, 0 };
++    int saved_view[2] = { GUAC_H264_VIEW_MAIN, GUAC_H264_VIEW_MAIN };
++    int saved_count = 0;
++    UINT32 saved_nal_types = 0;
++
++    if (cmd->codecId == RDPGFX_CODECID_AVC420 && cmd->extra != NULL) {
++        RDPGFX_AVC420_BITMAP_STREAM* avc420 =
++                (RDPGFX_AVC420_BITMAP_STREAM*) cmd->extra;
++        if (avc420->data != NULL && avc420->length > 0) {
++            saved_length[0] = avc420->length;
++            saved_h264[0] = malloc(saved_length[0]);
++            if (saved_h264[0] != NULL) {
++                memcpy(saved_h264[0], avc420->data, saved_length[0]);
++                saved_keyframe[0] = guac_rdp_h264_is_keyframe(
++                        saved_h264[0], saved_length[0], &saved_nal_types);
++                saved_rects[0] = guac_rdp_h264_copy_rects(&avc420->meta,
++                        &saved_num_rects[0]);
++                saved_view[0] = GUAC_H264_VIEW_MAIN;
++                saved_count = 1;
++            }
++        }
++    }
++    /* AVC444 encodes a picture as two views inside ONE H.264 sequence, and
++     * FreeRDP decodes both through the same H264_CONTEXT. Both must therefore
++     * reach the client's decoder, in order: dropping either leaves later
++     * pictures referencing data it never received, which renders as blocky
++     * wrongly-coloured macroblocks and reports no decode error, because the
++     * bitstream that does arrive is well formed.
++     *
++     * Only the main view is a displayable image. The auxiliary view carries
++     * chroma samples that refine it to 4:4:4; it is tagged so the client
++     * decodes it for its references and either merges or discards it.
++     *
++     * LC (FreeRDP's op) says which bitstreams are present:
++     *   0  main view in bitstream[0], chroma in bitstream[1]
++     *   1  main view in bitstream[0]
++     *   2  chroma in bitstream[0]
++     */
++    else if ((cmd->codecId == RDPGFX_CODECID_AVC444
++           || cmd->codecId == RDPGFX_CODECID_AVC444v2)
++           && cmd->extra != NULL) {
++
++        RDPGFX_AVC444_BITMAP_STREAM* avc444 =
++                (RDPGFX_AVC444_BITMAP_STREAM*) cmd->extra;
++
++        int chroma_view = (cmd->codecId == RDPGFX_CODECID_AVC444)
++                ? GUAC_H264_VIEW_CHROMA_V1 : GUAC_H264_VIEW_CHROMA_V2;
++
++        guac_client_log(client, GUAC_LOG_TRACE, "AVC444 LC=%u", avc444->LC);
++
++        /* bitstream[0]: main view for LC 0 and 1, chroma for LC 2 */
++        if (avc444->bitstream[0].data != NULL
++                && avc444->bitstream[0].length > 0) {
++
++            saved_length[0] = avc444->bitstream[0].length;
++            saved_h264[0] = malloc(saved_length[0]);
++
++            if (saved_h264[0] != NULL) {
++                memcpy(saved_h264[0], avc444->bitstream[0].data,
++                        saved_length[0]);
++                saved_keyframe[0] = guac_rdp_h264_is_keyframe(
++                        saved_h264[0], saved_length[0], &saved_nal_types);
++                saved_rects[0] = guac_rdp_h264_copy_rects(
++                        &avc444->bitstream[0].meta, &saved_num_rects[0]);
++                saved_view[0] = (avc444->LC == 2)
++                        ? chroma_view : GUAC_H264_VIEW_MAIN;
++                saved_count = 1;
++            }
++
++        }
++
++        /* bitstream[1]: the chroma view, present only for LC 0 */
++        if (avc444->LC == 0 && saved_count == 1
++                && avc444->bitstream[1].data != NULL
++                && avc444->bitstream[1].length > 0) {
++
++            saved_length[1] = avc444->bitstream[1].length;
++            saved_h264[1] = malloc(saved_length[1]);
++
++            if (saved_h264[1] != NULL) {
++                memcpy(saved_h264[1], avc444->bitstream[1].data,
++                        saved_length[1]);
++                saved_keyframe[1] = guac_rdp_h264_is_keyframe(
++                        saved_h264[1], saved_length[1], NULL);
++                saved_rects[1] = guac_rdp_h264_copy_rects(
++                        &avc444->bitstream[1].meta, &saved_num_rects[1]);
++                saved_view[1] = chroma_view;
++                saved_count = 2;
++            }
++
++        }
++
++    }
++
++    UINT result = CHANNEL_RC_OK;
++
++    /* Skip the software H.264 decode when this command is being passed through
++     * to the client verbatim. The decoded pixels are discarded regardless —
++     * guac_display_plan_apply() suppresses every image operation for a layer
++     * carrying an H.264 stream — so decoding them costs the libavcodec decode
++     * plus the full dirty-region diff in the display render thread, for pixels
++     * nothing will ever read.
++     *
++     * Only H.264 commands are skipped. RemoteFX, planar, and progressive
++     * commands (saved_h264 == NULL) are always decoded normally, so a session
++     * whose server mixes codecs still renders those regions.
++     *
++     * Otherwise, run the normal GDI decode — this calls BeginPaint/EndPaint
++     * internally, updates the pixel buffer, and marks the dirty region. Must
++     * happen after we've saved the H.264 data above. */
++    int skip_decode = (saved_count > 0);
++
++    if (!skip_decode) {
++        pcRdpgfxSurfaceCommand orig =
++                (pcRdpgfxSurfaceCommand) rdp_client->orig_surface_command;
++        if (orig != NULL)
++            result = orig(context, cmd);
++    }
++
++    /* Store saved H.264 data on the display layer for passthrough.
++     * guac_display_layer_set_h264 acquires pending_frame.lock internally,
++     * which is safe since EndPaint has already released it above. */
++    if (saved_count > 0) {
++        guac_display_layer* default_layer =
++                guac_display_default_layer(rdp_client->display);
++
++        /* Queued in capture order, which is the order the views occupy in the
++         * H.264 sequence. The queue preserves it through to the wire. */
++        for (int i = 0; i < saved_count; i++)
++            guac_display_layer_set_h264(default_layer,
++                    saved_h264[i], saved_length[i], saved_keyframe[i],
++                    cmd->left, cmd->top, cmd->width, cmd->height,
++                    saved_rects[i], saved_num_rects[i], saved_view[i]);
++
++        /* With the decode skipped, guac_rdp_gdi_end_paint() never runs, so
++         * nothing marks the display as modified and the queued frames would
++         * sit unsent until some unrelated update arrived. Raise exactly the
++         * flag end_paint would have raised, rather than notifying the render
++         * thread directly: the main RDP event loop batches gdi_modified into a
++         * single guac_display_render_thread_notify_modified() per message
++         * batch. Notifying per surface command instead keeps FRAME_MODIFIED
++         * permanently set at high frame rates, which prevents the render
++         * thread's frame-accumulation loop from ever settling and delays every
++         * flush until GUAC_DISPLAY_RENDER_THREAD_MAX_FRAME_DURATION (100ms). */
++        if (skip_decode)
++            rdp_client->gdi_modified = 1;
++
++        for (int i = 0; i < saved_count; i++) {
++
++            guac_client_log(client, GUAC_LOG_TRACE,
++                    "H.264 passthrough: view=%i, %u bytes, %s, "
++                    "nal_types=0x%08x, %ux%u at %u,%u, rects=%i",
++                    saved_view[i], saved_length[i],
++                    saved_keyframe[i] ? "keyframe" : "delta",
++                    saved_nal_types,
++                    cmd->width, cmd->height, cmd->left, cmd->top,
++                    saved_num_rects[i]);
++
++            /* guac_display_layer_set_h264() copies both the NAL data and the
++             * region rects, so this view's copies are ours to release. */
++            free(saved_h264[i]);
++            free(saved_rects[i]);
++
++        }
++
++    }
++
++    /* Any view that was captured but never queued must still be released */
++    else {
++        for (int i = 0; i < 2; i++) {
++            free(saved_h264[i]);
++            free(saved_rects[i]);
++        }
++    }
++
++    return result;
++}
++
++/**
++ * Wrapper for the RDPGFX CapsConfirm callback. Logs the capability version the
++ * server selected, which is otherwise invisible and determines how the session
++ * will behave.
++ *
++ * The AVC_THINCLIENT flag that requests AVC420 instead of AVC444 is only
++ * attached to capability sets from version 10.3 onward -- FreeRDP builds the
++ * V10, V10.1 and V10.2 sets before adding it. So a server that confirms one of
++ * those three never saw the request, and will send AVC444 regardless of what
++ * was intended. Without this log, that case is indistinguishable from a server
++ * that saw the flag and ignored it.
++ */
++static UINT guac_rdp_gfx_caps_confirm(RdpgfxClientContext* context,
++        const RDPGFX_CAPS_CONFIRM_PDU* capsConfirm) {
++
++    rdpGdi* gdi = (rdpGdi*) context->custom;
++    guac_client* client = ((rdp_freerdp_context*) gdi->context)->client;
++    guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
++
++    if (capsConfirm != NULL && capsConfirm->capsSet != NULL) {
++
++        UINT32 version = capsConfirm->capsSet->version;
++        UINT32 flags = capsConfirm->capsSet->flags;
++
++        guac_client_log(client, GUAC_LOG_INFO,
++                "RDPGFX capability version 0x%08X confirmed by server "
++                "(flags 0x%08X). AVC420_ENABLED=%s AVC_DISABLED=%s "
++                "AVC_THINCLIENT=%s", version, flags,
++                (flags & 0x00000010) ? "yes" : "no",
++                (flags & 0x00000020) ? "yes" : "no",
++                (flags & 0x00000040) ? "yes" : "no");
++
++        /* 0x000A0003 is RDPGFX_CAPVERSION_103 */
++        if (version < 0x000A0003)
++            guac_client_log(client, GUAC_LOG_WARNING,
++                    "Server confirmed an RDPGFX capability version below 10.3, "
++                    "which predates the AVC_THINCLIENT flag. The request for "
++                    "AVC420 was never sent, so the server may send AVC444. Set "
++                    "GUAC_RDP_H264_CAPS_FILTER=1 to advertise only 10.3 and "
++                    "later.");
++
++    }
++
++    pcRdpgfxCapsConfirm orig =
++            (pcRdpgfxCapsConfirm) rdp_client->orig_caps_confirm;
++
++    if (orig != NULL)
++        return orig(context, capsConfirm);
++
++    return CHANNEL_RC_OK;
++
++}
++
+ /**
+  * Callback which associates handlers specific to Guacamole with the
+  * RdpgfxClientContext instance allocated by FreeRDP to deal with received
+@@ -63,13 +438,68 @@ static void guac_rdp_rdpgfx_channel_connected(rdpContext* context,
+     RdpgfxClientContext* rdpgfx = (RdpgfxClientContext*) args->pInterface;
+     rdpGdi* gdi = context->gdi;
+ 
+-    if (!gdi_graphics_pipeline_init(gdi, rdpgfx))
++    if (!gdi_graphics_pipeline_init(gdi, rdpgfx)) {
+         guac_client_log(client, GUAC_LOG_WARNING, "Rendering backend for RDPGFX "
+                 "channel could not be loaded. Graphics may not render at all!");
+-    else
++    }
++    else {
+         guac_client_log(client, GUAC_LOG_DEBUG, "RDPGFX channel will be used for "
+                 "the RDP Graphics Pipeline Extension.");
+ 
++        guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
++
++        /* Installed only for a connection that asked for H.264, and only
++         * onto a handler that is not already ours. This runs again every
++         * time the RDPGFX channel reconnects -- the display resize xrdp
++         * performs at login triggers exactly that -- and the two ways of
++         * getting it wrong fail in opposite directions.
++         *
++         * Reinstalling unconditionally is fatal: the second pass reads back
++         * the wrapper the first one left, orig_surface_command ends up
++         * pointing at guac_rdp_gfx_surface_command itself, and every surface
++         * command that is not H.264 calls the wrapper from inside the
++         * wrapper until the stack is gone. H.264 commands take the
++         * skip_decode path and never make that call, so a server sending
++         * nothing but H.264 survives it while one mixing in planar or
++         * progressive surfaces dies on the first of them.
++         *
++         * Installing only once is quieter and just as broken.
++         * gdi_graphics_pipeline_uninit() sets SurfaceCommand to NULL and
++         * gdi_graphics_pipeline_init() puts gdi_SurfaceCommand back, so a
++         * reconnect leaves FreeRDP's own handler installed while a
++         * once-only guard declines to wrap it again. Passthrough then stops
++         * for the rest of the session -- silently, since the frames still
++         * render via GDI and guacd simply re-encodes them.
++         *
++         * Testing what is actually installed, per callback, covers both. */
++        if (rdp_client->settings->enable_h264) {
++
++            /* Wrap SurfaceCommand to intercept H.264 data after GDI decode.
++             * Store the original callback per-connection to avoid clobbering
++             * when multiple RDP sessions are active concurrently. */
++            if (rdpgfx->SurfaceCommand != guac_rdp_gfx_surface_command) {
++                rdp_client->orig_surface_command = (void*) rdpgfx->SurfaceCommand;
++                rdpgfx->SurfaceCommand = guac_rdp_gfx_surface_command;
++            }
++
++            /* Guarded separately, because the two callbacks are restored on
++             * different schedules: gdi_graphics_pipeline_init() assigns
++             * SurfaceCommand but never touches CapsConfirm, so after a
++             * reconnect CapsConfirm is still ours while SurfaceCommand is
++             * FreeRDP's again. One shared guard therefore re-reads a wrapper
++             * we installed ourselves and points orig_caps_confirm at
++             * guac_rdp_gfx_caps_confirm. */
++            if (rdpgfx->CapsConfirm != guac_rdp_gfx_caps_confirm) {
++                rdp_client->orig_caps_confirm = (void*) rdpgfx->CapsConfirm;
++                rdpgfx->CapsConfirm = guac_rdp_gfx_caps_confirm;
++            }
++
++            guac_client_log(client, GUAC_LOG_INFO,
++                    "H.264 passthrough enabled for RDPGFX channel.");
++
++        }
++    }
++
+ }
+ 
+ /**
+@@ -120,4 +510,3 @@ void guac_rdp_rdpgfx_load_plugin(rdpContext* context) {
+     guac_freerdp_dynamic_channel_collection_add(context->settings, "rdpgfx", NULL);
+ 
+ }
+-
+diff --git a/src/protocols/rdp/rdp.h b/src/protocols/rdp/rdp.h
+index 065080a3..82ca5a1d 100644
+--- a/src/protocols/rdp/rdp.h
++++ b/src/protocols/rdp/rdp.h
+@@ -132,6 +132,21 @@ typedef struct guac_rdp_client {
+      */
+     guac_display_render_thread* render_thread;
+ 
++    /**
++     * The original GFX SurfaceCommand handler installed by
++     * gdi_graphics_pipeline_init(). Stored per-connection so multiple
++     * concurrent RDP sessions don't clobber each other's callback.
++     */
++    void* orig_surface_command;
++
++    /**
++     * The original RDPGFX CapsConfirm callback, wrapped so that the capability
++     * version the server actually selected can be logged. Which version is
++     * confirmed determines whether the AVC_THINCLIENT flag was ever sent: it
++     * is only present from caps 10.3 onward.
++     */
++    void* orig_caps_confirm;
++
+     /**
+      * Queue of mouse, keyboard, and touch events. These events are accumulated
+      * and flushed within the RDP client thread to avoid spending excessive
+diff --git a/src/protocols/rdp/settings.c b/src/protocols/rdp/settings.c
+index e01df96a..eb1ccf39 100644
+--- a/src/protocols/rdp/settings.c
++++ b/src/protocols/rdp/settings.c
+@@ -99,6 +99,7 @@ const char* GUAC_RDP_CLIENT_ARGS[] = {
+     "disable-offscreen-caching",
+     "disable-glyph-caching",
+     "disable-gfx",
++    "enable-h264",
+     "preconnection-id",
+     "preconnection-blob",
+     "timezone",
+@@ -441,6 +442,12 @@ enum RDP_ARGS_IDX {
+      */
+     IDX_DISABLE_GFX,
+ 
++    /**
++     * Whether H.264 passthrough should be enabled, negotiating GfxH264 and
++     * GfxAVC444 with the RDP server.
++     */
++    IDX_ENABLE_H264,
++
+     /**
+      * The preconnection ID to send within the preconnection PDU when
+      * initiating an RDP connection, if any.
+@@ -1318,6 +1325,11 @@ guac_rdp_settings* guac_rdp_parse_args(guac_user* user,
+         !guac_user_parse_args_boolean(user, GUAC_RDP_CLIENT_ARGS, argv,
+                 IDX_DISABLE_GFX, 0);
+ 
++    /* H.264 passthrough enable/disable */
++    settings->enable_h264 =
++        guac_user_parse_args_boolean(user, GUAC_RDP_CLIENT_ARGS, argv,
++                IDX_ENABLE_H264, 0);
++
+     /* Session color depth */
+     settings->color_depth =
+         guac_user_parse_args_int(user, GUAC_RDP_CLIENT_ARGS, argv,
+@@ -1642,11 +1654,31 @@ void guac_rdp_push_settings(guac_client* client,
+     freerdp_settings_set_bool(rdp_settings, FreeRDP_FastPathInput, TRUE);
+     freerdp_settings_set_bool(rdp_settings, FreeRDP_FastPathOutput, TRUE);
+ 
++    /* Report the graphics flags actually received from the client. Without
++     * this there is no way to tell, from guacd's logs alone, whether a session
++     * that never sees H.264 was never asked for it or asked and declined. */
++    guac_client_log(client, GUAC_LOG_INFO,
++            "RDP graphics settings: gfx=%s, h264=%s",
++            guac_settings->enable_gfx ? "enabled" : "disabled",
++            guac_settings->enable_h264 ? "enabled" : "disabled");
++
+     /* Enable RemoteFX / Graphics Pipeline */
+     if (guac_settings->enable_gfx) {
+ 
+         freerdp_settings_set_bool(rdp_settings, FreeRDP_SupportGraphicsPipeline, TRUE);
+         freerdp_settings_set_bool(rdp_settings, FreeRDP_RemoteFxCodec, TRUE);
++        if (guac_settings->enable_h264) {
++
++            freerdp_settings_set_bool(rdp_settings, FreeRDP_GfxH264, TRUE);
++
++            /* AVC444 must be advertised even though AVC420 is preferred:
++             * FreeRDP emits the RDPGFX V10 capability sets only when GfxAVC444
++             * is set, and Windows offers no H.264 at all below V10. A server
++             * that then chooses AVC444 is handled -- both of its views are
++             * forwarded and the client draws only the main one. */
++            freerdp_settings_set_bool(rdp_settings, FreeRDP_GfxAVC444, TRUE);
++
++        }
+ 
+         if (freerdp_settings_get_uint32(rdp_settings, FreeRDP_ColorDepth) != RDP_GFX_REQUIRED_DEPTH) {
+             guac_client_log(client, GUAC_LOG_WARNING, "Ignoring requested "
+@@ -1901,11 +1933,26 @@ void guac_rdp_push_settings(guac_client* client,
+     rdp_settings->FastPathInput = TRUE;
+     rdp_settings->FastPathOutput = TRUE;
+ 
++    /* Report the graphics flags actually received from the client (see the
++     * FreeRDP 3 branch above). */
++    guac_client_log(client, GUAC_LOG_INFO,
++            "RDP graphics settings: gfx=%s, h264=%s",
++            guac_settings->enable_gfx ? "enabled" : "disabled",
++            guac_settings->enable_h264 ? "enabled" : "disabled");
++
+     /* Enable RemoteFX / Graphics Pipeline */
+     if (guac_settings->enable_gfx) {
+ 
+         rdp_settings->SupportGraphicsPipeline = TRUE;
+         rdp_settings->RemoteFxCodec = TRUE;
++        if (guac_settings->enable_h264) {
++
++            rdp_settings->GfxH264 = TRUE;
++
++            /* See the FreeRDP 3 path above. */
++            rdp_settings->GfxAVC444 = TRUE;
++
++        }
+ 
+         if (rdp_settings->ColorDepth != RDP_GFX_REQUIRED_DEPTH) {
+             guac_client_log(client, GUAC_LOG_WARNING, "Ignoring requested "
+diff --git a/src/protocols/rdp/settings.h b/src/protocols/rdp/settings.h
+index 4ce903a0..75cc014b 100644
+--- a/src/protocols/rdp/settings.h
++++ b/src/protocols/rdp/settings.h
+@@ -675,6 +675,11 @@ typedef struct guac_rdp_settings {
+      */
+     int enable_gfx;
+ 
++    /**
++     * Whether H.264 passthrough is enabled (GfxH264/GfxAVC444 negotiation).
++     */
++    int enable_h264;
++
+     /**
+      * Whether multi-touch support is enabled.
+      */

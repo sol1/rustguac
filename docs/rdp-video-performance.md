@@ -247,16 +247,24 @@ guacd automatically adapts encoding quality based on network lag:
 - Medium lag (50ms): quality 70 (balanced)
 - High lag (80ms): quality 30 (aggressive compression)
 
-### H.264 Passthrough Pipeline (xrdp with x264)
+### H.264 Passthrough Pipeline (xrdp with x264, or Windows)
 
 When the RDP server sends H.264 (AVC420/AVC444), guacd passes the raw H.264 NAL units directly to the browser, bypassing the server-side decode and re-encode:
 
-1. **xrdp** encodes the screen as H.264 via x264
+1. **The server** encodes the screen as H.264 (x264 or VAAPI on xrdp, NVENC/QSV on Windows)
 2. **FreeRDP** (inside guacd) receives the H.264 SurfaceCommand
-3. **guacd** copies the raw H.264 NAL data and also runs the normal GDI decode (for frame sync)
+3. **guacd** copies the raw NAL data out of the command and **skips the GDI decode** for it entirely
 4. During frame flush, guacd sends the raw H.264 data as a custom `h264` instruction
 5. **rustguac** relays over WebSocket to the browser
 6. **Browser** decodes H.264 using the [WebCodecs VideoDecoder API](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder) (hardware-accelerated)
+
+Only H.264 commands skip the decode; RemoteFX, planar and progressive still
+decode normally, so a server mixing codecs within a frame stays correct.
+
+AVC444 is handled rather than avoided: both of its views are forwarded, tagged
+with a `view` field, and the browser combines them into full 4:4:4 chroma. See
+[`rdp-h264.md`](rdp-h264.md) for the host-side settings, which on Windows are
+not optional.
 
 Benefits:
 - **Lower server CPU** — no decode + re-encode cycle on the server

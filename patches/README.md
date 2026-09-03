@@ -68,29 +68,65 @@ Three new connection parameters:
 | `src/protocols/rdp/channels/rdpgfx.c` | Add `#include "config.h"` |
 | `src/protocols/rdp/input.c` | Add `#include "config.h"`, add NULL guard in `guac_rdp_user_size_handler()` |
 
-## 004-h264-display-worker.patch
+## 004-h264-passthrough.patch
 
-**Feature:** H.264 passthrough via guac_display worker integration. When the RDP server sends AVC420 encoded frames (H.264), the raw NAL units are passed through to the browser's WebCodecs VideoDecoder instead of being decoded server-side and re-encoded as JPEG/PNG/WebP.
+**Feature:** end-to-end H.264. When an RDP server sends H.264 over the Graphics Pipeline, the raw NAL units are forwarded to the browser's WebCodecs `VideoDecoder` instead of being decoded by guacd and re-encoded as JPEG/PNG/WebP.
 
-**AVC420 only — AVC444 is deliberately disabled.** The passthrough forwards a single H.264 bitstream per surface command. AVC420 carries a complete YUV420 frame, which WebCodecs decodes directly. AVC444 instead splits the image across two bitstreams (`bitstream[0]` luma/main view + `bitstream[1]` auxiliary chroma) to reconstruct YUV444; the passthrough only forwards `bitstream[0]`, so a Windows host that negotiated AVC444 renders as a corrupted luma+chroma split — two blocks with green and magenta casts. We therefore advertise `GfxH264` **without** `GfxAVC444`/`GfxAVC444v2` so the server always uses AVC420. (RemoteFX/RFX is unaffected — it is a separate codec path and renders correctly.) Properly supporting AVC444 would require decoding both bitstreams and recombining the chroma planes in the browser (e.g. a second VideoDecoder + a WebGL merge shader), which is not implemented.
+Measured with 1080p video playing, guacd session CPU over 30s:
 
-**Architecture:** The SurfaceCommand callback intercepts H.264 data and stores it on the display layer. During the normal frame flush cycle (`guac_display_plan_apply`), the H.264 data is sent to clients as a custom `h264` instruction before worker threads start encoding. All IMG operations for the H.264 layer are skipped, eliminating the decode→re-encode overhead.
+| | decode + re-encode | passthrough |
+|---|---|---|
+| xrdp (AVC420) | ~100% of a core | **2.0%** |
+| Windows 11 (AVC444) | 90.6% of a core | **2.1%** |
 
-This approach avoids the socket contention issue that occurred when H.264 was sent directly from FreeRDP's SurfaceCommand callback thread, which raced with guac_display's worker threads writing to the same socket.
+**How it works.** `guac_rdp_gfx_surface_command()` wraps FreeRDP's SurfaceCommand handler, copies the NAL data out of `cmd->extra` before the original handler can free it, and skips the GDI decode entirely for commands it captured. The frames are queued on the display layer and sent during the frame flush as a custom `h264` instruction:
+
+```
+h264 <stream> <layer> <keyframe> <x> <y> <width> <height>
+     <view> <numrects> [<x> <y> <width> <height>]...
+```
+
+Region rects identify which parts of the decoded picture are valid — the picture is always full-surface sized, so a server encoding only part of the screen leaves the rest holding nothing meaningful. A count of zero means the whole picture is valid.
+
+**AVC444.** Windows only offers H.264 when the client advertises the AVC444 capability: FreeRDP emits the RDPGFX V10 capability sets only when `GfxAVC444` is set, and Windows offers nothing below V10 (verified by advertising AVC420 alone at V8.1 and receiving zero H.264 — only CLEARCODEC and CAPROGRESSIVE). AVC444 is therefore always advertised, and AVC444 streams are handled rather than avoided.
+
+An AVC444 picture is split across two views inside **one** H.264 sequence — FreeRDP decodes both through the same `H264_CONTEXT`. Both views must therefore reach the client's decoder, in order; dropping either leaves later pictures referencing data it never received, which renders as blocky wrongly-coloured macroblocks and reports **no decode error**, since what arrives is well formed. The `view` field marks which is which:
+
+| view | meaning | drawn |
+|------|---------|-------|
+| 0 | AVC420, or the main view of AVC444 | yes |
+| 1 | AVC444 auxiliary chroma, v1 layout | no |
+| 2 | AVC444 auxiliary chroma, v2 layout | no |
+
+The client decodes every view. View 0 is drawn; the auxiliary view supplies the chroma samples it lacks, and `static/guac/Yuv444.js` combines the two into full 4:4:4 in a single WebGL2 pass, inverting the encoder's chroma filter to recover the one sample per 2x2 block that neither view carries. That matters for subpixel-antialiased text, which reads as fringed at 4:2:0. The path falls back to drawing view 0 alone at 4:2:0 on missing WebGL2, a lost GL context, or a pixel format it cannot read.
+
+**Threading.** The frame queue has its own lock, deliberately **not** the display's `pending_frame.lock`. The render thread holds that one across the whole flush including image encoding, so queueing under it blocked the protocol thread — which for RDP is the thread that sends `RDPGFX_FRAME_ACKNOWLEDGE`, and a server throttles when frames go unacknowledged. The NAL copy happens before locking, and the flush detaches the queue and sends outside it.
+
+**Frame signalling.** Two non-obvious requirements, both of which stall the stream if missed:
+
+- Signal via `rdp_client->gdi_modified`, not a direct `notify_modified()`. EGFX has no explicit frame boundary, so per-surface-command notifies keep `FRAME_MODIFIED` permanently set and every flush waits out `MAX_FRAME_DURATION` (100ms).
+- An H.264-only frame must count toward `frame_nonempty`, or no NOP is enqueued, no worker runs, and `sync` is never sent — which stops `display.flush()` client-side and inflates `guac_client_get_processing_lag()`.
+
+**Keyframes** are detected as an IDR slice (NAL type 5) only. Treating an SPS (type 7) as sufficient marks ordinary delta frames as keyframes, and handing a decoder a delta labelled `key` makes it discard queued work.
+
+**Configuration:** none. Passthrough follows the per-connection `enable-h264` argument, which rustguac sets from the connection entry. There are no environment variables.
+
+**Requires:** a server sending H.264 over RDPGFX, and a browser with WebCodecs (Chrome/Edge 94+, Firefox 130+). See `docs/rdp-h264.md` for the Windows host settings, which are not optional.
 
 **Files patched:**
 
-| File | Fix |
+| File | Change |
 |------|-----|
-| `src/libguac/display-priv.h` | Add H.264 buffer fields to `guac_display_layer` (data, length, keyframe, rect) |
-| `src/libguac/guacamole/display.h` | Add `guac_display_layer_set_h264()` public API |
-| `src/libguac/display-layer.c` | Implement `guac_display_layer_set_h264()` with lock management |
-| `src/libguac/display-layer-list.c` | Free H.264 data in layer cleanup |
-| `src/libguac/display-plan.c` | Send H.264 data during plan apply, skip IMG ops for H.264 layers |
-| `src/protocols/rdp/channels/rdpgfx.c` | Wrap SurfaceCommand to store H.264 on display layer after GDI decode |
-| `src/protocols/rdp/settings.c` | Enable GfxH264 (AVC420) in FreeRDP settings; leave GfxAVC444 disabled (see AVC420-only note above) |
-
-**Requires:** RDP server with H.264 support (xrdp with x264, or Windows with AVC hardware encoder). Browser must support WebCodecs VideoDecoder (Chrome/Edge 94+, Firefox 130+).
+| `src/libguac/guacamole/display.h` | `guac_display_layer_set_h264()`, view constants |
+| `src/libguac/display-priv.h` | H.264 frame queue and its lock on the layer |
+| `src/libguac/display-layer.c` | Queue frames without blocking on the display lock |
+| `src/libguac/display-layer-list.c` | Init/destroy the queue lock; free queued frames |
+| `src/libguac/display-plan.c` | Send queued frames during flush; walk pending-frame layers |
+| `src/libguac/display-flush.c` | Count H.264-only frames toward frame_nonempty |
+| `src/protocols/rdp/channels/rdpgfx.c` | Capture NAL data, skip the GDI decode, forward both AVC444 views |
+| `src/protocols/rdp/rdp.h` | Store the original SurfaceCommand/CapsConfirm callbacks |
+| `src/protocols/rdp/settings.c` | Advertise GfxH264 and GfxAVC444 when enable-h264 is set |
+| `src/protocols/rdp/settings.h` | `enable_h264` connection parameter |
 
 ## 005-rdp-resize-dirty-flush.patch
 

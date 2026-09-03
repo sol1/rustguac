@@ -162,6 +162,7 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 - [Web Browser Sessions](docs/web-sessions.md): autofill, domain allowlisting, login scripts
 - [VDI Desktop Containers](docs/vdi.md): Docker desktops, image requirements, persistent homes
 - [RDP Video Performance](docs/rdp-video-performance.md): H.264 passthrough, GFX pipeline, xrdp tuning
+- [RDP H.264 Passthrough](docs/rdp-h264.md): enabling it, and the Windows host settings it requires
 - [Credential Variables](docs/credential-variables.md): shared credentials across entries
 - [Reports](docs/reports.md): session analytics, history, CSV export
 

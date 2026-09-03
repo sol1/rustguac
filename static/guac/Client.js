@@ -1473,6 +1473,34 @@ Guacamole.Client = function(tunnel) {
             var width = parseInt(parameters[5]);
             var height = parseInt(parameters[6]);
 
+            // Region rects, if sent. These identify which parts of the decoded
+            // picture are actually valid; the picture is always full-surface
+            // sized, so a server mixing codecs leaves the remainder holding no
+            // meaningful content. A count of zero (or an older guacd that
+            // sends no count at all) means the whole picture is valid.
+            // Which view this access unit carries. 0 is a displayable picture
+            // (AVC420, or the main view of AVC444); 1 and 2 are the auxiliary
+            // chroma views of AVC444 in its v1 and v2 layouts. An auxiliary
+            // view is not an image and must not be drawn, but it must still be
+            // decoded: both views belong to one H.264 sequence, and skipping
+            // either leaves later pictures referencing data the decoder never
+            // received.
+            var view = parameters.length > 7 ? parseInt(parameters[7]) : 0;
+
+            var rects = [];
+            var numRects = parameters.length > 8 ? parseInt(parameters[8]) : 0;
+            for (var r = 0; r < numRects; r++) {
+                var base = 9 + r * 4;
+                if (base + 3 >= parameters.length)
+                    break;
+                rects.push({
+                    x      : parseInt(parameters[base]),
+                    y      : parseInt(parameters[base + 1]),
+                    width  : parseInt(parameters[base + 2]),
+                    height : parseInt(parameters[base + 3])
+                });
+            }
+
             // Create stream to receive H.264 NAL unit data
             var stream = streams[stream_index] = new Guacamole.InputStream(guac_client, stream_index);
 
@@ -1490,31 +1518,58 @@ Guacamole.Client = function(tunnel) {
                 guac_client._h264Decoder = new Guacamole.H264Decoder(display);
             }
 
-            // Collect base64 blob data
-            var base64Data = '';
-            stream.onblob = function(data) {
-                base64Data += data;
+            // Collect NAL unit data. Guacamole.ArrayBufferReader decodes each
+            // blob to an ArrayBuffer as it arrives, so the chunks can simply be
+            // concatenated at the end.
+            //
+            // The obvious implementation -- accumulating a base64 string and
+            // running atob() plus a charCodeAt() loop at the end -- allocates
+            // repeatedly while the string grows, then a second full-size
+            // string, then walks it one character at a time. At 30fps with
+            // frames of tens of kilobytes that is a large, sustained garbage
+            // rate, and the resulting GC pauses show up as decode-latency
+            // spikes and dropped frames.
+            var chunks = [];
+            var totalLength = 0;
+
+            var reader = new Guacamole.ArrayBufferReader(stream);
+
+            reader.ondata = function(buffer) {
+                chunks.push(new Uint8Array(buffer));
+                totalLength += buffer.byteLength;
             };
 
-            stream.onend = function() {
-                if (!base64Data) return;
+            reader.onend = function() {
 
-                // Decode base64 to ArrayBuffer
+                if (!totalLength)
+                    return;
+
                 try {
-                    var binaryString = atob(base64Data);
-                    var bytes = new Uint8Array(binaryString.length);
-                    for (var i = 0; i < binaryString.length; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
 
-                    // Feed to H.264 decoder
-                    guac_client._h264Decoder.decode(
-                        layer, x, y, width, height,
-                        bytes.buffer, isKeyFrame
+                    // Single allocation, then a bulk copy per chunk
+                    var bytes = new Uint8Array(totalLength);
+                    var offset = 0;
+                    for (var i = 0; i < chunks.length; i++) {
+                        bytes.set(chunks[i], offset);
+                        offset += chunks[i].length;
+                    }
+                    chunks = null;
+
+                    // Feed to the H.264 decoder via the display, so the
+                    // decoded frame is painted in stream order rather than
+                    // whenever decode finishes. Drawing straight from the
+                    // decoder's output callback lets a frame land after the
+                    // img/copy/rect operations that followed it, repainting
+                    // stale video over newer content -- visible as ghosting
+                    // wherever a server interleaves H.264 with other codecs.
+                    display.drawH264(
+                        layer, guac_client._h264Decoder,
+                        x, y, width, height,
+                        bytes.buffer, isKeyFrame, rects, view
                     );
                 } catch (e) {
                     if (typeof console !== 'undefined')
-                        console.error('[rustguac] H.264 base64 decode error:', e);
+                        console.error('[rustguac] H.264 stream decode error:', e);
                 }
             };
 
