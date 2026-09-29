@@ -18,8 +18,9 @@ pub struct OidcConfig {
     pub client_id: String,
     /// OIDC client secret. May be set in config.toml or via the
     /// `OIDC_CLIENT_SECRET` environment variable; the env var wins when
-    /// both are present. Validated at startup to be non-empty when
-    /// `[oidc]` is configured (see Config::load).
+    /// both are present. `serve` validates it is non-empty when `[oidc]`
+    /// is configured (see Config::validate_oidc_secret); admin CLI
+    /// subcommands do not require it.
     #[serde(default)]
     pub client_secret: Option<String>,
     pub redirect_uri: String,
@@ -1229,34 +1230,48 @@ impl Config {
 
         // OIDC client_secret resolution. The env var wins over whatever
         // is in the config file, and is the documented way to keep the
-        // secret out of TOML on disk. Either source is fine, but at least
-        // one must produce a non-empty value when `[oidc]` is present;
-        // bug #121 was that the field was non-Optional in serde, so
-        // omitting it from config.toml failed parsing before the env var
-        // could fill it in.
+        // secret out of TOML on disk. Only the override happens here:
+        // whether a secret is *required* depends on the subcommand, so
+        // the presence check lives in `validate_oidc_secret` and is run
+        // by `serve` alone. Admin CLI subcommands (add-admin, map-group,
+        // ...) only touch the SQLite database and must work from an
+        // interactive shell where the systemd EnvironmentFile has not
+        // been sourced.
         if let Some(ref mut oidc) = config.oidc {
             if let Ok(secret) = std::env::var("OIDC_CLIENT_SECRET") {
                 if !secret.is_empty() {
                     oidc.client_secret = Some(secret);
                 }
             }
-            let has_secret = oidc
-                .client_secret
-                .as_ref()
-                .map(|s| !s.is_empty())
-                .unwrap_or(false);
-            if !has_secret {
-                eprintln!(
-                    "[config] ERROR: [oidc] is configured but no client_secret was provided.\n\
-                     [config]        Set `client_secret = \"...\"` in config.toml, or export\n\
-                     [config]        OIDC_CLIENT_SECRET in the rustguac environment\n\
-                     [config]        (e.g. /opt/rustguac/env)."
-                );
-                std::process::exit(1);
-            }
         }
 
         config
+    }
+
+    /// Check that `[oidc]`, when present, has a usable client secret from
+    /// either config.toml or `OIDC_CLIENT_SECRET` (already merged by
+    /// `Config::load`). Returns the operator-facing error text on failure.
+    /// Only the server needs this; see the note in `Config::load`. Bug #121
+    /// was that the field was non-Optional in serde, so omitting it from
+    /// config.toml failed parsing before the env var could fill it in.
+    pub fn validate_oidc_secret(&self) -> Result<(), String> {
+        let Some(ref oidc) = self.oidc else {
+            return Ok(());
+        };
+        let has_secret = oidc
+            .client_secret
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if has_secret {
+            Ok(())
+        } else {
+            Err("[oidc] is configured but no client_secret was provided.\n\
+                 [config]        Set `client_secret = \"...\"` in config.toml, or export\n\
+                 [config]        OIDC_CLIENT_SECRET in the rustguac environment\n\
+                 [config]        (e.g. /opt/rustguac/env)."
+                .to_string())
+        }
     }
 
     /// Effective recording path: `[recording].path` overrides top-level `recording_path`.
@@ -1444,6 +1459,71 @@ mod tests {
         "#;
         let config: OidcConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.client_secret.as_deref(), Some("from-config"));
+    }
+
+    #[test]
+    fn validate_oidc_secret_passes_without_oidc_section() {
+        let config = Config::default();
+        assert!(config.oidc.is_none());
+        assert!(config.validate_oidc_secret().is_ok());
+    }
+
+    #[test]
+    fn validate_oidc_secret_rejects_missing_secret() {
+        // The [oidc] block parses fine without a secret (see #121); the
+        // presence check is a separate, serve-only step so that admin CLI
+        // subcommands run from a shell that hasn't sourced /opt/rustguac/env.
+        let oidc: OidcConfig = toml::from_str(
+            r#"
+            issuer_url = "https://idp.example.com/"
+            client_id = "rustguac"
+            redirect_uri = "https://console.example.com/oidc/callback"
+        "#,
+        )
+        .unwrap();
+        let config = Config {
+            oidc: Some(oidc),
+            ..Config::default()
+        };
+        let err = config.validate_oidc_secret().unwrap_err();
+        assert!(err.contains("no client_secret was provided"), "{err}");
+        assert!(err.contains("OIDC_CLIENT_SECRET"), "{err}");
+    }
+
+    #[test]
+    fn validate_oidc_secret_rejects_empty_secret() {
+        let oidc: OidcConfig = toml::from_str(
+            r#"
+            issuer_url = "https://idp.example.com/"
+            client_id = "rustguac"
+            client_secret = ""
+            redirect_uri = "https://console.example.com/oidc/callback"
+        "#,
+        )
+        .unwrap();
+        let config = Config {
+            oidc: Some(oidc),
+            ..Config::default()
+        };
+        assert!(config.validate_oidc_secret().is_err());
+    }
+
+    #[test]
+    fn validate_oidc_secret_accepts_config_secret() {
+        let oidc: OidcConfig = toml::from_str(
+            r#"
+            issuer_url = "https://idp.example.com/"
+            client_id = "rustguac"
+            client_secret = "from-config"
+            redirect_uri = "https://console.example.com/oidc/callback"
+        "#,
+        )
+        .unwrap();
+        let config = Config {
+            oidc: Some(oidc),
+            ..Config::default()
+        };
+        assert!(config.validate_oidc_secret().is_ok());
     }
 
     #[test]

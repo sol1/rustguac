@@ -217,7 +217,17 @@ async fn main() {
     let database = db::init_db(&config.db_path).expect("Failed to open database");
 
     match cli.command {
-        None | Some(Command::Serve) => run_server(config, database).await,
+        None | Some(Command::Serve) => {
+            // Only the server talks to the IdP, so only the server insists on
+            // an OIDC client secret. Checked here rather than in Config::load
+            // so `add-admin` & co. work from a shell where /opt/rustguac/env
+            // (systemd's EnvironmentFile) has not been sourced.
+            if let Err(msg) = config.validate_oidc_secret() {
+                eprintln!("[config] ERROR: {}", msg);
+                std::process::exit(1);
+            }
+            run_server(config, database).await
+        }
         Some(Command::AddAdmin {
             name,
             allowed_ips,
