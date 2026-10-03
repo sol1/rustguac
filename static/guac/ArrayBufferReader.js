@@ -41,6 +41,17 @@ Guacamole.ArrayBufferReader = function(stream) {
 
         var arrayBuffer, bufferView;
 
+        // Already bytes. A server that supports binary blob frames sends the
+        // payload of an h264 or audio stream as a binary WebSocket frame
+        // rather than base64 inside a text instruction, which is a quarter of
+        // the wire saved and this decode skipped entirely. Every other stream,
+        // and any server that does not do it, still arrives as base64 below.
+        if (data instanceof ArrayBuffer) {
+            if (guac_reader.ondata)
+                guac_reader.ondata(data);
+            return;
+        }
+
         // Use native methods for directly decoding base64 to an array buffer
         // when possible
         if (Uint8Array.fromBase64) {

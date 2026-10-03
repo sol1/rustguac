@@ -1,0 +1,501 @@
+diff --git a/src/libguac/display-layer.c b/src/libguac/display-layer.c
+index d5deaa6e..08859247 100644
+--- a/src/libguac/display-layer.c
++++ b/src/libguac/display-layer.c
+@@ -416,3 +416,28 @@ void guac_display_layer_set_h264(guac_display_layer* layer,
+                 "chain is broken until the next keyframe.", dropped);
+ 
+ }
++
++int guac_display_layer_h264_backlog(guac_display_layer* layer) {
++
++    if (layer == NULL)
++        return 0;
++
++    int backlog = 0;
++
++    pthread_mutex_lock(&layer->h264_queue_lock);
++
++    /* Count only main-view frames. An AVC444 picture is queued as two entries,
++     * a main view and the auxiliary view refining its chroma, so the raw queue
++     * length counts one frame of video twice and would halve the effective
++     * backlog for callers pacing themselves against it. */
++    for (struct guac_h264_frame* current = layer->h264_queue;
++            current != NULL; current = current->next) {
++        if (current->view == GUAC_H264_VIEW_MAIN)
++            backlog++;
++    }
++
++    pthread_mutex_unlock(&layer->h264_queue_lock);
++
++    return backlog;
++
++}
+diff --git a/src/libguac/guacamole/display.h b/src/libguac/guacamole/display.h
+index 4c298fb7..da6b92f1 100644
+--- a/src/libguac/guacamole/display.h
++++ b/src/libguac/guacamole/display.h
+@@ -493,6 +493,36 @@ void guac_display_layer_set_h264(guac_display_layer* layer,
+         int x, int y, int width, int height,
+         const guac_rect* rects, int num_rects, int view, int paired);
+ 
++/**
++ * Returns the number of H.264 frames of video queued on the given layer and
++ * not yet flushed to connected clients.
++ *
++ * Only main-view access units are counted. An AVC444 picture is queued as two
++ * entries -- a main view and the auxiliary view refining its chroma -- and
++ * counting both would make the same second of video read as twice the backlog
++ * it does under AVC420.
++ *
++ * This is the backlog between the source of the frames and the clients
++ * consuming them, and thus a direct measure of whether the source is
++ * outrunning the clients. It rises when the render thread is waiting out
++ * client processing lag, and falls as frames are flushed.
++ *
++ * A protocol implementation that can slow its source down -- RDP can, by
++ * delaying the acknowledgement of graphics frames -- should consult this
++ * rather than let the queue reach the cap enforced by
++ * guac_display_layer_set_h264(), where the oldest frames are dropped. A drop
++ * breaks the decoder's reference chain, costing every subsequent frame until
++ * the next keyframe, so arriving at the cap is far more expensive than
++ * slowing down before it.
++ *
++ * @param layer
++ *     The layer to query. May be NULL, in which case zero is returned.
++ *
++ * @return
++ *     The number of queued H.264 frames of video.
++ */
++int guac_display_layer_h264_backlog(guac_display_layer* layer);
++
+ /**
+  * Returns a layer representing the current mouse cursor icon. Changes to the
+  * contents of this layer will affect the remote mouse cursor after the current
+diff --git a/src/protocols/rdp/channels/rdpgfx.c b/src/protocols/rdp/channels/rdpgfx.c
+index cf060bdf..f40bd892 100644
+--- a/src/protocols/rdp/channels/rdpgfx.c
++++ b/src/protocols/rdp/channels/rdpgfx.c
+@@ -34,6 +34,11 @@
+ 
+ #include <stdlib.h>
+ #include <string.h>
++#include <guacamole/timestamp.h>
++
++#include <inttypes.h>
++#include <limits.h>
++#include <unistd.h>
+ 
+ /**
+  * Checks whether an H.264 access unit contains an IDR slice, and optionally
+@@ -431,6 +436,368 @@ static UINT guac_rdp_gfx_caps_confirm(RdpgfxClientContext* context,
+  *     Event-specific arguments, mainly the name of the channel, and a
+  *     reference to the associated plugin loaded for that channel by FreeRDP.
+  */
++/**
++ * Default backlog, in queued frames of video, that clients are allowed to fall
++ * behind by before acknowledgement of further graphics frames is held back.
++ * Overridden by the GUAC_RDP_H264_BACKLOG_TARGET environment variable, where
++ * zero disables holding entirely.
++ *
++ * This is a backstop, not a rate controller, and the distinction is what sets
++ * the value. A client normally runs a frame or two behind, and rises and falls
++ * around that as decode cost varies with scene complexity. A target inside
++ * that working range is tripped continuously: the queue fills, the ack is
++ * held, the queue drains, and it fills again, delivering frames in bursts
++ * separated by stalls -- measurably worse than not throttling at all, because
++ * the stalls are visible and the backlog was never dangerous.
++ *
++ * The value must therefore sit above the depth a healthy session reaches and
++ * below the 120-frame cap in guac_display_layer_set_h264(), where the oldest
++ * frames are dropped and the decoder's reference chain breaks. 32 leaves room
++ * for ordinary jitter while still engaging well before that cliff.
++ */
++#define GUAC_RDP_H264_BACKLOG_TARGET_DEFAULT 32
++
++/**
++ * Default client processing lag, in milliseconds, that is tolerated before
++ * acknowledgement of further graphics frames is held back. Overridden by the
++ * GUAC_RDP_H264_LAG_TARGET environment variable, where zero disables the lag
++ * gate and leaves only the backlog gate.
++ *
++ * This is the primary gate, and the backlog is a backstop behind it. The
++ * backlog only measures frames still held by guacd; once a frame has been
++ * flushed to the socket it is invisible there, even though the client may not
++ * have decoded or drawn it yet. On a fast link the queue therefore drains to
++ * nothing while the client falls further and further behind, which is exactly
++ * the case an acknowledgement is supposed to report upstream.
++ *
++ * guac_client_get_processing_lag() measures the round trip of the Guacamole
++ * sync handshake, which terminates at the client after it has processed the
++ * frame, and subtracts its estimate of network round-trip time
++ * (user-handlers.c). What remains is the client's own inability to keep up --
++ * decode cost, compositing, an AVC444 chroma combine -- none of which the RDP
++ * server can observe on its own. Because the network component is already
++ * removed, an absolute threshold is meaningful on a WAN as well as a LAN.
++ *
++ * The render thread waits out this same signal before sending the next frame
++ * (display-render-thread.c), so gating acknowledgement on it makes the
++ * upstream and downstream halves of the pipeline agree rather than leaving
++ * guacd to absorb the difference in its queue until frames are dropped.
++ */
++#define GUAC_RDP_H264_LAG_TARGET_DEFAULT 50
++
++/**
++ * The longest a single graphics frame acknowledgement may be held back, in
++ * milliseconds. Overridden by the GUAC_RDP_H264_ACK_MAX_DELAY environment
++ * variable.
++ *
++ * This cap bounds a client that has stopped draining, not one that is merely
++ * behind: the proportional hold already handles "behind" by holding for the
++ * excess. Sizing it for the latter is a mistake that was measured -- at 100ms
++ * every frame of ordinary heavy content clamped, the hold became constant
++ * rather than proportional, and the loop could not reach equilibrium because
++ * it was forbidden from slowing below 1000/cap.
++ *
++ * The cap does set a frame rate floor, and how hard a floor depends on the
++ * server. One with several frames in flight absorbs a held ack smoothly; one
++ * in strict lockstep -- xorgxrdp captures only when nothing is outstanding --
++ * stops capturing until the ack arrives, making the frame period the hold time
++ * and the cap a divider. At 400ms that floor is 2.5fps, reached only when lag
++ * exceeds the target by the full cap, which is genuine overload rather than
++ * load.
++ *
++ * The wait must be bounded. A client that has stopped draining entirely would
++ * otherwise stall the EGFX channel indefinitely, and an unbounded stall is
++ * indistinguishable to the server from a client that has gone away. Capping it
++ * means a pathologically slow client costs frame rate rather than the session.
++ */
++#define GUAC_RDP_H264_ACK_MAX_DELAY_DEFAULT 400
++
++/**
++ * How often the backlog is re-checked while an acknowledgement is held back,
++ * in milliseconds.
++ */
++#define GUAC_RDP_H264_ACK_POLL_INTERVAL 5
++
++/**
++ * Callback invoked by FreeRDP when the server signals the end of a graphics
++ * frame, wrapping the handler installed by gdi_graphics_pipeline_init().
++ *
++ * Returning from this callback is what releases the RDPGFX_FRAME_ACKNOWLEDGE
++ * that FreeRDP sends for the frame (see rdpgfx_recv_end_frame_pdu()), which
++ * makes it the one point where guacd can apply backpressure to the server.
++ *
++ * That matters only for H.264 passthrough. Everywhere else guacd is the
++ * encoder and already adapts: guac_display_suggest_quality() lowers JPEG and
++ * WebP quality as client processing lag rises, and the render thread waits
++ * that lag out before starting the next frame. In passthrough guacd is not
++ * the encoder, has no quality to lower, and the only party that can slow down
++ * is the server -- which will, since a server applies flow control to
++ * unacknowledged frames.
++ *
++ * Without this the source runs at its own rate regardless of what clients can
++ * drain, frames accumulate on the layer, and the queue eventually hits its cap
++ * and drops the oldest. Dropping breaks the decoder's reference chain, so
++ * every subsequent frame is discarded until the next keyframe: the failure
++ * arrives as a stall, long after the overload that caused it, and costs far
++ * more than the delay that would have prevented it.
++ *
++ * Note that this throttles frame *rate*. Whether the server also lowers
++ * bitrate or quantiser in response is a decision its own encoder makes, from
++ * its own view of the link.
++ *
++ * @param context
++ *     The RDPGFX client context.
++ *
++ * @param pdu
++ *     The received RDPGFX_END_FRAME_PDU.
++ *
++ * @return
++ *     CHANNEL_RC_OK on success, an error code otherwise.
++ */
++/**
++ * Returns the value of the given environment variable as an integer, or the
++ * given default if it is unset or does not parse. Negative values are refused
++ * so that a typo cannot invert the meaning of a threshold; zero is allowed and
++ * left for the caller to interpret.
++ *
++ * The value is read once and cached. Two threads racing to initialise it write
++ * the same value, so no lock is needed.
++ *
++ * @param name
++ *     The name of the environment variable to read.
++ *
++ * @param fallback
++ *     The value to use if the variable is unset or invalid.
++ *
++ * @param cached
++ *     Storage for the resolved value, which must be initialised to -1.
++ *
++ * @return
++ *     The resolved value.
++ */
++static int guac_rdp_gfx_tunable(const char* name, int fallback, int* cached) {
++
++    if (*cached >= 0)
++        return *cached;
++
++    int value = fallback;
++
++    const char* raw = getenv(name);
++    if (raw != NULL && *raw != '\0') {
++        char* end = NULL;
++        long parsed = strtol(raw, &end, 10);
++        if (*end == '\0' && parsed >= 0 && parsed <= INT_MAX)
++            value = (int) parsed;
++    }
++
++    *cached = value;
++    return value;
++
++}
++
++/**
++ * Returns the backlog, in queued frames of video, that clients may fall behind
++ * by before acknowledgement is held back. Zero disables holding entirely,
++ * leaving the drop cap in guac_display_layer_set_h264() as the only limit.
++ *
++ * @return
++ *     The configured backlog target.
++ */
++static int guac_rdp_gfx_backlog_target(void) {
++    static int cached = -1;
++    return guac_rdp_gfx_tunable("GUAC_RDP_H264_BACKLOG_TARGET",
++            GUAC_RDP_H264_BACKLOG_TARGET_DEFAULT, &cached);
++}
++
++/**
++ * Returns the maximum time, in milliseconds, that acknowledgement of a single
++ * frame may be held back.
++ *
++ * @return
++ *     The configured cap on the acknowledgement delay.
++ */
++static int guac_rdp_gfx_ack_max_delay(void) {
++    static int cached = -1;
++    return guac_rdp_gfx_tunable("GUAC_RDP_H264_ACK_MAX_DELAY",
++            GUAC_RDP_H264_ACK_MAX_DELAY_DEFAULT, &cached);
++}
++
++/**
++ * Returns the client processing lag, in milliseconds, tolerated before
++ * acknowledgement is held back. Zero disables the lag gate.
++ *
++ * @return
++ *     The configured lag target.
++ */
++static int guac_rdp_gfx_lag_target(void) {
++    static int cached = -1;
++    return guac_rdp_gfx_tunable("GUAC_RDP_H264_LAG_TARGET",
++            GUAC_RDP_H264_LAG_TARGET_DEFAULT, &cached);
++}
++
++/**
++ * Returns non-zero if the connected clients are behind by either measure,
++ * and thus if acknowledgement of the current frame should continue to be
++ * held back. A gate whose target is zero is disabled and never trips.
++ *
++ * @param lag
++ *     The current client processing lag, in milliseconds.
++ *
++ * @param lag_target
++ *     The lag tolerated before the lag gate trips.
++ *
++ * @param backlog
++ *     The current backlog, in queued frames of video.
++ *
++ * @param backlog_target
++ *     The backlog tolerated before the backlog gate trips.
++ *
++ * @return
++ *     Non-zero if the clients are behind, zero otherwise.
++ */
++static int guac_rdp_gfx_clients_behind(int lag, int lag_target,
++        int backlog, int backlog_target) {
++
++    if (lag_target > 0 && lag > lag_target)
++        return 1;
++
++    if (backlog_target > 0 && backlog > backlog_target)
++        return 1;
++
++    return 0;
++
++}
++
++static UINT guac_rdp_gfx_end_frame(RdpgfxClientContext* context,
++        const RDPGFX_END_FRAME_PDU* pdu) {
++
++    /* gfx->custom points to rdpGdi (set by gdi_graphics_pipeline_init) */
++    rdpGdi* gdi = (rdpGdi*) context->custom;
++    rdpContext* rdp_context = gdi->context;
++    guac_client* client = ((rdp_freerdp_context*) rdp_context)->client;
++    guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
++
++    UINT result = CHANNEL_RC_OK;
++
++    pcRdpgfxEndFrame orig = (pcRdpgfxEndFrame) rdp_client->orig_end_frame;
++    if (orig != NULL)
++        result = orig(context, pdu);
++
++    /* The display is torn down before the channel is, so a frame arriving
++     * during disconnect has nothing to measure. */
++    if (rdp_client->display == NULL)
++        return result;
++
++    /* Resolve both targets before touching the queue: querying the backlog
++     * takes the same lock the render thread uses to drain it, and doing that
++     * once per frame is not free. Two disabled gates must cost nothing. */
++    int lag_target = guac_rdp_gfx_lag_target();
++    int backlog_target = guac_rdp_gfx_backlog_target();
++    if (lag_target <= 0 && backlog_target <= 0)
++        return result;
++
++    /* Sampled for every frame that reaches a live gate, not only for the
++     * frames actually held. The gap credited below is the spacing since the
++     * previous frame, so skipping the update whenever clients happen to be
++     * keeping up would leave a stale timestamp and credit an entire quiet
++     * period against the first frame of the next episode -- which is the one
++     * frame where engaging promptly matters most. */
++    guac_timestamp now = guac_timestamp_current();
++    int since_last = (rdp_client->last_gfx_frame_end != 0)
++            ? (int) (now - rdp_client->last_gfx_frame_end) : 0;
++    rdp_client->last_gfx_frame_end = now;
++
++    guac_display_layer* default_layer =
++            guac_display_default_layer(rdp_client->display);
++
++    int lag = guac_client_get_processing_lag(client);
++    int backlog = (backlog_target > 0)
++            ? guac_display_layer_h264_backlog(default_layer) : 0;
++
++    if (!guac_rdp_gfx_clients_behind(lag, lag_target, backlog, backlog_target))
++        return result;
++
++    int max_delay = guac_rdp_gfx_ack_max_delay();
++
++    /* The lag contributes a fixed, proportional delay rather than a condition
++     * to wait on. Processing lag is only recalculated when a sync response
++     * arrives (user-handlers.c), a sync is only sent when the render thread
++     * has a frame to flush, and against a lockstep server no further frame is
++     * captured until this acknowledgement goes out -- so polling for the lag
++     * to fall would block the very signal it waits for, and every hold would
++     * run to the cap regardless of how the client is actually doing.
++     *
++     * Holding for the excess instead closes the loop across frames: a client
++     * that is further behind is given proportionally longer, and as it catches
++     * up the excess shrinks and the rate recovers on its own. This mirrors
++     * what the render thread already does downstream, where the wait is
++     * likewise computed once and slept rather than polled. */
++    int hold = 0;
++    if (lag_target > 0 && lag > lag_target)
++        hold = lag - lag_target;
++
++    /* Credit the spacing the server has already provided since the last frame,
++     * exactly as the render thread's required_wait subtracts
++     * time_since_last_frame (display-render-thread.c). Without it this is an
++     * additive delay, and additive delay composes badly with a server that
++     * paces itself.
++     *
++     * Such a server exists: xorgxrdp's adaptive pacing steers its capture
++     * interval from the very acknowledgement round trip held back here, so an
++     * unconditional hold is read upstream as client latency and answered with
++     * a longer interval, which shortens the hold, which shortens the interval.
++     * Two controllers actuating one frame rate through each other's sensor,
++     * hunting on a roughly one-second cycle. Crediting the elapsed time turns
++     * this from a competing controller into a floor: a server that has already
++     * spaced its frames beyond the excess is held for nothing at all and keeps
++     * sole ownership of the loop, while one that floods -- Windows, which
++     * paces not at all -- is still throttled by whatever it did not provide.
++     *
++     * This is why the gate needs no per-connection setting: it stands down on
++     * its own against a server that does not need it. */
++    hold = (since_last < hold) ? hold - since_last : 0;
++
++    if (hold > max_delay)
++        hold = max_delay;
++
++    /* Hold the acknowledgement back, giving up after the cap so that a stalled
++     * client cannot stall the channel. The backlog, unlike the lag, is drained
++     * by the render thread while we wait, so it is worth re-reading: a backlog
++     * that clears early releases the frame early. */
++    int waited = 0;
++    while (waited < max_delay
++            && client->state == GUAC_CLIENT_RUNNING
++            && (waited < hold
++                || (backlog_target > 0 && backlog > backlog_target))) {
++
++        usleep(GUAC_RDP_H264_ACK_POLL_INTERVAL * 1000);
++        waited += GUAC_RDP_H264_ACK_POLL_INTERVAL;
++
++        if (backlog_target > 0)
++            backlog = guac_display_layer_h264_backlog(default_layer);
++
++    }
++
++    /* Refreshed only for the log; it cannot have changed during the hold. */
++    lag = guac_client_get_processing_lag(client);
++
++    if (waited >= max_delay)
++        guac_client_log(client, GUAC_LOG_DEBUG,
++                "Held frame %" PRIu32 " acknowledgement for the full %i ms cap "
++                "(lag %i ms, backlog %i frames). Against a lockstep server the "
++                "cap is a frame rate floor of %i fps; raise "
++                "GUAC_RDP_H264_LAG_TARGET if the clients are keeping up.",
++                pdu->frameId, max_delay, lag, backlog, 1000 / max_delay);
++    else
++        guac_client_log(client, GUAC_LOG_TRACE,
++                "Held frame %" PRIu32 " acknowledgement for %i ms to let "
++                "clients catch up (lag now %i ms, backlog %i frames).",
++                pdu->frameId, waited, lag, backlog);
++
++    return result;
++
++}
++
+ static void guac_rdp_rdpgfx_channel_connected(rdpContext* context,
+         ChannelConnectedEventArgs* args) {
+ 
+@@ -500,6 +867,15 @@ static void guac_rdp_rdpgfx_channel_connected(rdpContext* context,
+                 rdpgfx->CapsConfirm = guac_rdp_gfx_caps_confirm;
+             }
+ 
++            /* Wrapped for the same reason and on the same terms as
++             * SurfaceCommand: gdi_graphics_pipeline_init() reinstalls its own
++             * EndFrame on every reconnect, so the test is against what is
++             * currently installed rather than against a once-only flag. */
++            if (rdpgfx->EndFrame != guac_rdp_gfx_end_frame) {
++                rdp_client->orig_end_frame = (void*) rdpgfx->EndFrame;
++                rdpgfx->EndFrame = guac_rdp_gfx_end_frame;
++            }
++
+             guac_client_log(client, GUAC_LOG_INFO,
+                     "H.264 passthrough enabled for RDPGFX channel.");
+ 
+diff --git a/src/protocols/rdp/rdp.h b/src/protocols/rdp/rdp.h
+index 82ca5a1d..78937873 100644
+--- a/src/protocols/rdp/rdp.h
++++ b/src/protocols/rdp/rdp.h
+@@ -147,6 +147,21 @@ typedef struct guac_rdp_client {
+      */
+     void* orig_caps_confirm;
+ 
++    /**
++     * The original RDPGFX EndFrame callback, wrapped so that acknowledgement
++     * of a graphics frame can be held back while connected clients are behind.
++     * See guac_rdp_gfx_end_frame().
++     */
++    void* orig_end_frame;
++
++    /**
++     * When the previous graphics frame ended, or zero before the first. The
++     * gap between frames is the spacing the server has already provided, which
++     * guac_rdp_gfx_end_frame() credits against the delay it would otherwise
++     * add.
++     */
++    guac_timestamp last_gfx_frame_end;
++
+     /**
+      * Queue of mouse, keyboard, and touch events. These events are accumulated
+      * and flushed within the RDP client thread to avoid spending excessive

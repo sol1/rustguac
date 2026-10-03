@@ -811,6 +811,14 @@
                         <input type="checkbox" id="em-enable-h264" style="display:inline;width:auto;margin-right:0.4em"> H.264 Passthrough
                         <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Passes H.264 video direct to browser (low latency, hardware decoded). Requires GFX enabled and xrdp with x264 on the target server.</div>
                     </label>
+                    <label style="margin-top:0.3em">
+                        <input type="checkbox" id="em-native-resolution" style="display:inline;width:auto;margin-right:0.4em"> Native Resolution (HiDPI)
+                        <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Sends the display at the screen's physical pixels instead of its logical ones, so text stays sharp on a HiDPI display. Windows is asked to scale its desktop to match. Nothing does that automatically on Linux/xrdp targets, so enable it there only if the session sets its own DPI &mdash; otherwise icons and text simply come out smaller. Roughly 3&times; the pixels to encode.</div>
+                    </label>
+                    <label style="margin-top:0.3em">
+                        <input type="checkbox" id="em-h264-chroma444" style="display:inline;width:auto;margin-right:0.4em"> Full Colour (4:4:4)
+                        <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Only applies with H.264 Passthrough. Sharpens coloured text and fine colour detail at the cost of noticeably more browser CPU, and the browser falls back to standard colour when it cannot keep up. Makes little visible difference with Native Resolution on a HiDPI screen. Leave off unless colour fringing on text bothers you.</div>
+                    </label>
                     <div class="field-hint" style="margin-top:0.8em;margin-bottom:0.5em">Desktop appearance. Off by default to save bandwidth; enable for a normal-looking Windows desktop.</div>
                     <label style="margin-top:0.3em">
                         <input type="checkbox" id="em-enable-wallpaper" style="display:inline;width:auto;margin-right:0.4em"> Show Wallpaper
@@ -1021,6 +1029,26 @@
         var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',aurora:'Midnight blue with ambient glow',jaguar:'Racing green & gold'};
         function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'aurora';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){if(l.src!==t.logo_url&&!l.src.endsWith(t.logo_url))l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
         var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
+        // Returns the display fields to send when creating a session, given the
+        // browser's CSS-pixel viewport.
+        //
+        // The dimensions stay in CSS pixels, with device_pixel_ratio reported
+        // alongside them. Whether the framebuffer is actually sized in physical
+        // pixels is the connection entry's "Native Resolution" setting to
+        // decide, and the server applies it. The page cannot decide, because it
+        // does not know whether the target scales its own UI to match: an RDP
+        // host is asked to via desktopScaleFactor, while an X11 desktop behind
+        // xrdp has no per-connection equivalent, so there the extra pixels would
+        // only shrink everything.
+        function sessionDisplayBody(cssW, cssH) {
+            return {
+                width: cssW,
+                height: cssH,
+                dpi: Math.round((window.devicePixelRatio || 1) * 96),
+                device_pixel_ratio: window.devicePixelRatio || 1
+            };
+        }
+
         var _driveConfigured = false;
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             if(d.site_title){document.title=d.site_title+' - Connections';document.querySelector('h1').textContent=d.site_title;}
@@ -1338,7 +1366,7 @@
                 method: 'POST',
                 headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
                 credentials: 'same-origin',
-                body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+                body: JSON.stringify(sessionDisplayBody(window.innerWidth, window.innerHeight))
             })
             .then(function(res) { return res.json(); })
             .then(function(data) {
@@ -1632,7 +1660,7 @@
                                     method: 'POST',
                                     headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
                                     credentials: 'same-origin',
-                                    body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+                                    body: JSON.stringify(sessionDisplayBody(window.innerWidth, window.innerHeight))
                                 }).then(function(res) { return res.json(); }).then(function(data) {
                                     if (data.session_id) window.open('/client/' + data.session_id, '_blank');
                                     else showError(data.error || 'Failed to reconnect');
@@ -2378,9 +2406,12 @@
             // Send browser dimensions so RDP sessions start at correct resolution
             var bw = window.innerWidth, bh = window.innerHeight;
             if (!body.width && bw > 0 && bh > 0) {
-                body.width = bw;
-                body.height = bh;
-                if (!body.dpi) body.dpi = Math.round((window.devicePixelRatio || 1) * 96);
+                var display = sessionDisplayBody(bw, bh);
+                body.width = display.width;
+                body.height = display.height;
+                if (!body.dpi) body.dpi = display.dpi;
+                if (!body.device_pixel_ratio)
+                    body.device_pixel_ratio = display.device_pixel_ratio;
             }
             fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect', {
                 method: 'POST',
@@ -3327,6 +3358,8 @@
             document.getElementById('em-enable-desktop-comp').checked = false;
             document.getElementById('em-force-lossless').checked = false;
             document.getElementById('em-enable-h264').checked = false;
+            document.getElementById('em-native-resolution').checked = false;
+            document.getElementById('em-h264-chroma444').checked = false;
             document.getElementById('em-enable-wallpaper').checked = false;
             document.getElementById('em-enable-theming').checked = false;
             document.getElementById('em-enable-full-window-drag').checked = false;
@@ -3554,10 +3587,12 @@
                     document.getElementById('em-enable-desktop-comp').checked = !!entryData.enable_desktop_composition;
                     document.getElementById('em-force-lossless').checked = !!entryData.force_lossless;
                     document.getElementById('em-enable-h264').checked = !!entryData.enable_h264;
+                    document.getElementById('em-native-resolution').checked = !!entryData.native_resolution;
+                    document.getElementById('em-h264-chroma444').checked = !!entryData.h264_chroma444;
                     document.getElementById('em-enable-wallpaper').checked = !!entryData.enable_wallpaper;
                     document.getElementById('em-enable-theming').checked = !!entryData.enable_theming;
                     document.getElementById('em-enable-full-window-drag').checked = !!entryData.enable_full_window_drag;
-                    if (entryData.enable_gfx || entryData.enable_desktop_composition || entryData.force_lossless || entryData.enable_h264 || entryData.enable_wallpaper || entryData.enable_theming || entryData.enable_full_window_drag) {
+                    if (entryData.enable_gfx || entryData.enable_desktop_composition || entryData.force_lossless || entryData.enable_h264 || entryData.native_resolution || entryData.h264_chroma444 || entryData.enable_wallpaper || entryData.enable_theming || entryData.enable_full_window_drag) {
                         document.getElementById('em-video-perf-fields').style.display = '';
                         document.getElementById('em-video-perf-arrow').innerHTML = '&#9660;';
                     }
@@ -3784,6 +3819,8 @@
                 if (document.getElementById('em-enable-desktop-comp').checked) entry.enable_desktop_composition = true;
                 if (document.getElementById('em-force-lossless').checked) entry.force_lossless = true;
                 if (document.getElementById('em-enable-h264').checked) entry.enable_h264 = true;
+                if (document.getElementById('em-native-resolution').checked) entry.native_resolution = true;
+                if (document.getElementById('em-h264-chroma444').checked) entry.h264_chroma444 = true;
                 if (document.getElementById('em-enable-wallpaper').checked) entry.enable_wallpaper = true;
                 if (document.getElementById('em-enable-theming').checked) entry.enable_theming = true;
                 if (document.getElementById('em-enable-full-window-drag').checked) entry.enable_full_window_drag = true;

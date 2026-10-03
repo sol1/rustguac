@@ -192,6 +192,14 @@ pub struct RdpParams {
     pub force_lossless: bool,
     /// Enable H.264 passthrough. Raw H.264 NAL units sent to browser WebCodecs decoder.
     pub enable_h264: bool,
+    /// DPI scaling percentage the remote session should render its UI at, sent
+    /// to the server as desktopScaleFactor. `None` leaves the server at its
+    /// default of 100%.
+    ///
+    /// Only meaningful alongside a framebuffer requested in physical rather
+    /// than logical pixels: without it, the extra pixels shrink every element
+    /// of the desktop instead of sharpening it.
+    pub desktop_scale: Option<u32>,
     /// Number of secondary monitors to allow (beyond the primary). guacd
     /// advertises this to the client as `secondary-monitors` and drives RDP
     /// multi-monitor via the Display Control channel. 0 = single monitor.
@@ -397,6 +405,7 @@ pub async fn connect_and_handshake(
                 "disable-gfx" => if p.enable_gfx { "false" } else { "true" }.into(),
                 "force-lossless" => if p.force_lossless { "true" } else { "false" }.into(),
                 "enable-h264" => if p.enable_h264 { "true" } else { "false" }.into(),
+                "desktop-scale" => p.desktop_scale.map_or(String::new(), |s| s.to_string()),
                 "remote-app" => p.remote_app.clone().unwrap_or_default(),
                 "remote-app-dir" => p.remote_app_dir.clone().unwrap_or_default(),
                 "remote-app-args" => p.remote_app_args.clone().unwrap_or_default(),

@@ -1,11 +1,17 @@
 mod api;
 mod auth;
+mod binary_blob;
 mod browser;
 mod config;
 mod db;
 mod drive;
 mod guacd;
+mod h264_aux_drop;
+mod h264_refs;
+mod h264_rewrite;
+mod h264_sps;
 mod import;
+mod instruction;
 mod migrate;
 mod oidc;
 mod protocol;

@@ -180,6 +180,28 @@ pub struct AddressBookEntry {
     /// Requires GFX enabled and xrdp with x264 on the target. Default: true when GFX enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_h264: Option<bool>,
+    /// Paint AVC444 in full 4:4:4 colour (RDP, with H.264 passthrough).
+    ///
+    /// Unset or `Some(false)` is Standard colour: AVC444 is still offered --
+    /// a Windows host needs that for hardware encoding, and FreeRDP advertises
+    /// the RDPGFX 10.x capability sets only alongside it -- but rustguac drops
+    /// the auxiliary chroma view in transit wherever the stream proves it can
+    /// be spared, and the browser never combines, so 4:2:0 is painted at the
+    /// lowest cost available. `Some(true)` keeps both views and lets the
+    /// browser combine them, at the price of a plane read-back per picture;
+    /// the browser still gives 4:4:4 up when that costs too much.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h264_chroma444: Option<bool>,
+    /// Request the framebuffer in the browser's physical pixels rather than its
+    /// CSS pixels, so text renders sharply on a HiDPI display.
+    ///
+    /// Per-entry rather than global because it is only safe where the target
+    /// also scales its UI to match. RDP does that automatically (guacd asks via
+    /// desktopScaleFactor); an X11 desktop behind xrdp has no per-connection DPI
+    /// negotiation, so enabling it there without a session-side scaling hook
+    /// just makes every icon and glyph smaller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_resolution: Option<bool>,
     /// Docker image for VDI sessions (e.g. "myregistry/desktop:latest").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_image: Option<String>,
@@ -410,6 +432,12 @@ pub struct EntryInfo {
     /// Enable H.264 passthrough.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_h264: Option<bool>,
+    /// Paint AVC444 in full 4:4:4 colour. Unset means Standard (4:2:0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h264_chroma444: Option<bool>,
+    /// Request the framebuffer in physical rather than CSS pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_resolution: Option<bool>,
     /// Docker image for VDI sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_image: Option<String>,
@@ -547,6 +575,8 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             enable_full_window_drag: e.enable_full_window_drag,
             force_lossless: e.force_lossless,
             enable_h264: e.enable_h264,
+            h264_chroma444: e.h264_chroma444,
+            native_resolution: e.native_resolution,
             container_image: e.container_image.clone(),
             container_cpu_limit: e.container_cpu_limit,
             container_memory_limit: e.container_memory_limit,
@@ -2141,6 +2171,23 @@ mod tests {
         let json3 = r#"{"type":"rdp","hostname":"test","enable_h264":false}"#;
         let entry3: AddressBookEntry = serde_json::from_str(json3).unwrap();
         assert_eq!(entry3.enable_h264, Some(false));
+    }
+
+    #[test]
+    fn test_h264_chroma444_round_trips_and_is_absent_by_default() {
+        let json = r#"{"type":"rdp","hostname":"test","enable_h264":true}"#;
+        let entry: AddressBookEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.h264_chroma444, None);
+        assert!(!serde_json::to_string(&entry)
+            .unwrap()
+            .contains("h264_chroma444"));
+
+        let json = r#"{"type":"rdp","hostname":"test","h264_chroma444":true}"#;
+        let entry: AddressBookEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.h264_chroma444, Some(true));
+        assert!(serde_json::to_string(&entry)
+            .unwrap()
+            .contains("\"h264_chroma444\":true"));
     }
 
     // ── Path-traversal regression tests (v1.5.4 fix) ──────────────────────
