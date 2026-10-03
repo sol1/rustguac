@@ -656,8 +656,25 @@ rm -rf "$BUILD_DIR"
 # ---------------------------------------------------------------------------
 # Restart, if this was an upgrade of a running service
 # ---------------------------------------------------------------------------
-# Only when it was already running. A first install leaves it stopped so that
-# an admin account can be created before anything is reachable.
+# guacd first, and whenever it is running. `make install` replaced its binary
+# and libraries above, but a running guacd keeps executing the old ones, and
+# restarting rustguac does not touch it: Requires= starts a stopped guacd and
+# never restarts a running one. So an upgrade otherwise rebuilt guacd and then
+# went on serving the previous build until someone restarted it by hand. Live
+# sessions are not a concern here -- they go through rustguac, which is
+# already stopped for the upgrade or was never running.
+if systemctl is-active --quiet rustguac-guacd 2>/dev/null; then
+    info "Restarting guacd..."
+    systemctl restart rustguac-guacd
+    sleep 1
+    if ! systemctl is-active --quiet rustguac-guacd; then
+        error "guacd did not come back up. Check: journalctl -u rustguac-guacd -n 50"
+        exit 1
+    fi
+fi
+
+# rustguac only when it was already running. A first install leaves it stopped
+# so that an admin account can be created before anything is reachable.
 if [[ "${WAS_RUNNING:-0}" -eq 1 ]]; then
     info "Restarting rustguac..."
     systemctl restart rustguac
