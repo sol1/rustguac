@@ -206,7 +206,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `session_type` | string | All | `ssh`, `rdp`, `vnc`, `spice`, `proxmox`, `web`, or `vdi` (required) |
 | `hostname` | string | SSH, RDP, VNC | Target hostname or IP |
 | `port` | integer | SSH, RDP, VNC | Target port (defaults: SSH=22, RDP=3389, VNC=5900) |
-| `username` | string | SSH, RDP | Username for authentication |
+| `username` | string | SSH, RDP, VNC | Username for authentication (VNC: only for servers with username auth, e.g. VeNCrypt, RealVNC, macOS) |
 | `password` | string | SSH, RDP, VNC | Password (VNC uses this as the VNC password) |
 | `private_key` | string | SSH | OpenSSH PEM private key |
 | `generate_keypair` | boolean | SSH | Generate an ephemeral Ed25519 keypair |
@@ -553,7 +553,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `type` | string | All | `ssh`, `rdp`, `vnc`, `spice`, `proxmox`, `web`, or `vdi` |
 | `hostname` | string | SSH, RDP, VNC | Target hostname or IP |
 | `port` | integer | SSH, RDP, VNC | Target port |
-| `username` | string | SSH, RDP | Username |
+| `username` | string | SSH, RDP, VNC | Username |
 | `password` | string | SSH, RDP, VNC | Password |
 | `private_key` | string | SSH | OpenSSH PEM private key |
 | `url` | string | Web | Target URL |

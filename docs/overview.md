@@ -99,7 +99,7 @@ Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) and [Ke
 
 ### VNC
 
-Connects guacd to a target VNC server. Supports password-based authentication. Useful for accessing existing VNC servers on the network (e.g., KVM/IPMI consoles, remote desktops, virtual machine displays).
+Connects guacd to a target VNC server. Supports password-based authentication, plus username + password for servers that require it (VeNCrypt, RealVNC, macOS Screen Sharing). Useful for accessing existing VNC servers on the network (e.g., KVM/IPMI consoles, remote desktops, virtual machine displays).
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach VNC targets through bastion hosts.
 

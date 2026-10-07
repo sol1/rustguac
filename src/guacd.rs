@@ -98,6 +98,8 @@ pub struct SshParams {
 pub struct VncParams {
     pub hostname: String,
     pub port: u16,
+    /// Only used by servers with username auth (VeNCrypt, RealVNC, macOS).
+    pub username: Option<String>,
     pub password: Option<String>,
     pub color_depth: Option<u8>,
     pub width: u32,
@@ -322,6 +324,7 @@ pub async fn connect_and_handshake(
                 "width" => p.width.to_string(),
                 "height" => p.height.to_string(),
                 "dpi" => p.dpi.to_string(),
+                "username" => p.username.clone().unwrap_or_default(),
                 "password" => p.password.clone().unwrap_or_default(),
                 "color-depth" => p.color_depth.map_or("24".into(), |d| d.to_string()),
                 "cursor" => "local".into(),

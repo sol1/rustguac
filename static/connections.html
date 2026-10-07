@@ -609,6 +609,9 @@
                 <label>Port
                     <input type="number" id="em-vnc-port" value="5900">
                 </label>
+                <label>Username <span style="color:var(--text-muted);font-size:0.85em">(optional, for VeNCrypt / RealVNC / macOS)</span>
+                    <input type="text" id="em-vnc-username">
+                </label>
                 <label>Password
                     <div class="pw-wrap"><input type="password" id="em-vnc-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
                 </label>
@@ -624,7 +627,7 @@
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-vnc-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
                 </label>
-                <div class="field-hint">When enabled, users will be asked for a password even if one is stored.</div>
+                <div class="field-hint">When enabled, users will be asked for credentials even if they are stored.</div>
             </div>
             <div id="em-spice-fields" style="display:none">
                 <label>Hostname
@@ -2835,15 +2838,13 @@
             var isRdp = entry.session_type === 'rdp';
             var isVnc = entry.session_type === 'vnc';
             document.getElementById('cred-domain-row').style.display = isRdp ? '' : 'none';
-            // VNC has password only — hide username row
-            document.getElementById('cred-username-row').style.display = isVnc ? 'none' : '';
-            // Pre-fill username if the entry has one stored
-            document.getElementById('cred-username').value = isVnc ? '' : (entry.username || '');
+            // Pre-fill username if the entry has one stored (optional for VNC)
+            document.getElementById('cred-username').value = entry.username || '';
             document.getElementById('cred-password').value = '';
             document.getElementById('cred-domain').value = entry.domain || '';
             document.getElementById('cred-error').textContent = '';
             document.getElementById('cred-modal').classList.add('active');
-            // Focus password if username is pre-filled or VNC, otherwise focus username
+            // Focus password if username is pre-filled or optional (VNC), otherwise focus username
             if (entry.username || isVnc) {
                 document.getElementById('cred-password').focus();
             } else {
@@ -3679,6 +3680,7 @@
             document.getElementById('em-ssh-prompt-creds').checked = false;
             document.getElementById('em-vnc-hostname').value = '';
             document.getElementById('em-vnc-port').value = '5900';
+            document.getElementById('em-vnc-username').value = '';
             document.getElementById('em-vnc-password').value = '';
             document.getElementById('em-vnc-color-depth').value = '';
             document.getElementById('em-vnc-prompt-creds').checked = false;
@@ -3839,6 +3841,7 @@
                 } else if (type === 'vnc') {
                     document.getElementById('em-vnc-hostname').value = entryData.hostname || '';
                     document.getElementById('em-vnc-port').value = entryData.port || '5900';
+                    document.getElementById('em-vnc-username').value = entryData.username || '';
                     document.getElementById('em-vnc-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
                     document.getElementById('em-vnc-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'spice') {
@@ -4064,6 +4067,8 @@
                 if (h) entry.hostname = h;
                 var p = parseInt(document.getElementById('em-vnc-port').value);
                 if (p) entry.port = p;
+                var u = document.getElementById('em-vnc-username').value.trim();
+                if (u) entry.username = u;
                 var pw = document.getElementById('em-vnc-password').value;
                 if (pw) entry.password = pw;
                 var cd = document.getElementById('em-vnc-color-depth').value;

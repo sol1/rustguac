@@ -1135,6 +1135,7 @@ impl SessionManager {
                 let params = guacd::ConnectionParams::Vnc(guacd::VncParams {
                     hostname: connect_host,
                     port,
+                    username: req.username.clone().filter(|u| !u.is_empty()),
                     password: req.password.clone(),
                     color_depth: req.color_depth,
                     width,
@@ -1436,6 +1437,7 @@ impl SessionManager {
                 let params = guacd::ConnectionParams::Vnc(guacd::VncParams {
                     hostname: "127.0.0.1".into(),
                     port: 0, // placeholder — updated after browser spawn
+                    username: None,
                     password: None,
                     color_depth: None,
                     width,

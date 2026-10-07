@@ -142,6 +142,9 @@
             <label>Port
                 <input type="number" id="vnc-port" value="5900">
             </label>
+            <label>Username (optional)
+                <input type="text" id="vnc-username">
+            </label>
             <label>Password (optional)
                 <input type="password" id="vnc-password">
             </label>
@@ -504,6 +507,8 @@
                 body.session_type = 'vnc';
                 body.hostname = document.getElementById('vnc-hostname').value;
                 body.port = parseInt(document.getElementById('vnc-port').value) || 5900;
+                var un = document.getElementById('vnc-username').value;
+                if (un) body.username = un;
                 var pw = document.getElementById('vnc-password').value;
                 if (pw) body.password = pw;
             } else if (sessionType.value === 'rdp') {
