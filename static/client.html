@@ -253,6 +253,35 @@
             throw new Error('No session ID');
         }
 
+        // ---- Native (device-pixel) framebuffer sizing -------------------
+        //
+        // Set from the session's display_scale, which the server computed when
+        // the session was created: it, not this page, knows whether the
+        // connection entry asked for a physical-pixel framebuffer. The value
+        // matters here only so that resize requests stay in the same units the
+        // session was created in -- sending CSS pixels to a session negotiated
+        // in physical ones would shrink it back on the first resize.
+        //
+        // scaleDisplay() needs no knowledge of it: it fits whatever framebuffer
+        // arrives into the available CSS area, which lands on 1/displayScale on
+        // its own -- one framebuffer pixel per physical pixel, no resampling.
+        // Mouse input follows too, since sendMouseState(state, true) divides by
+        // that same scale.
+        var displayScale = 1;
+
+        // Converts a CSS-pixel size into the size to ask the server for. Width
+        // is rounded down to a multiple of 8 (SPICE requires it, RDP prefers
+        // it) and both are kept positive, since a zero size reads as a
+        // monitor-close.
+        function deviceSize(cssW, cssH) {
+            var w = Math.round(cssW * displayScale) & ~0x7;
+            var h = Math.round(cssH * displayScale);
+            return {
+                width:  w > 0 ? w : Math.max(8, cssW & ~0x7),
+                height: h > 0 ? h : Math.max(8, cssH)
+            };
+        }
+
         // Whether asking the server for this size would actually change
         // anything, keyed by monitor index.
         //
@@ -377,7 +406,17 @@
                     };
                 }
                 if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
+                if (session && session.display_scale > 1) displayScale = session.display_scale;
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
+                // Set before startGuacamole(), so the decoder sees it as the
+                // window override on its first auxiliary view. The entry is at
+                // Standard colour, which paints 4:2:0 and never combines. Marked
+                // as the entry's, so the decoder does not report it as a
+                // hand-set override someone should go and check.
+                if (session && session.h264_no_combine) {
+                    window.__h264Chroma444 = false;
+                    window.__h264StandardColour = true;
+                }
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 return showBanner(session.banner);
             })
@@ -394,6 +433,10 @@
             var client = new Guacamole.Client(tunnel);
             // Expose for console debugging
             window.__guac_client = client;
+            // Exposed alongside the client so a live session can be inspected
+            // from the console -- tunnel.binaryFrames says whether blob
+            // payloads are arriving as binary rather than base64.
+            window.__guac_tunnel = tunnel;
             setupClient(client, tunnel);
         }
 
@@ -444,7 +487,10 @@
             // whose rectangle covers that pixel. Append ?debug=draw to the URL
             // for live per-op logging.
             var DRAW_RING = [];
-            var DRAW_RING_MAX = 2000;
+            // Deep enough to still hold the failure after you notice it and
+            // reach the console: AVC444 records two entries per picture, so at
+            // 30fps this is a bit over a minute rather than half of one.
+            var DRAW_RING_MAX = 5000;
             var drawLiveLog = /[?&]debug=draw\b/.test(location.search);
 
             // Decode the draw opcodes we care about into {op, layer, rect, note}.
@@ -470,6 +516,33 @@
                         return { op: 'dispose', layer: +a[0] };
                     case 'size':   // layer,w,h
                         return { op: 'size', layer: +a[0], note: a[1] + 'x' + a[2] };
+                    case 'h264': { // stream,layer,keyframe,x,y,w,h,view,numrects,[x,y,w,h]...
+                        // Returns one entry per region rect, so a dump filtered
+                        // by pixel finds the frame that painted it. Without the
+                        // rects this tells us nothing useful: the picture is
+                        // always full-surface sized, and it is the rects that
+                        // decide what actually reaches the layer.
+                        var view = a.length > 7 ? +a[7] : 0;
+                        var num = a.length > 8 ? +a[8] : 0;
+                        var note = (view === 0 ? 'main' : 'aux v' + view)
+                                 + (+a[2] ? ' KEY' : '')
+                                 + ' picture ' + a[5] + 'x' + a[6];
+                        if (!num)
+                            return { op: 'h264', layer: +a[1],
+                                     rect: [+a[3], +a[4], +a[5], +a[6]],
+                                     note: note + ' (no rects, whole picture)' };
+                        var frames = [];
+                        for (var hr = 0; hr < num; hr++) {
+                            var hb = 9 + hr * 4;
+                            if (hb + 3 >= a.length) break;
+                            frames.push({ op: 'h264', layer: +a[1],
+                                          rect: [+a[hb], +a[hb + 1],
+                                                 +a[hb + 2], +a[hb + 3]],
+                                          note: note + ' rect ' + (hr + 1)
+                                                + '/' + num });
+                        }
+                        return frames.length ? frames : null;
+                    }
                     default:
                         return null;
                 }
@@ -482,8 +555,12 @@
                     seenOpcodes[opcode] = true;
                     if (typeof console !== 'undefined') console.log('[rustguac] instruction: ' + opcode + (args.length ? ' (' + args.length + ' args)' : ''));
                 }
-                var d = decodeDraw(opcode, args);
-                if (d) {
+                var decoded = decodeDraw(opcode, args);
+                // An h264 frame decodes to one entry per region rect, so this
+                // takes either a single op or a list of them.
+                var ops = decoded ? (Array.isArray(decoded) ? decoded : [decoded]) : [];
+                for (var di = 0; di < ops.length; di++) {
+                    var d = ops[di];
                     d.t = Date.now();
                     DRAW_RING.push(d);
                     if (DRAW_RING.length > DRAW_RING_MAX) DRAW_RING.shift();
@@ -902,8 +979,10 @@
                 // (SPICE wants width as a multiple of 8). Contiguous index. Guard
                 // against a not-yet-laid-out popup reporting 0 (a positive size is
                 // required or the server reads it as a monitor-close).
-                var reqW = ((win.innerWidth || 1280) & ~0x7) || 1280;
-                var reqH = win.innerHeight || 800;
+                var popSize = deviceSize(win.innerWidth || 1280,
+                        win.innerHeight || 800);
+                var reqW = popSize.width;
+                var reqH = popSize.height;
                 if (reqW < 8) reqW = 1280;
                 if (reqH < 8) reqH = 800;
                 client.sendSize(reqW, reqH, index, 0);
@@ -947,10 +1026,11 @@
                 win.addEventListener('resize', function() {
                     if (popResizeTimer) win.clearTimeout(popResizeTimer);
                     popResizeTimer = win.setTimeout(function() {
-                        var w = (win.innerWidth || 0) & ~0x7;
-                        var h = win.innerHeight || 0;
-                        if (w >= 8 && h >= 8 && sizeWouldChange(w, h, index))
-                            client.sendSize(w, h, index, 0);
+                        var rs = deviceSize(win.innerWidth || 0,
+                                win.innerHeight || 0);
+                        if (rs.width >= 8 && rs.height >= 8
+                                && sizeWouldChange(rs.width, rs.height, index))
+                            client.sendSize(rs.width, rs.height, index, 0);
                     }, 500);
                 });
 
@@ -1575,9 +1655,9 @@
                             var fitToWindow = function() {
                                 scaleDisplay();
                                 var anyPanelOpen = panelOpen || filePanelOpen;
-                                var sw = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
-                                var sh = window.innerHeight;
-                                if (sw > 0 && sh > 0) {
+                                var cssW = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
+                                var fit = deviceSize(cssW, window.innerHeight);
+                                if (fit.width > 0 && fit.height > 0) {
                                     // Sent whether or not it would change
                                     // anything: the repeats above are
                                     // deliberate, covering a window where the
@@ -1586,8 +1666,8 @@
                                     // Recorded all the same, so that a user
                                     // resize inside the same 16px band
                                     // afterwards is correctly skipped.
-                                    sizeWouldChange(sw, sh);
-                                    client.sendSize(sw, sh);
+                                    sizeWouldChange(fit.width, fit.height);
+                                    client.sendSize(fit.width, fit.height);
                                 }
                             };
                             setTimeout(fitToWindow, 800);
@@ -1650,11 +1730,26 @@
             // overlay, and the browser kept uploading thumbnails into
             // 404 responses for hours. Forwarding tunnel events into the
             // existing client.onerror closes that loop.
+            // Set once an error has been shown, so that the CLOSED transition
+            // which always follows does not replace a specific message with
+            // a generic one.
+            var tunnelErrorShown = false;
             tunnel.onerror = function(status) {
                 if (typeof console !== 'undefined')
                     console.log('[rustguac] tunnel error:',
                                 status && status.message,
                                 'code=' + (status && status.code));
+                // An exception in an instruction handler closes the tunnel
+                // from this end, which the server logs as an ordinary browser
+                // disconnect. Say what threw and where: the exception, stack
+                // included, here, and its message on the overlay.
+                var ex = tunnel.lastException;
+                if (ex) {
+                    tunnel.lastException = null;
+                    console.error('[rustguac] instruction handler threw; '
+                            + 'closing the tunnel:', ex);
+                }
+                tunnelErrorShown = true;
                 if (client.onerror) client.onerror(status || {
                     code: 519,
                     message: 'Connection lost'
@@ -1664,7 +1759,7 @@
                 if (state === Guacamole.Tunnel.State.CLOSED) {
                     if (typeof console !== 'undefined')
                         console.log('[rustguac] tunnel closed');
-                    if (client.onerror) client.onerror({
+                    if (client.onerror && !tunnelErrorShown) client.onerror({
                         code: 519,
                         message: 'Connection lost'
                     });
@@ -1723,10 +1818,15 @@
                 var headers = { 'Content-Type': 'application/json' };
                 if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
 
+                // CSS pixels plus the browser's pixel ratio: whether the
+                // framebuffer is sized in physical pixels is the connection
+                // entry's "Native Resolution" setting to decide, and the server
+                // applies it.
                 var body = {
                     width: window.innerWidth,
                     height: window.innerHeight,
-                    dpi: Math.round((window.devicePixelRatio || 1) * 96)
+                    dpi: Math.round((window.devicePixelRatio || 1) * 96),
+                    device_pixel_ratio: window.devicePixelRatio || 1
                 };
 
                 var url = '/api/addressbook/folders/' + encodeURIComponent(scope)
@@ -1921,6 +2021,11 @@
                 }
                 else {
                     // Single display: scale the whole framebuffer to fit.
+                    // With the framebuffer requested in device pixels this
+                    // lands on 1/devicePixelRatio, i.e. one framebuffer pixel
+                    // per physical pixel -- no resampling. It stays correct
+                    // when a panel opens or the window is resized ahead of the
+                    // debounced sendSize, just at a softer intermediate scale.
                     display.scale(Math.min(availW / dw, availH / dh));
                     displayEl.style.overflow = '';
                     displayEl.style.position = '';
@@ -1946,10 +2051,10 @@
                 clearTimeout(resizeTimer);
                 resizeTimer = setTimeout(function() {
                     var anyPanelOpen = panelOpen || filePanelOpen;
-                    var sw = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
-                    var sh = window.innerHeight;
-                    if (sizeWouldChange(sw, sh))
-                        client.sendSize(sw, sh);
+                    var cssW = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
+                    var rz = deviceSize(cssW, window.innerHeight);
+                    if (sizeWouldChange(rz.width, rz.height))
+                        client.sendSize(rz.width, rz.height);
                 }, 500);
             });
 

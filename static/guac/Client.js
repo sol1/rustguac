@@ -1088,6 +1088,16 @@ Guacamole.Client = function(tunnel) {
      * @private
      * @type {!Object.<string, function>}
      */
+    /**
+     * Whether rustguac has said it is dropping the AVC444 auxiliary view in
+     * transit. Held here as well as on the decoder, since the instruction may
+     * arrive before the decoder is built.
+     *
+     * @private
+     * @type {!boolean}
+     */
+    var h264AuxDropped = false;
+
     var instructionHandlers = {
 
         "ack": function(parameters) {
@@ -1463,6 +1473,27 @@ Guacamole.Client = function(tunnel) {
 
         },
 
+        /* Whether rustguac is removing the AVC444 auxiliary view from the
+         * wire. Not a guacd instruction: rustguac originates it, because the
+         * browser cannot tell a dropped auxiliary view from a host that has
+         * merely gone quiet, and an auxiliary IDR -- which is kept -- switches
+         * 4:4:4 combining on for good. Every main view then pays the
+         * combiner's plane read-back waiting for a picture that has been
+         * removed upstream. */
+        "h264-aux": function(parameters) {
+
+            h264AuxDropped = parseInt(parameters[0]) !== 0;
+
+            /* Remembered either way: the decoder is built at the first h264
+             * instruction, which in practice comes first by seconds, but a
+             * flag applied to a decoder that does not exist is lost silently
+             * and the cost of being wrong here is the whole point of the
+             * instruction. */
+            if (guac_client._h264Decoder)
+                guac_client._h264Decoder.setAuxDropped(h264AuxDropped);
+
+        },
+
         "h264": function(parameters) {
 
             var stream_index = parseInt(parameters[0]);
@@ -1476,8 +1507,14 @@ Guacamole.Client = function(tunnel) {
             // Region rects, if sent. These identify which parts of the decoded
             // picture are actually valid; the picture is always full-surface
             // sized, so a server mixing codecs leaves the remainder holding no
-            // meaningful content. A count of zero (or an older guacd that
-            // sends no count at all) means the whole picture is valid.
+            // meaningful content. An older guacd that sends no count at all
+            // means the whole picture is valid. A count of zero means NONE of
+            // it is: MS-RDPEGFX's region rects are the areas that changed, and
+            // FreeRDP's own decoder updates only those, so a zero-rect picture
+            // is decoded for its references and never shown. Windows sends
+            // keyframes like that mid-session, with uninitialised content --
+            // painting one filled the screen with decoder green, and the
+            // black keyframe after it left 77% of the display black.
             // Which view this access unit carries. 0 is a displayable picture
             // (AVC420, or the main view of AVC444); 1 and 2 are the auxiliary
             // chroma views of AVC444 in its v1 and v2 layouts. An auxiliary
@@ -1501,6 +1538,28 @@ Guacamole.Client = function(tunnel) {
                 });
             }
 
+            // Whether an auxiliary chroma view for this same picture follows
+            // immediately. Set only on the main view of an AVC444 command that
+            // carries both (MS-RDPEGFX LC=0); a client combining the two views
+            // can then skip painting a main view that is about to be repainted
+            // in full 4:4:4. Trails the rects because they are variable in
+            // number, so that a guacd sending neither this nor the rect count
+            // still parses.
+            var paired = parameters.length > 9 + numRects * 4
+                    ? parseInt(parameters[9 + numRects * 4]) !== 0 : false;
+
+            // Whether the surface this picture belongs to was just recreated
+            // at the size it already had. Such a surface is empty, so the
+            // picture describes a blank surface rather than a screen that has
+            // gone blank, and the server will go on to repaint only what it
+            // believes changed -- trusting the client to hold the rest, which
+            // under passthrough it does and guacd does not. Only the server
+            // can say this: the decoder can see that a picture came out black,
+            // not whether that is the screen or an empty surface. Trails
+            // <paired> for the same reason <paired> trails the rects.
+            var recreated = parameters.length > 10 + numRects * 4
+                    ? parseInt(parameters[10 + numRects * 4]) !== 0 : false;
+
             // Create stream to receive H.264 NAL unit data
             var stream = streams[stream_index] = new Guacamole.InputStream(guac_client, stream_index);
 
@@ -1516,6 +1575,7 @@ Guacamole.Client = function(tunnel) {
             // Create or reuse H.264 decoder for this display
             if (!guac_client._h264Decoder) {
                 guac_client._h264Decoder = new Guacamole.H264Decoder(display);
+                guac_client._h264Decoder.setAuxDropped(h264AuxDropped);
             }
 
             // Collect NAL unit data. Guacamole.ArrayBufferReader decodes each
@@ -1565,7 +1625,9 @@ Guacamole.Client = function(tunnel) {
                     display.drawH264(
                         layer, guac_client._h264Decoder,
                         x, y, width, height,
-                        bytes.buffer, isKeyFrame, rects, view
+                        bytes.buffer, isKeyFrame,
+                        parameters.length > 8 ? rects : null, view, paired,
+                        recreated
                     );
                 } catch (e) {
                     if (typeof console !== 'undefined')
@@ -1818,8 +1880,15 @@ Guacamole.Client = function(tunnel) {
             var timestamp = parseInt(parameters[0]);
             var frames = parameters[1] ? parseInt(parameters[1]) : 0;
 
+            // When this sync arrived, so that the flush below can be timed.
+            // The ack waits for the flush, so a slow display queue holds acks
+            // back from the server without any H.264 decode being pending.
+            var syncReceivedAt = performance.now();
+
             // Flush display, send sync when done
             display.flush(function displaySyncComplete() {
+
+                var flushMs = performance.now() - syncReceivedAt;
 
                 var sendSync = function() {
 
@@ -1841,7 +1910,7 @@ Guacamole.Client = function(tunnel) {
                 // Gate sync response on H.264 decode completion so that
                 // guacd receives accurate backpressure from decode speed
                 if (guac_client._h264Decoder) {
-                    guac_client._h264Decoder.waitForPending(sendSync);
+                    guac_client._h264Decoder.waitForPending(sendSync, flushMs);
                 } else {
                     sendSync();
                 }
@@ -1996,6 +2065,23 @@ Guacamole.Client = function(tunnel) {
 
         // Leverage network activity to ensure the next keep-alive ping is
         // sent, even if the browser is currently throttling timers
+        scheduleKeepAlive();
+
+    };
+
+    /*
+     * A blob delivered as a binary frame rather than base64 inside a "blob"
+     * instruction. It goes to exactly the same place -- the stream's onblob --
+     * so a reader that accepts an ArrayBuffer (Guacamole.ArrayBufferReader,
+     * which the H.264 and audio paths both use) needs to know nothing about
+     * how its bytes arrived.
+     */
+    tunnel.onbinary = function(index, payload) {
+
+        var stream = streams[index];
+        if (stream && stream.onblob)
+            stream.onblob(payload);
+
         scheduleKeepAlive();
 
     };

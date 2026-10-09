@@ -165,6 +165,8 @@ pub async fn cmd_import_guacamole(
             enable_full_window_drag: None,
             force_lossless: None,
             enable_h264: None,
+            h264_chroma444: None,
+            native_resolution: None,
             container_image: None,
             container_cpu_limit: None,
             container_memory_limit: None,
