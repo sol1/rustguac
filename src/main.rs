@@ -127,6 +127,20 @@ enum Command {
     /// List all OIDC users
     ListUsers,
 
+    /// Add an OIDC user ahead of their first login (required to let anyone
+    /// in when `[oidc] auto_create_users = false`)
+    AddUser {
+        /// User email, exactly as the identity provider sends it
+        #[arg(long)]
+        email: String,
+        /// Role: admin, poweruser, operator, or viewer
+        #[arg(long)]
+        role: String,
+        /// Display name (replaced by the provider's name on login)
+        #[arg(long, default_value = "")]
+        name: String,
+    },
+
     /// Set a user's role
     SetRole {
         /// User email
@@ -270,6 +284,9 @@ async fn main() {
             cmd_generate_cert(&hostname, &out_dir, &extra_sans);
         }
         Some(Command::ListUsers) => cmd_list_users(&database),
+        Some(Command::AddUser { email, role, name }) => {
+            cmd_add_user(&database, &email, &role, &name)
+        }
         Some(Command::SetRole { email, role }) => cmd_set_role(&database, &email, &role),
         Some(Command::DisableUser { email }) => cmd_disable_user(&database, &email),
         Some(Command::DeleteUser { email }) => cmd_delete_user(&database, &email),
@@ -511,6 +528,27 @@ fn cmd_list_users(database: &Db) {
         }
         Err(e) => {
             eprintln!("Error listing users: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_add_user(database: &Db, email: &str, role: &str, name: &str) {
+    if !["admin", "poweruser", "operator", "viewer"].contains(&role) {
+        eprintln!("Role must be admin, poweruser, operator, or viewer.");
+        std::process::exit(1);
+    }
+    match db::create_user(database, email, name, role) {
+        Ok(_) => {
+            println!("User '{}' added with role '{}'.", email, role);
+            audit_cli(database, "add_user", email, Some(&format!("role={}", role)));
+        }
+        Err(e) if e.to_string().contains("UNIQUE") => {
+            eprintln!("User '{}' already exists.", email);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     }
@@ -1202,7 +1240,7 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/reports/top-users", get(api::report_top_users))
         .route("/api/reports/summary", get(api::report_summary))
         .route("/api/system/status", get(api::system_status))
-        .route("/api/users", get(api::list_users))
+        .route("/api/users", get(api::list_users).post(api::create_user))
         .route("/api/users/{email}/role", put(api::set_user_role))
         .route(
             "/api/users/{email}/sessions",

@@ -44,6 +44,17 @@
         </tr></thead>
         <tbody id="users-body"></tbody>
     </table>
+    <div class="add-form">
+        <input type="text" id="new-user-email" placeholder="user@example.com" style="width:200px;">
+        <input type="text" id="new-user-name" placeholder="Name (optional)">
+        <select id="new-user-role">
+            <option value="viewer">viewer</option>
+            <option value="operator" selected>operator</option>
+            <option value="poweruser">poweruser</option>
+            <option value="admin">admin</option>
+        </select>
+        <button class="btn-primary" id="add-user-btn">Add User</button>
+    </div>
 
     <h2>Group-to-Role Mappings</h2>
     <p style="color:#888;font-size:0.85em;margin:0.3em 0;">OIDC groups are matched to roles on every login. The highest matching role wins.</p>
@@ -309,6 +320,30 @@
                 });
             });
         }
+
+        document.getElementById('add-user-btn').addEventListener('click', function() {
+            var email = document.getElementById('new-user-email').value.trim();
+            var name = document.getElementById('new-user-name').value.trim();
+            var role = document.getElementById('new-user-role').value;
+            if (!email) { showError('Email is required'); return; }
+
+            fetch('/api/users', {
+                method: 'POST',
+                headers: apiHeaders({'Content-Type': 'application/json'}),
+                credentials: 'same-origin',
+                body: JSON.stringify({email: email, name: name, role: role})
+            })
+            .then(function(res) {
+                if (!res.ok) return res.json().then(function(d){ showError(d.error); throw new Error(); });
+                return res.json();
+            })
+            .then(function() {
+                document.getElementById('new-user-email').value = '';
+                document.getElementById('new-user-name').value = '';
+                loadUsers();
+            })
+            .catch(function() {});
+        });
 
         function td(text) {
             var el = document.createElement('td');
