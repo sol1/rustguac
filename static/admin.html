@@ -16,12 +16,13 @@
     </div>
     <nav>
         <a href="/connections.html">Connections</a>
-        <a href="/sessions.html" id="sessions-link">Sessions</a>
+        <a href="/sessions.html" id="sessions-link" data-min-role="poweruser">Sessions</a>
         <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
+        <a href="/reports.html" id="reports-link" data-min-role="poweruser">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html">Tokens</a>
-        <a href="/admin.html" class="active">Admin</a>
+        <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
+        <a href="/admin.html" class="active" id="admin-link" data-min-role="admin">Admin</a>
+        <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
 
@@ -155,6 +156,7 @@
                 return res.json();
             })
             .then(function(data) {
+                if (data && data.role) document.documentElement.setAttribute('data-role-level', String({admin:4,poweruser:3,operator:2,viewer:1}[data.role] || 0));
                 if (!data || data.role !== 'admin') {
                     window.location.href = '/connections.html';
                     return;

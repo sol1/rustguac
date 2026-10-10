@@ -850,3 +850,21 @@ form.card,
     text-align: center;
     border-top: 1px dashed var(--border);
 }
+
+/* ── Role-gated navigation ──────────────────────
+   The server writes data-role-level (0 anonymous … 4 admin) on <html> for
+   the user it serves a page to, so gated links and admin-only controls are
+   right on the first paint: no fetch-then-show, no reflow, nothing popping
+   in after the header has drawn. A page reconciles the attribute from
+   /api/me for identities the page GET could not carry (API keys). */
+nav a[data-min-role] { display: none; }
+html[data-role-level="2"] nav a[data-min-role="operator"],
+html[data-role-level="3"] nav a[data-min-role="operator"],
+html[data-role-level="3"] nav a[data-min-role="poweruser"],
+html[data-role-level="4"] nav a[data-min-role] { display: inline; }
+html:not([data-role-level="4"]) .admin-only { display: none !important; }
+
+/* ── Entry names ──
+   "host (Tenant)" display names read as the host over a quieter subline. */
+.entry-name { display: block; color: var(--text); }
+.entry-sub { display: block; font-size: var(--fz-xs); color: var(--text-dim); margin-top: 1px; letter-spacing: 0.02em; }
