@@ -539,6 +539,62 @@
         .folder-list li.filtered-out { display: none; }
         .folder-row:focus { outline: none; }
         .folder-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+        /* UX (#254) app shell: the header stays put, the sidebar and the
+           entries area are two independent scroll panes that always fit the
+           viewport. The earlier sticky sidebar was sized from the viewport,
+           not from where it starts below the header, so at the top of the
+           page its bottom hung off screen and the page had to be scrolled
+           before the list could be scrolled to its end. */
+        html, body { height: 100%; }
+        body { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+        #main-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+        #main-content > :not(.layout) { flex: none; }
+        .layout { flex: 1 1 auto; min-height: 0; align-items: stretch; }
+        .sidebar {
+            position: static; top: auto; align-self: auto;
+            max-height: none; height: auto; min-height: 0;
+            display: flex; flex-direction: column;
+            overflow-y: auto; overflow-x: hidden;
+            padding: 0; margin: 0;
+            border: 1px solid var(--border); border-radius: var(--radius);
+            background: rgba(255,255,255,0.015);
+        }
+        .main { min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: var(--s-2); }
+
+        /* Sidebar panel: one pinned header band (label, new-folder button,
+           filter) on a surface tone, then the list with hairline dividers.
+           Every band shares the same 12px horizontal padding so edges line up. */
+        .sidebar-pin {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: var(--s-2) var(--s-3);
+            gap: var(--s-2);
+        }
+        .sidebar-pin .sidebar-header {
+            margin: 0; padding: 0; border: 0;
+            min-height: 30px;
+            justify-content: space-between;
+        }
+        .sidebar-pin .sidebar-header strong { font-size: var(--fz-xs); letter-spacing: 0.14em; }
+        #btn-new-folder { height: 30px; padding: 0 var(--s-2); font-size: var(--fz-xs); }
+        #sidebar-tools { margin: 0; }
+        #sidebar-tools:not(:empty) { padding-bottom: 0; }
+        #folder-filter {
+            height: 34px; font-size: var(--fz-sm);
+            background: var(--bg); border: 1px solid var(--border);
+        }
+        .folder-list { padding: var(--s-1) 0 var(--s-2); }
+        .folder-list > li { margin: 0; }
+        .folder-list > li + li > .folder-row { border-top: 1px solid rgba(255,255,255,0.045); }
+        .folder-row {
+            padding: var(--s-2) var(--s-3) var(--s-2) calc(var(--s-3) - 3px);
+            min-height: 46px;
+        }
+        .folder-list li.selected > .folder-row { border-top-color: transparent; }
+        .folder-row-main { gap: 2px; }
+        .folder-desc { font-size: 12px; }
+        .tree-children { margin-left: var(--s-3) !important; }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -549,12 +605,12 @@
     </div>
     <nav>
         <a href="/connections.html" class="active">Connections</a>
-        <a href="/sessions.html" id="sessions-link">Sessions</a>
+        <a href="/sessions.html" id="sessions-link" data-min-role="poweruser">Sessions</a>
         <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
+        <a href="/reports.html" id="reports-link" data-min-role="poweruser">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
-        <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
+        <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
+        <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
         <a href="#" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
         <span id="user-menu-wrapper">
             <a href="#" id="logout-item">Logout</a>
@@ -1684,6 +1740,9 @@
                 isAdmin = data.role === 'admin';
                 currentUserRole = data.role || 'viewer';
                 var level = roleLevel[data.role] || 0;
+                // Reconcile the server-written nav gate (see rustguac.css): the page
+                // GET carried no API key, so key users arrive on the anonymous variant.
+                document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
                 if (level < 3) {
                     document.getElementById('sessions-link').style.display = 'none';
                 }
@@ -1699,6 +1758,8 @@
                     document.getElementById('tokens-link').style.display = '';
                 }
                 if (apiKey) {
+                    // A key is never on the page GET, so the server served the anonymous variant.
+                    document.documentElement.setAttribute('data-role-level', '4');
                     document.getElementById('admin-link').style.display = '';
                     document.getElementById('tokens-link').style.display = '';
                 }
@@ -2426,7 +2487,7 @@
                 if (e.inherited_credentials) userCol += ' <span style="color:#888;font-size:0.8em" title="Uses the folder\'s default credentials">[folder]</span>';
                 var scopeIcon = r.scope === 'shared' ? '⊕' : '▣';
                 html += '<tr>';
-                html += '<td>' + highlight(r.label, tokens) + '</td>';
+                html += '<td>' + entryNameHtml(r.label, tokens) + '</td>';
                 html += '<td><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
                 html += '<td>' + highlight(r.host || '', tokens) + '</td>';
                 html += '<td>' + userCol + '</td>';
@@ -2560,6 +2621,15 @@
             });
         }
 
+        // "host (Tenant)" display names, as the NetBox sync writes them, read as
+        // the host over a quieter tenant line. `tokens` highlights search hits.
+        function entryNameHtml(label, tokens) {
+            var esc = tokens ? function(t) { return highlight(t, tokens); } : escapeHtml;
+            var m = /^(.*\S)\s+\(([^()]+)\)$/.exec(label || '');
+            if (!m) return esc(label || '');
+            return '<span class="entry-name">' + esc(m[1]) + '</span><span class="entry-sub">' + esc(m[2]) + '</span>';
+        }
+
         // Credential variables an entry references that the user hasn't set
         // yet. Empty until the cred status has loaded (setCredVars !== null).
         function entryUnsetVars(e) {
@@ -2687,7 +2757,7 @@
                 var credPill = unsetVars.length > 0
                     ? ' <span title="Set these first: ' + escapeAttr(unsetVars.join(', ')) + '" style="background:var(--status-pending);color:var(--bg);border-radius:8px;padding:0.05em 0.5em;font-size:0.72em;font-weight:bold;white-space:nowrap;vertical-align:middle">credentials needed</span>'
                     : '';
-                html += '<td>' + escapeHtml(label) + credPill + '</td>';
+                html += '<td>' + entryNameHtml(label) + credPill + '</td>';
                 var typeLabel = e.session_type.toUpperCase();
                 if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
                 html += '<td><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
@@ -5730,6 +5800,11 @@
 
 
         init();
+        // Other pages link here as /connections.html#my-credentials.
+        if (location.hash === '#my-credentials') {
+            history.replaceState(null, '', location.pathname + location.search);
+            setTimeout(function() { openMyCredentials(); }, 250);
+        }
     </script>
 </body>
 </html>
