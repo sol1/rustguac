@@ -653,6 +653,23 @@ fn cmd_map_group(database: &Db, group: &str, role: &str, force: bool) {
 #[derive(Clone)]
 struct TlsEnabled(bool);
 
+/// Content-Security-Policy sent with every response.
+///
+/// `img-src` must allow `data:` and `blob:`. The Guacamole client draws each
+/// `img` stream by loading a `data:image/...;base64,...` URI into an `Image`
+/// (the `DataURIReader` path in `Display.drawStream`) on browsers without
+/// WebCodecs `ImageDecoder`, which is Safari and Firefox. Without `img-src`
+/// the `default-src 'self'` fallback refuses those loads, the client silently
+/// skips the draw, and SSH/RDP sessions render black with only rect fills
+/// showing (#249). Chromium decodes straight from the stream bytes and never
+/// fetches a URL, so it hid the problem. The remote mouse cursor
+/// (`cursor: url(data:...)`) and blob: image URLs need the same allowance.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+    script-src 'self' 'unsafe-inline'; \
+    style-src 'self' 'unsafe-inline'; \
+    connect-src 'self' wss: ws:; \
+    img-src 'self' data: blob:";
+
 async fn security_headers(
     tls: Extension<TlsEnabled>,
     request: Request,
@@ -672,7 +689,7 @@ async fn security_headers(
     );
     headers.insert(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:".parse().unwrap(),
+        CONTENT_SECURITY_POLICY.parse().unwrap(),
     );
     if tls.0 .0 {
         headers.insert(
@@ -881,6 +898,7 @@ async fn run_server(config: Config, database: Db) {
 
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
     let vault_configured = VaultConfigured(config.vault.is_some());
+    let ab_version = api::AddressBookVersion::default();
     let credential_default_scope =
         CredentialDefaultScope(config.user_credentials_default_scope.clone());
     let drive_configured = DriveConfigured(config.drive.is_some());
@@ -1279,6 +1297,19 @@ async fn run_server(config: Config, database: Db) {
             get(api::ab_list_subfolders),
         )
         .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            get(api::ab_get_folder_defaults),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            put(api::ab_put_folder_defaults),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            delete(api::ab_delete_folder_defaults),
+        )
+        .route("/api/addressbook/version", get(api::ab_version))
+        .route(
             "/api/addressbook/folders/{scope}/{folder}/entries",
             get(api::ab_list_entries),
         )
@@ -1310,11 +1341,15 @@ async fn run_server(config: Config, database: Db) {
         .merge(session_create_route)
         .with_state(manager.clone())
         .layer(middleware::from_fn(auth::require_auth))
+        // Inside auth: only requests allowed to change the address book
+        // count. The counter itself is layered below so this sees it.
+        .layer(middleware::from_fn(api::ab_version_bump))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(credential_default_scope.clone()))
-        .layer(Extension(database.clone()));
+        .layer(Extension(database.clone()))
+        .layer(Extension(ab_version.clone()));
     // Applied OUTSIDE require_auth so requests with bad credentials are
     // counted too: a flood of bogus keys is throttled before each one
     // queues on the database lock to be looked up.
@@ -1817,6 +1852,24 @@ fn rewrite_branding(html: &str, site_title: &str, logo_url: Option<&str>) -> Str
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn test_csp_allows_data_and_blob_images() {
+        // Safari and Firefox draw Guacamole image streams through data: URIs
+        // (#249). Chromium uses ImageDecoder and would not catch a regression.
+        let directives: Vec<&str> = CONTENT_SECURITY_POLICY.split(';').map(str::trim).collect();
+        let img_src = directives
+            .iter()
+            .find(|d| d.starts_with("img-src "))
+            .expect("CSP must carry an explicit img-src directive");
+        let sources: Vec<&str> = img_src.split_whitespace().skip(1).collect();
+        assert!(sources.contains(&"'self'"), "img-src must allow 'self'");
+        assert!(sources.contains(&"data:"), "img-src must allow data: URIs");
+        assert!(sources.contains(&"blob:"), "img-src must allow blob: URLs");
+        // The string continuation must not leave stray whitespace runs.
+        assert!(!CONTENT_SECURITY_POLICY.contains("  "));
+        assert!(!CONTENT_SECURITY_POLICY.contains('\n'));
+    }
 
     #[test]
     fn test_version_assets_rewrites_local_js_and_css() {

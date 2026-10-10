@@ -117,6 +117,9 @@
         .entries-table tbody tr:last-child td { border-bottom: none; }
         .entries-table td:last-child { text-align: right; white-space: nowrap; }
 
+        .entries-table .actions-cell { white-space: nowrap; text-align: right; }
+        .entries-table .actions-cell .btn-small { margin-left: var(--s-1); }
+
         /* Bulk selection (admins). */
         .entries-table .sel-cell { width: 2em; text-align: center; padding-right: 0; }
         .entries-table .sel-cell input { width: auto; margin: 0; cursor: pointer; }
@@ -163,6 +166,37 @@
         }
         .folder-actions .desc {
             color: var(--text-muted); font-size: var(--fz-md); font-style: italic;
+        }
+
+        /* Folder modal: default credentials */
+        .fm-defaults { margin: var(--s-3) 0; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s-2) var(--s-3); }
+        .fm-defaults summary { cursor: pointer; color: var(--text); font-size: var(--fz-md); }
+        .fm-defaults-table { width: 100%; border-collapse: collapse; margin-top: var(--s-2); }
+        .fm-defaults-table th { text-align: left; font-weight: normal; color: var(--text-muted); font-size: var(--fz-sm); padding: var(--s-1) var(--s-2) var(--s-1) 0; width: 3em; vertical-align: top; }
+        .fm-defaults-table td { padding: var(--s-1); vertical-align: top; }
+        .fm-defaults-table input, .fm-defaults-table textarea { width: 100%; margin: 0; font-size: var(--fz-sm); }
+        .fm-defaults-table textarea { min-height: var(--ctl-sm); resize: vertical; }
+        .fmd-clear-label { display: flex; align-items: center; gap: var(--s-1); font-size: var(--fz-xs); color: var(--text-dim); white-space: nowrap; padding-top: var(--s-2); }
+
+        /* Narrow desktops (a 1710px-wide MacBook display, 1600px monitors):
+           the 18px monospace table plus three padded action cells overran
+           the main column by ~300px, with "delete" cut off at the right.
+           Tighten the chrome rather than hide columns: smaller side
+           padding and sidebar, 16px cells with less padding, a narrower
+           Connect button. Everything then fits with ~250px to spare. */
+        @media (max-width: 1800px) {
+            body { padding: var(--s-4) var(--s-4); }
+            .layout { gap: var(--s-4); }
+            .sidebar { min-width: 240px; max-width: 280px; padding-right: var(--s-3); }
+            .entries-table th, .entries-table td {
+                padding: var(--s-2) var(--s-3);
+                font-size: var(--fz-sm);
+            }
+            .entries-table th { font-size: var(--fz-xs); letter-spacing: 0.08em; }
+            .btn-connect { min-width: 110px; padding: 0 var(--s-3); }
+            .btn-connect-win { min-width: 0; padding: 0 var(--s-1); }
+            .folder-actions strong { font-size: var(--fz-lg); }
+            .folder-actions .desc { font-size: var(--fz-sm); }
         }
 
         /* Active sessions strip */
@@ -476,6 +510,13 @@
                 Inherit permissions from parent folder
             </label>
             <div class="field-hint">When ticked, if this folder's own groups list doesn't grant a user access, the check walks up to the parent (and further ancestors if they also inherit). Uncheck to enforce this folder's groups list on its own. Top-level folders have no parent so this has no effect.</div>
+            <details class="fm-defaults" id="fm-defaults">
+                <summary>Default credentials</summary>
+                <div class="field-hint">Lent to entries in this folder that have no password or key of their own, per session type, so an entry created without secrets (a NetBox webhook, an import) connects straight away. An entry's own credentials always win; subfolders inherit per type. Secrets are write-only: leave a field blank to keep what is stored, tick clear to drop a type.</div>
+                <table class="fm-defaults-table">
+                    <tbody id="fm-defaults-rows"></tbody>
+                </table>
+            </details>
             <label>Scope
                 <select id="fm-scope">
                     <option value="shared">shared (all instances)</option>
@@ -1519,6 +1560,7 @@
                 loadCredStatus();
                 loadActiveSessions();
                 setInterval(loadActiveSessions, 10000);
+                startLiveRefresh();
                 startOnboarding(currentUserRole);
             })
             .catch(function(err) {
@@ -1717,7 +1759,11 @@
             });
         }
 
-        function loadFolders() {
+        // `done` is passed by the live refresh: called once the tree and the
+        // entry cache are rebuilt, so the caller can re-render what is open.
+        // A refresh also reloads the search index quietly, without the
+        // "Indexing..." state that would blank the box mid-typing.
+        function loadFolders(done) {
             fetch('/api/addressbook', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (res.status === 503) {
@@ -1795,12 +1841,14 @@
                             loadEntries(folders[0].scope, folderPath(folders[0]));
                         }
                         maybeAutoOpenSingleton();
+                        if (done) done();
                     });
-                    loadSearchIndex();
+                    loadSearchIndex(!!done);
                     return;
                 }
                 maybeAutoOpenSingleton();
-                loadSearchIndex();
+                loadSearchIndex(!!done);
+                if (done) done();
             })
             .catch(function(err) {
                 showError('Failed to load folders: ' + err.message);
@@ -2022,16 +2070,62 @@
         }
 
         // ── Quick-find search ──────────────────────────────────────────────
+        // ── Live refresh ──
+        // /api/addressbook/version is a counter rustguac bumps on every change
+        // made through its API: this page, another admin's, a NetBox webhook,
+        // a script. Reading it costs no Vault round trip, so it is polled
+        // every few seconds and the page reloads only when it moves. A slow
+        // unconditional refresh covers what this instance cannot see (a
+        // second rustguac on the same Vault, a direct Vault write). Nothing
+        // is reloaded while a modal is open or the tab is hidden; a hidden
+        // tab catches up the moment it is shown.
+        var LIVE_POLL_MS = 3000;
+        var LIVE_FULL_MS = 120000;
+        var liveVersion = null;
+        var liveLastRefresh = Date.now();
+        var liveTimer = null;
+        function liveRefresh() {
+            if (document.hidden) return;
+            if (document.querySelector('.modal-overlay.active')) return;
+            liveLastRefresh = Date.now();
+            loadFolders(function() {
+                // Search results re-run when the index reloads; a folder view
+                // re-renders from the fresh entry cache.
+                if (!searchActive && selectedFolder) loadEntries(selectedFolder.scope, folderPath(selectedFolder));
+            });
+            loadCredStatus();
+        }
+        function livePoll() {
+            if (document.hidden) return;
+            fetch('/api/addressbook/version', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(res) { return res.ok ? res.json() : null; })
+                .then(function(data) {
+                    if (!data || typeof data.version !== 'number') return;
+                    var moved = liveVersion !== null && data.version !== liveVersion;
+                    liveVersion = data.version;
+                    if (moved || Date.now() - liveLastRefresh > LIVE_FULL_MS) liveRefresh();
+                })
+                .catch(function() {});
+        }
+        function startLiveRefresh() {
+            if (liveTimer) return;
+            liveTimer = setInterval(livePoll, LIVE_POLL_MS);
+            document.addEventListener('visibilitychange', function() { if (!document.hidden) livePoll(); });
+            window.addEventListener('focus', livePoll);
+        }
+
         // Index is fetched once after loadFolders() and after any mutation that
         // already triggers a refresh. Search runs entirely client-side against
         // the in-memory haystack.
 
-        function loadSearchIndex() {
+        function loadSearchIndex(quiet) {
             var input = document.getElementById('connections-search');
             if (!input) return;
             searchIndexLoading = true;
-            input.placeholder = 'Indexing...';
-            input.disabled = true;
+            if (!quiet) {
+                input.placeholder = 'Indexing...';
+                input.disabled = true;
+            }
             fetch('/api/addressbook/search-index', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
@@ -2162,6 +2256,7 @@
                     ? highlight(e.proxmox_token_id || '', tokens)
                     : (e.username ? highlight(e.username, tokens) : '');
                 if (needsPrompt && userCol) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials prompted at connect">[prompt]</span>';
+                if (e.inherited_credentials) userCol += ' <span style="color:#888;font-size:0.8em" title="Uses the folder\'s default credentials">[folder]</span>';
                 var scopeIcon = r.scope === 'shared' ? '⊕' : '▣';
                 html += '<tr>';
                 html += '<td>' + highlight(r.label, tokens) + '</td>';
@@ -2394,7 +2489,7 @@
             var html = '<table class="entries-table"><thead><tr>';
             if (isAdmin) html += '<th class="sel-cell"><input type="checkbox" id="sel-all" title="Select all"></th>';
             html += '<th>Name</th><th>Type</th><th>Host</th><th>User</th><th></th>';
-            if (isAdmin) html += '<th></th><th></th><th></th>';
+            if (isAdmin) html += '<th></th>';
             html += '</tr></thead><tbody>';
 
             entries.forEach(function(e, idx) {
@@ -2430,14 +2525,20 @@
                     : (e.username ? escapeHtml(e.username) : '');
                 var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
                 if (needsPrompt) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials will be prompted at connect time">[prompt]</span>';
+                if (e.inherited_credentials) userCol += ' <span style="color:#888;font-size:0.8em" title="Uses the folder\'s default credentials">[folder]</span>';
                 html += '<td>' + userCol + '</td>';
                 var connectLabel = needsPrompt ? 'Login...' : 'Connect';
                 html += '<td class="connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">' + connectLabel + '</button>'
                     + '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">&#x29c9;</button></td>';
                 if (isAdmin) {
-                    html += '<td><button class="btn-small" data-edit-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '" data-type="' + escapeAttr(e.session_type) + '">edit</button></td>';
-                    html += '<td><button class="btn-small" data-clone-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">clone</button></td>';
-                    html += '<td><button class="btn-small" data-delete-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">delete</button></td>';
+                    // One cell for the three admin actions: three cells cost
+                    // two extra runs of cell padding on every row, which is
+                    // what pushed "delete" off the right edge at 1710px wide.
+                    html += '<td class="actions-cell">'
+                        + '<button class="btn-small" data-edit-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '" data-type="' + escapeAttr(e.session_type) + '">edit</button>'
+                        + '<button class="btn-small" data-clone-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">clone</button>'
+                        + '<button class="btn-small" data-delete-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">delete</button>'
+                        + '</td>';
                 }
                 html += '</tr>';
             });
@@ -3034,6 +3135,7 @@
             fmUsersLoaded = true;
             fmGroups = [];
             renderFmGroupChips();
+            renderFmDefaults({});
             loadKnownGroups(populateFmGroupOptions);
             document.getElementById('folder-modal').classList.add('active');
         }
@@ -3100,6 +3202,13 @@
                     fmUsersLoaded = true;
                 }
             }).catch(function() {});
+            renderFmDefaults({});
+            fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath) + '/defaults', {
+                headers: apiHeaders(),
+                credentials: 'same-origin'
+            }).then(function(res) { return res.ok ? res.json() : null; })
+              .then(function(data) { if (data && data.defaults) renderFmDefaults(data.defaults); })
+              .catch(function() {});
 
             document.getElementById('folder-modal').classList.add('active');
         });
@@ -3142,6 +3251,64 @@
             });
         })();
 
+        // ── Folder default credentials (admin) ──
+        var FM_DEFAULT_TYPES = ['ssh', 'rdp', 'vnc', 'web'];
+        var fmDefaultsLoaded = {};   // type -> {username, domain, has_password, has_private_key}
+        function renderFmDefaults(summary) {
+            fmDefaultsLoaded = summary || {};
+            var rows = document.getElementById('fm-defaults-rows');
+            rows.innerHTML = '';
+            var any = false;
+            FM_DEFAULT_TYPES.forEach(function(t) {
+                var d = fmDefaultsLoaded[t];
+                if (d) any = true;
+                rows.insertAdjacentHTML('beforeend',
+                    '<tr data-type="' + t + '"><th>' + t + '</th>' +
+                    '<td><input class="fmd-user" placeholder="username" autocomplete="off" value="' + escapeAttr((d && d.username) || '') + '"></td>' +
+                    '<td><input type="password" class="fmd-pass" autocomplete="new-password" placeholder="' + (d && d.has_password ? '(stored)' : 'password') + '"></td>' +
+                    '<td>' + (t === 'ssh'
+                        ? '<textarea class="fmd-key" rows="1" spellcheck="false" placeholder="' + (d && d.has_private_key ? '(stored)' : 'private key') + '"></textarea>'
+                        : '') + '</td>' +
+                    '<td><label class="fmd-clear-label"><input type="checkbox" class="fmd-clear"> clear</label></td></tr>');
+            });
+            document.getElementById('fm-defaults').open = any;
+        }
+        // The PUT body: only what changed. A ticked clear sends null for the
+        // type; a typed secret sets it; a changed username sets it (empty
+        // clears). Nothing typed means no request at all.
+        function fmDefaultsPatch() {
+            var patch = {};
+            document.querySelectorAll('#fm-defaults-rows tr').forEach(function(tr) {
+                var t = tr.getAttribute('data-type');
+                var d = fmDefaultsLoaded[t];
+                if (tr.querySelector('.fmd-clear').checked) {
+                    if (d) patch[t] = null;
+                    return;
+                }
+                var part = {};
+                var user = tr.querySelector('.fmd-user').value.trim();
+                if (user !== ((d && d.username) || '')) part.username = user;
+                var pass = tr.querySelector('.fmd-pass').value;
+                if (pass) part.password = pass;
+                var keyEl = tr.querySelector('.fmd-key');
+                if (keyEl && keyEl.value.trim()) part.private_key = keyEl.value.trim();
+                if (Object.keys(part).length) patch[t] = part;
+            });
+            return patch;
+        }
+        function saveFmDefaults(scope, path) {
+            var patch = fmDefaultsPatch();
+            if (!Object.keys(patch).length) return Promise.resolve();
+            return fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(path) + '/defaults', {
+                method: 'PUT',
+                headers: apiHeaders({ 'Content-Type': 'application/json' }),
+                credentials: 'same-origin',
+                body: JSON.stringify(patch)
+            }).then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error('Default credentials: ' + t); });
+            });
+        }
+
         document.getElementById('fm-save').addEventListener('click', function() {
             var name = document.getElementById('fm-name').value.trim();
             var desc = document.getElementById('fm-desc').value.trim();
@@ -3176,6 +3343,9 @@
                 })
                 .then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                    return saveFmDefaults(folderEditMode.scope, folderEditMode.path || folderEditMode.name);
+                })
+                .then(function() {
                     document.getElementById('folder-modal').classList.remove('active');
                     // Update selected folder description
                     if (selectedFolder) selectedFolder.description = desc;
@@ -3194,6 +3364,9 @@
                 })
                 .then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                    return saveFmDefaults(postScope, fullPath);
+                })
+                .then(function() {
                     document.getElementById('folder-modal').classList.remove('active');
                     if (subfolderParent) {
                         // Expand parent so the new child shows, then invalidate cache and reload.
