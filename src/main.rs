@@ -653,6 +653,23 @@ fn cmd_map_group(database: &Db, group: &str, role: &str, force: bool) {
 #[derive(Clone)]
 struct TlsEnabled(bool);
 
+/// Content-Security-Policy sent with every response.
+///
+/// `img-src` must allow `data:` and `blob:`. The Guacamole client draws each
+/// `img` stream by loading a `data:image/...;base64,...` URI into an `Image`
+/// (the `DataURIReader` path in `Display.drawStream`) on browsers without
+/// WebCodecs `ImageDecoder`, which is Safari and Firefox. Without `img-src`
+/// the `default-src 'self'` fallback refuses those loads, the client silently
+/// skips the draw, and SSH/RDP sessions render black with only rect fills
+/// showing (#249). Chromium decodes straight from the stream bytes and never
+/// fetches a URL, so it hid the problem. The remote mouse cursor
+/// (`cursor: url(data:...)`) and blob: image URLs need the same allowance.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+    script-src 'self' 'unsafe-inline'; \
+    style-src 'self' 'unsafe-inline'; \
+    connect-src 'self' wss: ws:; \
+    img-src 'self' data: blob:";
+
 async fn security_headers(
     tls: Extension<TlsEnabled>,
     request: Request,
@@ -672,7 +689,7 @@ async fn security_headers(
     );
     headers.insert(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:".parse().unwrap(),
+        CONTENT_SECURITY_POLICY.parse().unwrap(),
     );
     if tls.0 .0 {
         headers.insert(
@@ -1817,6 +1834,24 @@ fn rewrite_branding(html: &str, site_title: &str, logo_url: Option<&str>) -> Str
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn test_csp_allows_data_and_blob_images() {
+        // Safari and Firefox draw Guacamole image streams through data: URIs
+        // (#249). Chromium uses ImageDecoder and would not catch a regression.
+        let directives: Vec<&str> = CONTENT_SECURITY_POLICY.split(';').map(str::trim).collect();
+        let img_src = directives
+            .iter()
+            .find(|d| d.starts_with("img-src "))
+            .expect("CSP must carry an explicit img-src directive");
+        let sources: Vec<&str> = img_src.split_whitespace().skip(1).collect();
+        assert!(sources.contains(&"'self'"), "img-src must allow 'self'");
+        assert!(sources.contains(&"data:"), "img-src must allow data: URIs");
+        assert!(sources.contains(&"blob:"), "img-src must allow blob: URLs");
+        // The string continuation must not leave stray whitespace runs.
+        assert!(!CONTENT_SECURITY_POLICY.contains("  "));
+        assert!(!CONTENT_SECURITY_POLICY.contains('\n'));
+    }
 
     #[test]
     fn test_version_assets_rewrites_local_js_and_css() {
