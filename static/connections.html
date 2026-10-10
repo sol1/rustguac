@@ -117,6 +117,9 @@
         .entries-table tbody tr:last-child td { border-bottom: none; }
         .entries-table td:last-child { text-align: right; white-space: nowrap; }
 
+        .entries-table .actions-cell { white-space: nowrap; text-align: right; }
+        .entries-table .actions-cell .btn-small { margin-left: var(--s-1); }
+
         /* Bulk selection (admins). */
         .entries-table .sel-cell { width: 2em; text-align: center; padding-right: 0; }
         .entries-table .sel-cell input { width: auto; margin: 0; cursor: pointer; }
@@ -163,6 +166,27 @@
         }
         .folder-actions .desc {
             color: var(--text-muted); font-size: var(--fz-md); font-style: italic;
+        }
+
+        /* Narrow desktops (a 1710px-wide MacBook display, 1600px monitors):
+           the 18px monospace table plus three padded action cells overran
+           the main column by ~300px, with "delete" cut off at the right.
+           Tighten the chrome rather than hide columns: smaller side
+           padding and sidebar, 16px cells with less padding, a narrower
+           Connect button. Everything then fits with ~250px to spare. */
+        @media (max-width: 1800px) {
+            body { padding: var(--s-4) var(--s-4); }
+            .layout { gap: var(--s-4); }
+            .sidebar { min-width: 240px; max-width: 280px; padding-right: var(--s-3); }
+            .entries-table th, .entries-table td {
+                padding: var(--s-2) var(--s-3);
+                font-size: var(--fz-sm);
+            }
+            .entries-table th { font-size: var(--fz-xs); letter-spacing: 0.08em; }
+            .btn-connect { min-width: 110px; padding: 0 var(--s-3); }
+            .btn-connect-win { min-width: 0; padding: 0 var(--s-1); }
+            .folder-actions strong { font-size: var(--fz-lg); }
+            .folder-actions .desc { font-size: var(--fz-sm); }
         }
 
         /* Active sessions strip */
@@ -2394,7 +2418,7 @@
             var html = '<table class="entries-table"><thead><tr>';
             if (isAdmin) html += '<th class="sel-cell"><input type="checkbox" id="sel-all" title="Select all"></th>';
             html += '<th>Name</th><th>Type</th><th>Host</th><th>User</th><th></th>';
-            if (isAdmin) html += '<th></th><th></th><th></th>';
+            if (isAdmin) html += '<th></th>';
             html += '</tr></thead><tbody>';
 
             entries.forEach(function(e, idx) {
@@ -2435,9 +2459,14 @@
                 html += '<td class="connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">' + connectLabel + '</button>'
                     + '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">&#x29c9;</button></td>';
                 if (isAdmin) {
-                    html += '<td><button class="btn-small" data-edit-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '" data-type="' + escapeAttr(e.session_type) + '">edit</button></td>';
-                    html += '<td><button class="btn-small" data-clone-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">clone</button></td>';
-                    html += '<td><button class="btn-small" data-delete-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">delete</button></td>';
+                    // One cell for the three admin actions: three cells cost
+                    // two extra runs of cell padding on every row, which is
+                    // what pushed "delete" off the right edge at 1710px wide.
+                    html += '<td class="actions-cell">'
+                        + '<button class="btn-small" data-edit-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '" data-type="' + escapeAttr(e.session_type) + '">edit</button>'
+                        + '<button class="btn-small" data-clone-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">clone</button>'
+                        + '<button class="btn-small" data-delete-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">delete</button>'
+                        + '</td>';
                 }
                 html += '</tr>';
             });
