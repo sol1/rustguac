@@ -348,6 +348,59 @@
             padding: 1px var(--s-1); font-size: 0.85em; color: var(--text);
         }
         .onboard-hl { color: var(--accent); font-weight: bold; }
+
+        /* UX (#254) selection feedback: jump to top, change animation, skeleton */
+        /* Title slides in from the left and the action bar's bottom border
+           flashes accent when the selected folder changes. The .changed class
+           is added by announceFolderShown() and removed on animationend so
+           it can replay on the next selection. */
+        #entries-header.changed #entries-title {
+            animation: rg-title-in 350ms ease-out both;
+        }
+        #entries-header.changed .folder-actions {
+            animation: rg-header-flash 700ms ease-out both;
+        }
+        @keyframes rg-title-in {
+            from { opacity: 0; transform: translateX(-4px); }
+            to   { opacity: 1; transform: none; }
+        }
+        @keyframes rg-header-flash {
+            0%   { border-bottom-color: var(--accent); }
+            60%  { border-bottom-color: var(--accent); }
+            100% { border-bottom-color: var(--border); }
+        }
+        /* Skeleton: a real .entries-table so column padding, header height and
+           the 38px Connect-button row height are identical to the loaded
+           table; only the cells are replaced by shimmering bars. */
+        .entries-table.skeleton tbody tr:hover { background: inherit; }
+        .sk-bar {
+            display: inline-block; vertical-align: middle;
+            height: 1em; width: 60%; max-width: 100%;
+            border-radius: var(--radius);
+            background: var(--surface)
+                linear-gradient(90deg, transparent 0%, var(--input) 50%, transparent 100%)
+                no-repeat;
+            background-size: 45% 100%;
+            animation: rg-shimmer 1.2s ease-in-out infinite;
+        }
+        .sk-bar.sk-btn { height: var(--ctl-sm); width: 130px; }
+        .sk-bar.sk-badge { height: 1.4em; width: 3.2em; }
+        .sk-bar.sk-check { height: 16px; width: 16px; }
+        .entries-table.skeleton tbody tr:nth-child(2) td > .sk-bar:only-child:not([class*=" sk-"]) { width: 72%; }
+        .entries-table.skeleton tbody tr:nth-child(3) td > .sk-bar:only-child:not([class*=" sk-"]) { width: 48%; }
+        .entries-table.skeleton tbody tr:nth-child(4) td > .sk-bar:only-child:not([class*=" sk-"]) { width: 66%; }
+        @keyframes rg-shimmer {
+            from { background-position: -100% 0; }
+            to   { background-position: 250% 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #entries-header.changed #entries-title,
+            #entries-header.changed .folder-actions,
+            .sk-bar { animation: none; }
+            /* Still mark the change without motion: a static accent border
+               while .changed is on (flashEntriesHeader clears it by timer). */
+            #entries-header.changed .folder-actions { border-bottom-color: var(--accent); }
+        }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -2249,18 +2302,23 @@
 
             var cacheKey = folderKey(scope, folderPath);
             var cached = folderEntries[cacheKey];
+            // UX (#254): jump to the entries header and flash the title, but
+            // only when the shown folder actually changed (not on initial
+            // load, live refresh, forceRefresh after a mutation, or search
+            // clear re-rendering the same folder).
+            announceFolderShown(cacheKey, header);
 
             // Use cache if available and not forcing refresh (e.g. after mutation)
             if (cached && !forceRefresh) {
                 currentEntries = cached;
                 folderEntryCounts[cacheKey] = cached.length;
-                renderFolders();
+                updateFolderCount(scope, folderPath, cached.length);
                 renderEntries(cached, scope, folderPath);
                 return;
             }
 
             var content = document.getElementById('entries-content');
-            content.innerHTML = '<p class="empty">Loading...</p>';
+            content.innerHTML = entriesSkeletonHtml();
 
             fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folderPath) + '/entries', {
                 headers: apiHeaders(),
@@ -2285,7 +2343,7 @@
                 currentEntries = entries;
                 folderEntries[cacheKey] = entries;
                 folderEntryCounts[cacheKey] = entries.length;
-                renderFolders(); // Update count badge
+                updateFolderCount(scope, folderPath, entries.length); // in-place badge update
                 renderEntries(entries, scope, folderPath);
             })
             .catch(function(err) {
@@ -4850,6 +4908,177 @@
             localStorage.removeItem('rustguac_onboarding_dismissed');
             startOnboarding(currentUserRole);
         });
+
+        // ── UX (#254): selection feedback & sidebar render hygiene ──────────
+        // Everything here wraps existing functions or post-processes the DOM;
+        // renderFolders() itself is untouched.
+
+        var prefersReducedMotion = (function() {
+            try { return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+            catch (e) { return false; }
+        })();
+        var lastShownFolderKey = null;    // "scope|path" last passed to loadEntries()
+        var sidebarRevealPending = false; // set by loadFolders(); consumed by the renderFolders wrapper
+
+        // Nearest scrollable ancestor of el, stopping at (and including) the
+        // sidebar. null when the sidebar is not its own scroll container,
+        // in which case the page scroll already handles visibility.
+        function sidebarScrollContainer(el) {
+            var sidebar = document.querySelector('.sidebar');
+            var node = el ? el.parentElement : null;
+            while (node) {
+                var oy = getComputedStyle(node).overflowY;
+                if ((oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight) return node;
+                if (node === sidebar) break;
+                node = node.parentElement;
+            }
+            return null;
+        }
+
+        // scrollIntoView({ block: 'nearest' }) confined to the sidebar's own
+        // scroll container: moves container.scrollTop only, never the page.
+        function revealSidebarRow(li) {
+            if (!li) return;
+            var box = sidebarScrollContainer(li);
+            if (!box) return;
+            var row = li.querySelector('.folder-row') || li;
+            var cr = box.getBoundingClientRect();
+            var lr = row.getBoundingClientRect();
+            if (lr.top < cr.top) box.scrollTop -= (cr.top - lr.top);
+            else if (lr.bottom > cr.bottom) box.scrollTop += Math.min(lr.bottom - cr.bottom, lr.top - cr.top);
+        }
+
+        function selectedFolderLi() {
+            return document.querySelector('#folder-list li.selected');
+        }
+
+        // Bring the entries header to the top of the viewport when it is not
+        // comfortably in view (above the viewport after scrolling a long
+        // sidebar, or pushed into the lower half by the strips above it).
+        function jumpToEntriesHeader(header) {
+            if (!header) return;
+            var r = header.getBoundingClientRect();
+            var vh = window.innerHeight || document.documentElement.clientHeight;
+            var inView = r.top >= 0 && r.top <= vh * 0.5 && r.bottom <= vh;
+            if (inView) return;
+            try {
+                header.scrollIntoView({ block: 'start', behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+            } catch (e) {
+                header.scrollIntoView(true);
+            }
+        }
+
+        // Replay the .changed animation on the entries header.
+        function flashEntriesHeader(header) {
+            if (!header) return;
+            header.classList.remove('changed');
+            void header.offsetWidth; // restart keyframes
+            header.classList.add('changed');
+            clearTimeout(header._rgChangedTimer);
+            // Fallback clear: with reduced motion the animation is disabled so
+            // no animationend fires; otherwise animationend clears it earlier.
+            header._rgChangedTimer = setTimeout(function() { header.classList.remove('changed'); }, 900);
+        }
+        (function() {
+            var header = document.getElementById('entries-header');
+            if (!header) return;
+            header.addEventListener('animationend', function(e) {
+                // The title finishes first; clear when the (longer) border
+                // flash ends so both animations complete.
+                if (e.animationName === 'rg-header-flash') header.classList.remove('changed');
+            });
+        })();
+
+        // Called by loadEntries() for every folder it shows. Only a change of
+        // folder (after one has already been shown) gets the jump + flash.
+        function announceFolderShown(key, header) {
+            var prev = lastShownFolderKey;
+            lastShownFolderKey = key;
+            if (prev === null || prev === key) return;
+            flashEntriesHeader(header);
+            jumpToEntriesHeader(header);
+            revealSidebarRow(selectedFolderLi());
+        }
+
+        // Skeleton placeholder shown while entries are fetched (never for the
+        // cached path). Same table class and column count as renderEntries().
+        function entriesSkeletonHtml() {
+            var cols = ['Name', 'Type', 'Host', 'User', ''];
+            var html = '<table class="entries-table skeleton" aria-busy="true" aria-label="Loading entries"><thead><tr>';
+            if (isAdmin) html += '<th class="sel-cell"><span class="sk-bar sk-check"></span></th>';
+            cols.forEach(function(c) { html += '<th>' + c + '</th>'; });
+            if (isAdmin) html += '<th></th><th></th><th></th>';
+            html += '</tr></thead><tbody>';
+            for (var i = 0; i < 4; i++) {
+                html += '<tr>';
+                if (isAdmin) html += '<td class="sel-cell"><span class="sk-bar sk-check"></span></td>';
+                html += '<td><span class="sk-bar"></span></td>' +
+                        '<td><span class="sk-bar sk-badge"></span></td>' +
+                        '<td><span class="sk-bar"></span></td>' +
+                        '<td><span class="sk-bar"></span></td>' +
+                        '<td class="connect-cell"><span class="sk-bar sk-btn"></span></td>';
+                if (isAdmin) html += '<td></td><td></td><td></td>';
+                html += '</tr>';
+            }
+            return html + '</tbody></table>';
+        }
+
+        function cssAttrEscape(s) {
+            if (window.CSS && CSS.escape) return CSS.escape(s);
+            return String(s).replace(/["\\]/g, '\\$&');
+        }
+
+        // Update one folder's count badge in place instead of rebuilding the
+        // whole sidebar. Keeps whatever text format renderFolders() produced
+        // (only the number is swapped). Falls back to a full render when the
+        // row or its badge does not exist yet.
+        function updateFolderCount(scope, path, n) {
+            folderEntryCounts[folderKey(scope, path)] = n;
+            var li = document.querySelector('#folder-list li[data-scope="' + cssAttrEscape(scope) + '"][data-path="' + cssAttrEscape(path) + '"]');
+            var badge = null;
+            if (li) {
+                var all = li.querySelectorAll('.folder-count');
+                for (var i = 0; i < all.length; i++) {
+                    if (all[i].closest('li') === li) { badge = all[i]; break; }
+                }
+            }
+            if (!badge || !/\d/.test(badge.textContent)) { renderFolders(); return; }
+            badge.textContent = badge.textContent.replace(/\d[\d,]*/, String(n));
+        }
+
+        // Wrap renderFolders(): preserve the sidebar's scroll position across
+        // a rebuild, and reveal the selected row (within the sidebar only)
+        // when the selection changed or a tree reload asked for it.
+        var __renderFolders = renderFolders;
+        var __lastRenderedSelKey = null;
+        renderFolders = function() {
+            var boxes = [];
+            var node = document.getElementById('folder-list');
+            while (node) {
+                if (node.scrollTop) boxes.push({ el: node, top: node.scrollTop });
+                if (node.classList && node.classList.contains('sidebar')) break;
+                node = node.parentElement;
+            }
+            var result = __renderFolders.apply(this, arguments);
+            boxes.forEach(function(b) { b.el.scrollTop = b.top; });
+            var selKey = selectedFolder ? folderKey(selectedFolder.scope, folderPath(selectedFolder)) : null;
+            var li = selectedFolderLi();
+            if (li && (sidebarRevealPending || selKey !== __lastRenderedSelKey)) {
+                sidebarRevealPending = false;
+                revealSidebarRow(li);
+            }
+            __lastRenderedSelKey = selKey;
+            return result;
+        };
+
+        // Wrap loadFolders(): after a tree (re)build the selected row should
+        // be visible in the sidebar. Arguments pass through untouched.
+        var __loadFolders = loadFolders;
+        loadFolders = function() {
+            sidebarRevealPending = true;
+            return __loadFolders.apply(this, arguments);
+        };
+        // ── end UX (#254) ────────────────────────────────────────────────────
 
         init();
     </script>
