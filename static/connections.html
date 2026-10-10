@@ -348,6 +348,38 @@
             padding: 1px var(--s-1); font-size: 0.85em; color: var(--text);
         }
         .onboard-hl { color: var(--accent); font-weight: bold; }
+
+        /* UX (#254) filter + keyboard */
+        #sidebar-tools { margin-bottom: var(--s-3); }
+        #sidebar-tools:empty { display: none; }
+        .folder-filter-wrap { position: relative; display: flex; align-items: center; }
+        #folder-filter {
+            flex: 1 1 auto; width: 100%; min-width: 0;
+            height: var(--ctl-sm); padding: 0 var(--s-2);
+            font-family: monospace; font-size: var(--fz-sm);
+        }
+        /* Native clear glyph is replaced by #folder-filter-clear (Firefox has none) */
+        #folder-filter::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
+        #folder-filter-count {
+            position: absolute; right: calc(var(--s-1) + 26px); top: 50%; transform: translateY(-50%);
+            font-size: var(--fz-xs); color: var(--text-dim); white-space: nowrap;
+            pointer-events: none; letter-spacing: 0.02em;
+        }
+        #folder-filter-count.no-match { color: var(--primary); }
+        #folder-filter-clear {
+            position: absolute; right: var(--s-1); top: 50%; transform: translateY(-50%);
+            width: 24px; height: 24px; padding: 0; margin: 0;
+            display: inline-flex; align-items: center; justify-content: center;
+            background: transparent; border: 0; border-radius: var(--radius);
+            color: var(--text-muted); font-family: monospace; font-size: var(--fz-md); line-height: 1;
+            cursor: pointer;
+        }
+        #folder-filter-clear:hover { color: var(--primary); background: var(--input); }
+        .folder-filter-wrap:not(.filtering) #folder-filter-count,
+        .folder-filter-wrap:not(.filtering) #folder-filter-clear { display: none; }
+        .folder-list li.filtered-out { display: none; }
+        .folder-row:focus { outline: none; }
+        .folder-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -417,6 +449,7 @@
                     <strong>Folders</strong>
                     <button class="btn-add admin-only" id="btn-new-folder" style="display:none" title="Create new folder">+ folder</button>
                 </div>
+                <div id="sidebar-tools"></div>
                 <ul class="folder-list" id="folder-list"></ul>
             </div>
             <div class="main">
@@ -4849,6 +4882,365 @@
             document.getElementById('user-menu').style.display = 'none';
             localStorage.removeItem('rustguac_onboarding_dismissed');
             startOnboarding(currentUserRole);
+        });
+
+        // ── UX (#254): folder filter + keyboard navigation ──────────────────
+        // Post-processes the tree that renderFolders() builds (it never edits
+        // it): a live filter box mounted in #sidebar-tools, tree/treeitem ARIA
+        // roles with a roving tabindex, arrow-key navigation, and an `f`
+        // shortcut mirroring the `/` quick-find one above.
+        var FOLDER_FILTER_KEY = 'rustguac_folder_filter';
+        var _ffWrap = null, _ffInput = null, _ffCount = null;
+
+        (function mountFolderFilter() {
+            var tools = document.getElementById('sidebar-tools');
+            if (!tools) return;
+            _ffWrap = document.createElement('div');
+            _ffWrap.className = 'folder-filter-wrap';
+            _ffInput = document.createElement('input');
+            _ffInput.type = 'search';
+            _ffInput.id = 'folder-filter';
+            _ffInput.placeholder = 'Filter folders';
+            _ffInput.autocomplete = 'off';
+            _ffInput.spellcheck = false;
+            _ffInput.setAttribute('aria-label', 'Filter folders');
+            _ffInput.setAttribute('aria-controls', 'folder-list');
+            _ffInput.title = 'Filter folders (f). Arrow down to move into the list.';
+            _ffCount = document.createElement('span');
+            _ffCount.id = 'folder-filter-count';
+            _ffCount.setAttribute('aria-live', 'polite');
+            var clear = document.createElement('button');
+            clear.type = 'button';
+            clear.id = 'folder-filter-clear';
+            clear.title = 'Clear filter (Esc)';
+            clear.setAttribute('aria-label', 'Clear folder filter');
+            clear.textContent = '×';
+            clear.tabIndex = -1;
+            _ffWrap.appendChild(_ffInput);
+            _ffWrap.appendChild(_ffCount);
+            _ffWrap.appendChild(clear);
+            tools.appendChild(_ffWrap);
+
+            try { _ffInput.value = sessionStorage.getItem(FOLDER_FILTER_KEY) || ''; } catch (e) {}
+
+            _ffInput.addEventListener('input', function() {
+                try {
+                    if (_ffInput.value) sessionStorage.setItem(FOLDER_FILTER_KEY, _ffInput.value);
+                    else sessionStorage.removeItem(FOLDER_FILTER_KEY);
+                } catch (e) {}
+                applyFolderFilter();
+            });
+            clear.addEventListener('click', function() {
+                clearFolderFilter();
+                _ffInput.focus();
+            });
+            _ffInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    if (_ffInput.value) clearFolderFilter();
+                    else _ffInput.blur();
+                    e.stopPropagation();
+                    e.preventDefault();
+                } else if (e.key === 'ArrowDown') {
+                    var rows = visibleFolderRows();
+                    if (rows.length) { e.preventDefault(); focusFolderRow(rows[0]); }
+                } else if (e.key === 'Enter') {
+                    // Exactly one match: open it. Otherwise step into the list.
+                    var vis = visibleFolderRows();
+                    if (!vis.length) return;
+                    e.preventDefault();
+                    focusFolderRow(vis[0]);
+                    if (vis.length === 1) vis[0].click();
+                }
+            });
+        })();
+
+        function clearFolderFilter() {
+            if (!_ffInput) return;
+            _ffInput.value = '';
+            try { sessionStorage.removeItem(FOLDER_FILTER_KEY); } catch (e) {}
+            applyFolderFilter();
+        }
+
+        // The folder <li>s renderFolders() emits (placeholders carry no data-path).
+        function folderLis(container) {
+            var out = [];
+            for (var i = 0; i < container.children.length; i++) {
+                var li = container.children[i];
+                if (li.tagName === 'LI' && li.hasAttribute('data-path')) out.push(li);
+            }
+            return out;
+        }
+        function folderRowOf(li) {
+            var row = li.firstElementChild;
+            return row && row.classList.contains('folder-row') ? row : null;
+        }
+        function folderChildList(li) {
+            for (var i = 0; i < li.children.length; i++) {
+                if (li.children[i].tagName === 'UL') return li.children[i];
+            }
+            return null;
+        }
+        function folderLiHaystack(li) {
+            var parts = [li.getAttribute('data-path') || ''];
+            var row = folderRowOf(li);
+            if (row) {
+                var name = row.querySelector('.folder-name-row > span:first-child, .folder-name');
+                if (name) parts.push(name.textContent);
+                var desc = row.querySelector('.folder-desc');
+                if (desc) parts.push(desc.textContent);
+            }
+            return parts.join(' ').toLowerCase();
+        }
+        // Loaded-but-collapsed descendants (subfolderCache) count as matches
+        // too, so a parent stays visible when something under it matches.
+        function cachedDescendantMatches(scope, path, tokens, depth) {
+            var kids = subfolderCache[folderKey(scope, path)];
+            if (!kids || depth > 12) return false;
+            for (var i = 0; i < kids.length; i++) {
+                var k = kids[i];
+                var hay = (folderPath(k) + ' ' + k.name + ' ' + (k.description || '')).toLowerCase();
+                if (matchesTokens(hay, tokens)) return true;
+                if (k.has_children && cachedDescendantMatches(k.scope, folderPath(k), tokens, depth + 1)) return true;
+            }
+            return false;
+        }
+        function matchesTokens(hay, tokens) {
+            for (var t = 0; t < tokens.length; t++) {
+                if (hay.indexOf(tokens[t]) === -1) return false;
+            }
+            return true;
+        }
+
+        function applyFolderFilter() {
+            var ul = document.getElementById('folder-list');
+            if (!ul) return;
+            var q = _ffInput ? (_ffInput.value || '').trim().toLowerCase() : '';
+            var tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+            var total = 0, shown = 0;
+
+            // Returns true if anything in this <ul> stays visible.
+            function walk(list, parentSelfMatch, depth) {
+                var anyVisible = false;
+                for (var i = 0; i < list.children.length; i++) {
+                    var li = list.children[i];
+                    if (li.tagName !== 'LI') continue;
+                    if (!li.hasAttribute('data-path')) {
+                        // Placeholders: "Loading...", "(empty)", unavailable scope, "No folders".
+                        var keep = !tokens.length || depth === 0 || parentSelfMatch;
+                        li.classList.toggle('filtered-out', !keep);
+                        continue;
+                    }
+                    total++;
+                    var selfMatch = !tokens.length || matchesTokens(folderLiHaystack(li), tokens);
+                    var childUl = folderChildList(li);
+                    var childVisible = childUl ? walk(childUl, selfMatch, depth + 1) : false;
+                    var visible = selfMatch || childVisible;
+                    if (!visible && tokens.length && !childUl) {
+                        var row = folderRowOf(li);
+                        var chev = row && row.querySelector('.tree-chevron');
+                        if (chev && !chev.classList.contains('leaf')) {
+                            visible = cachedDescendantMatches(li.getAttribute('data-scope'), li.getAttribute('data-path'), tokens, 0);
+                        }
+                    }
+                    li.classList.toggle('filtered-out', !visible);
+                    if (visible) { shown++; anyVisible = true; }
+                }
+                return anyVisible;
+            }
+            walk(ul, true, 0);
+
+            if (_ffWrap) {
+                // No folders at all (empty / no-vault states): nothing to filter.
+                _ffWrap.style.display = total === 0 && !tokens.length ? 'none' : '';
+                _ffWrap.classList.toggle('filtering', tokens.length > 0);
+                if (tokens.length) {
+                    _ffCount.textContent = shown + ' of ' + total;
+                    _ffCount.classList.toggle('no-match', shown === 0);
+                    _ffInput.style.paddingRight = (_ffCount.offsetWidth + 34) + 'px';
+                } else {
+                    _ffCount.textContent = '';
+                    _ffCount.classList.remove('no-match');
+                    _ffInput.style.paddingRight = '';
+                }
+            }
+            decorateFolderTree(ul);
+        }
+
+        // ARIA roles + roving tabindex. Cheap enough to redo on every render.
+        function decorateFolderTree(ul) {
+            ul.setAttribute('role', 'tree');
+            ul.setAttribute('aria-label', 'Folders');
+            var rows = [];
+            function visit(list, level) {
+                if (list !== ul) list.setAttribute('role', 'group');
+                folderLis(list).forEach(function(li) {
+                    var row = folderRowOf(li);
+                    if (!row) return;
+                    row.setAttribute('role', 'treeitem');
+                    row.setAttribute('aria-level', String(level));
+                    row.setAttribute('aria-selected', li.classList.contains('selected') ? 'true' : 'false');
+                    var chev = row.querySelector('.tree-chevron');
+                    if (chev && !chev.classList.contains('leaf')) {
+                        row.setAttribute('aria-expanded', chev.classList.contains('expanded') ? 'true' : 'false');
+                    } else {
+                        row.removeAttribute('aria-expanded');
+                    }
+                    row.tabIndex = -1;
+                    rows.push(row);
+                    var childUl = folderChildList(li);
+                    if (childUl) visit(childUl, level + 1);
+                });
+            }
+            visit(ul, 1);
+            var vis = visibleFolderRows();
+            var tabStop = null;
+            for (var i = 0; i < vis.length; i++) {
+                if (vis[i].getAttribute('aria-selected') === 'true') { tabStop = vis[i]; break; }
+            }
+            if (!tabStop && vis.length) tabStop = vis[0];
+            if (tabStop) tabStop.tabIndex = 0;
+        }
+
+        function visibleFolderRows() {
+            var ul = document.getElementById('folder-list');
+            if (!ul) return [];
+            var out = [];
+            var all = ul.querySelectorAll('li[data-path] > .folder-row');
+            for (var i = 0; i < all.length; i++) {
+                if (!all[i].closest('.filtered-out')) out.push(all[i]);
+            }
+            return out;
+        }
+
+        function focusFolderRow(row) {
+            if (!row) return;
+            var ul = document.getElementById('folder-list');
+            if (ul) {
+                var rows = ul.querySelectorAll('li[data-path] > .folder-row');
+                for (var i = 0; i < rows.length; i++) rows[i].tabIndex = -1;
+            }
+            row.tabIndex = 0;
+            try { row.focus({ preventScroll: true }); } catch (e) { row.focus(); }
+            try { row.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+        }
+
+        function folderRowKey(row) {
+            var li = row && row.parentElement;
+            if (!li || !li.hasAttribute('data-path')) return null;
+            return folderKey(li.getAttribute('data-scope'), li.getAttribute('data-path'));
+        }
+        function folderRowByKey(key) {
+            var ul = document.getElementById('folder-list');
+            if (!ul || !key) return null;
+            var rows = ul.querySelectorAll('li[data-path] > .folder-row');
+            for (var i = 0; i < rows.length; i++) {
+                if (folderRowKey(rows[i]) === key) return rows[i];
+            }
+            return null;
+        }
+
+        (function wireFolderTreeKeys() {
+            var ul = document.getElementById('folder-list');
+            if (!ul) return;
+            ul.addEventListener('focusin', function(e) {
+                var row = e.target.closest && e.target.closest('li[data-path] > .folder-row');
+                if (!row) return;
+                var rows = ul.querySelectorAll('li[data-path] > .folder-row');
+                for (var i = 0; i < rows.length; i++) rows[i].tabIndex = -1;
+                row.tabIndex = 0;
+            });
+            ul.addEventListener('keydown', function(e) {
+                if (e.ctrlKey || e.metaKey || e.altKey) return;
+                var row = e.target.closest && e.target.closest('li[data-path] > .folder-row');
+                if (!row) return;
+                var rows = visibleFolderRows();
+                var idx = rows.indexOf(row);
+                var li = row.parentElement;
+                var chev = row.querySelector('.tree-chevron');
+                var expandable = chev && !chev.classList.contains('leaf');
+                var expanded = expandable && chev.classList.contains('expanded');
+                switch (e.key) {
+                    case 'ArrowDown':
+                        e.preventDefault();
+                        if (idx < rows.length - 1) focusFolderRow(rows[idx + 1]);
+                        break;
+                    case 'ArrowUp':
+                        e.preventDefault();
+                        if (idx > 0) focusFolderRow(rows[idx - 1]);
+                        else if (_ffInput && _ffWrap && _ffWrap.style.display !== 'none') { _ffInput.focus(); _ffInput.select(); }
+                        break;
+                    case 'Home':
+                        e.preventDefault();
+                        if (rows.length) focusFolderRow(rows[0]);
+                        break;
+                    case 'End':
+                        e.preventDefault();
+                        if (rows.length) focusFolderRow(rows[rows.length - 1]);
+                        break;
+                    case 'Enter':
+                    case ' ':
+                        e.preventDefault();
+                        row.click();
+                        break;
+                    case 'ArrowRight':
+                        e.preventDefault();
+                        if (!expandable) break;
+                        if (!expanded) { chev.click(); break; }
+                        var childUl = folderChildList(li);
+                        if (childUl) {
+                            var kids = folderLis(childUl).map(folderRowOf).filter(function(r) {
+                                return r && !r.closest('.filtered-out');
+                            });
+                            if (kids.length) focusFolderRow(kids[0]);
+                        }
+                        break;
+                    case 'ArrowLeft':
+                        e.preventDefault();
+                        if (expanded) { chev.click(); break; }
+                        var parentLi = li.parentElement && li.parentElement.closest('li[data-path]');
+                        var parentRow = parentLi && folderRowOf(parentLi);
+                        if (parentRow && !parentRow.closest('.filtered-out')) focusFolderRow(parentRow);
+                        break;
+                    case 'Escape':
+                        if (_ffInput && _ffInput.value) { e.stopPropagation(); clearFolderFilter(); }
+                        break;
+                }
+            });
+        })();
+
+        // Wrap renderFolders(): keep the filter and keyboard focus across the
+        // full rebuilds it does (callers resolve the binding at call time).
+        var __renderFoldersBase = renderFolders;
+        renderFolders = function() {
+            var ul = document.getElementById('folder-list');
+            var focusedKey = null;
+            if (ul && document.activeElement && ul.contains(document.activeElement)) {
+                var r = document.activeElement.closest('li[data-path] > .folder-row');
+                focusedKey = r ? folderRowKey(r) : null;
+            }
+            __renderFoldersBase();
+            applyFolderFilter();
+            if (focusedKey) {
+                var back = folderRowByKey(focusedKey);
+                if (back && !back.closest('.filtered-out')) focusFolderRow(back);
+            }
+        };
+
+        // `f` focuses the folder filter; same guards as the `/` quick-find above.
+        document.addEventListener('keydown', function(e) {
+            if (e.key !== 'f' || e.ctrlKey || e.metaKey || e.altKey) return;
+            var t = document.activeElement;
+            if (t) {
+                var tag = t.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable) return;
+            }
+            if (document.querySelector('.modal-overlay.active')) return;
+            if (!_ffInput || !_ffWrap || _ffWrap.style.display === 'none') return;
+            var main = document.getElementById('main-content');
+            if (main && main.style.display === 'none') return;
+            e.preventDefault();
+            _ffInput.focus();
+            _ffInput.select();
         });
 
         init();
