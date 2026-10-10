@@ -898,6 +898,7 @@ async fn run_server(config: Config, database: Db) {
 
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
     let vault_configured = VaultConfigured(config.vault.is_some());
+    let ab_version = api::AddressBookVersion::default();
     let credential_default_scope =
         CredentialDefaultScope(config.user_credentials_default_scope.clone());
     let drive_configured = DriveConfigured(config.drive.is_some());
@@ -1296,6 +1297,19 @@ async fn run_server(config: Config, database: Db) {
             get(api::ab_list_subfolders),
         )
         .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            get(api::ab_get_folder_defaults),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            put(api::ab_put_folder_defaults),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            delete(api::ab_delete_folder_defaults),
+        )
+        .route("/api/addressbook/version", get(api::ab_version))
+        .route(
             "/api/addressbook/folders/{scope}/{folder}/entries",
             get(api::ab_list_entries),
         )
@@ -1327,11 +1341,15 @@ async fn run_server(config: Config, database: Db) {
         .merge(session_create_route)
         .with_state(manager.clone())
         .layer(middleware::from_fn(auth::require_auth))
+        // Inside auth: only requests allowed to change the address book
+        // count. The counter itself is layered below so this sees it.
+        .layer(middleware::from_fn(api::ab_version_bump))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(credential_default_scope.clone()))
-        .layer(Extension(database.clone()));
+        .layer(Extension(database.clone()))
+        .layer(Extension(ab_version.clone()));
     // Applied OUTSIDE require_auth so requests with bad credentials are
     // counted too: a flood of bogus keys is throttled before each one
     // queues on the database lock to be looked up.

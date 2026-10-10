@@ -2193,6 +2193,51 @@ impl VaultBackends {
             .await
     }
 
+    pub async fn get_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<crate::vault::FolderDefaults, VaultError> {
+        self.scoped(scope)
+            .await?
+            .get_folder_defaults(scope, folder)
+            .await
+    }
+
+    pub async fn put_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+        defaults: &crate::vault::FolderDefaults,
+    ) -> Result<(), VaultError> {
+        self.scoped(scope)
+            .await?
+            .put_folder_defaults(scope, folder, defaults)
+            .await
+    }
+
+    pub async fn delete_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<(), VaultError> {
+        self.scoped(scope)
+            .await?
+            .delete_folder_defaults(scope, folder)
+            .await
+    }
+
+    pub async fn effective_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<Option<crate::vault::FolderDefaults>, VaultError> {
+        self.scoped(scope)
+            .await?
+            .effective_folder_defaults(scope, folder)
+            .await
+    }
+
     pub async fn delete_folder(
         &self,
         scope: &str,
@@ -2519,6 +2564,347 @@ pub async fn ab_list_subfolders(
 
 /// GET /api/addressbook — Batch endpoint returning all visible folders with entries.
 /// Replaces the N+1 pattern of listing folders then entries per folder.
+// ── Address book change counter ──
+
+/// Monotonic change counter for the address book, bumped by any successful
+/// mutating request under `/api/addressbook` (other than `.../connect`) or
+/// `/api/me/credentials`; see `ab_version_bump`. The Connections page polls
+/// `GET /api/addressbook/version` every few seconds and reloads only when it
+/// moves, so a NetBox webhook or an admin's edit reaches every open page
+/// within seconds without a Vault read per poll. It is per process: a second
+/// instance sharing the Vault does not see this one's bumps, which the page
+/// covers with a slow unconditional refresh.
+#[derive(Clone, Default)]
+pub struct AddressBookVersion {
+    inner: Arc<AddressBookVersionInner>,
+}
+
+#[derive(Default)]
+struct AddressBookVersionInner {
+    version: std::sync::atomic::AtomicU64,
+    changed_at_ms: std::sync::atomic::AtomicU64,
+}
+
+impl AddressBookVersion {
+    pub fn bump(&self) {
+        use std::sync::atomic::Ordering;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.inner.version.fetch_add(1, Ordering::Relaxed);
+        self.inner.changed_at_ms.store(now_ms, Ordering::Relaxed);
+    }
+
+    /// (version, changed_at in unix milliseconds; 0 before the first bump)
+    pub fn snapshot(&self) -> (u64, u64) {
+        use std::sync::atomic::Ordering;
+        (
+            self.inner.version.load(Ordering::Relaxed),
+            self.inner.changed_at_ms.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// Whether a request path and method change the address book as the
+/// Connections page shows it. Extracted for test.
+pub fn ab_request_mutates(method: &axum::http::Method, path: &str) -> bool {
+    use axum::http::Method;
+    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        return false;
+    }
+    if path == "/api/me/credentials" {
+        return true;
+    }
+    // Connecting creates a session, not a change; everything else under the
+    // prefix (entries, folders, config, defaults, move/copy, bulk) does.
+    path.starts_with("/api/addressbook") && !path.ends_with("/connect")
+}
+
+/// Middleware: bump the address book version after any successful mutating
+/// request that touches it. Sits inside the auth layer, so only requests
+/// that were allowed to change anything get here.
+pub async fn ab_version_bump(
+    version: Option<Extension<AddressBookVersion>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mutates = ab_request_mutates(request.method(), request.uri().path());
+    let response = next.run(request).await;
+    if mutates && response.status().is_success() {
+        if let Some(Extension(v)) = version {
+            v.bump();
+        }
+    }
+    response
+}
+
+/// GET /api/addressbook/version — the change counter. Requires operator.
+pub async fn ab_version(
+    identity: Option<Extension<AuthIdentity>>,
+    version: Option<Extension<AddressBookVersion>>,
+) -> impl IntoResponse {
+    if !matches!(identity, Some(Extension(ref id)) if id.has_role("operator")) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "operator role required"})),
+        )
+            .into_response();
+    }
+    let (version, changed_at) = version.map(|v| v.snapshot()).unwrap_or((0, 0));
+    Json(json!({ "version": version, "changed_at": changed_at })).into_response()
+}
+
+// ── Folder default credentials ──
+
+/// Which default credentials a folder lends, without the secrets.
+fn folder_defaults_summary(d: &crate::vault::FolderDefaults) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for (session_type, c) in d {
+        out.insert(
+            session_type.clone(),
+            json!({
+                "username": c.username,
+                "domain": c.domain,
+                "has_password": c.password.as_deref().is_some_and(|p| !p.is_empty()),
+                "has_private_key": c.private_key.as_deref().is_some_and(|k| !k.is_empty()),
+            }),
+        );
+    }
+    serde_json::Value::Object(out)
+}
+
+/// GET /api/addressbook/folders/:scope/:folder/defaults — admin only. The
+/// folder's own `.defaults` (not what it inherits), secrets stripped.
+pub async fn ab_get_folder_defaults(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(vault): Extension<VaultState>,
+    Path((scope, folder)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if !matches!(identity, Some(Extension(ref id)) if id.has_role("admin")) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "admin role required"})),
+        )
+            .into_response();
+    }
+    match vault.get_folder_defaults(&scope, &folder).await {
+        Ok(d) => Json(json!({ "defaults": folder_defaults_summary(&d) })).into_response(),
+        Err(VaultError::NotFound) => Json(json!({ "defaults": {} })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// One session type's part of a `PUT .../defaults` body. An omitted field
+/// keeps what is stored, an empty string clears it; the same rule as entry
+/// PUTs use for their secrets.
+#[derive(Deserialize, Default)]
+pub struct DefaultCredentialsPatch {
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub private_key: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+}
+
+/// PUT /api/addressbook/folders/:scope/:folder/defaults — admin only.
+///
+/// Body: `{ "<session type>": { username?, password?, private_key?, domain? } | null, ... }`.
+/// Types not mentioned keep what is stored; `null` removes a type. Within a
+/// type an omitted secret keeps the stored one and `""` clears it. A type
+/// left with nothing in it is dropped; a folder left with no types loses its
+/// `.defaults` key.
+pub async fn ab_put_folder_defaults(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
+    Extension(vault): Extension<VaultState>,
+    Path((scope, folder)): Path<(String, String)>,
+    Json(patch): Json<std::collections::BTreeMap<String, Option<DefaultCredentialsPatch>>>,
+) -> impl IntoResponse {
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
+
+    for session_type in patch.keys() {
+        let ok = !session_type.is_empty()
+            && session_type.len() <= 32
+            && session_type
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+        if !ok {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid session type key {:?}", session_type)})),
+            )
+                .into_response();
+        }
+    }
+
+    let mut current = match vault.get_folder_defaults(&scope, &folder).await {
+        Ok(d) => d,
+        Err(VaultError::NotFound) => crate::vault::FolderDefaults::new(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    };
+
+    fn non_empty(v: String) -> Option<String> {
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    }
+
+    for (session_type, part) in patch {
+        match part {
+            None => {
+                current.remove(&session_type);
+            }
+            Some(p) => {
+                let c = current.entry(session_type).or_default();
+                if let Some(u) = p.username {
+                    c.username = non_empty(u);
+                }
+                if let Some(d) = p.domain {
+                    c.domain = non_empty(d);
+                }
+                if let Some(pw) = p.password {
+                    c.password = non_empty(pw);
+                }
+                if let Some(k) = p.private_key {
+                    c.private_key = non_empty(k);
+                }
+            }
+        }
+    }
+    current.retain(|_, c| c.username.is_some() || c.domain.is_some() || c.has_secret());
+
+    match vault.put_folder_defaults(&scope, &folder, &current).await {
+        Ok(()) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            let details = json!({ "types": current.keys().collect::<Vec<_>>() }).to_string();
+            log_ab_event(
+                &database,
+                &admin_email,
+                "update_folder_defaults",
+                &scope,
+                &folder,
+                None,
+                &ip,
+                Some(&details),
+            )
+            .await;
+            Json(json!({ "ok": true, "defaults": folder_defaults_summary(&current) }))
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/addressbook/folders/:scope/:folder/defaults — admin only.
+pub async fn ab_delete_folder_defaults(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
+    Extension(vault): Extension<VaultState>,
+    Path((scope, folder)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
+    match vault.delete_folder_defaults(&scope, &folder).await {
+        Ok(()) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            log_ab_event(
+                &database,
+                &admin_email,
+                "delete_folder_defaults",
+                &scope,
+                &folder,
+                None,
+                &ip,
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// Every folder path in `scope`, top level and below. Used by `PUT
+/// ...?move=true` to find same-named entries elsewhere.
+async fn all_folder_paths(vault: &VaultState, scope: &str) -> Vec<String> {
+    let mut queue: Vec<String> = match vault.list_all_folders().await {
+        Ok((f, _)) => f
+            .into_iter()
+            .filter(|f| f.scope == scope)
+            .map(|f| f.path.unwrap_or(f.name))
+            .collect(),
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    while let Some(path) = queue.pop() {
+        if let Ok(subs) = vault.list_subfolders(scope, &path).await {
+            for s in subs {
+                queue.push(s.path.unwrap_or_else(|| format!("{}/{}", path, s.name)));
+            }
+        }
+        out.push(path);
+    }
+    out
+}
+
+/// Query string of `PUT .../entries/:entry`.
+#[derive(Deserialize, Default)]
+pub struct EntryPutQuery {
+    /// `?move=true`: after the write, delete same-named entries from every
+    /// other folder in the scope. For upserts keyed on a stable name, like
+    /// a NetBox webhook that writes to the device's current tenant folder:
+    /// when the tenant changes, the entry follows instead of being doubled.
+    #[serde(rename = "move", default)]
+    pub move_: bool,
+}
+
 pub async fn ab_list_all(
     identity: Option<Extension<AuthIdentity>>,
     Extension(vault): Extension<VaultState>,
@@ -2583,10 +2969,17 @@ pub async fn ab_list_all(
             .list_entries(&folder.scope, &folder.name)
             .await
             .unwrap_or_default();
+        let defaults = vault
+            .effective_folder_defaults(&folder.scope, &folder.name)
+            .await
+            .ok()
+            .flatten();
         let mut entries = Vec::new();
         for name in &entry_names {
             if let Ok(entry) = vault.get_entry(&folder.scope, &folder.name, name).await {
-                entries.push(crate::vault::EntryInfo::from((name.as_str(), &entry)));
+                let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
+                info.apply_inherited(&entry, defaults.as_ref());
+                entries.push(info);
             }
         }
 
@@ -2674,12 +3067,19 @@ pub async fn ab_search_index(
             Ok(n) => n,
             Err(_) => continue,
         };
+        let defaults = vault
+            .effective_folder_defaults(&scope, &path)
+            .await
+            .ok()
+            .flatten();
         for name in &names {
             if let Ok(entry) = vault.get_entry(&scope, &path, name).await {
+                let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
+                info.apply_inherited(&entry, defaults.as_ref());
                 emitted.push(json!({
                     "scope": scope,
                     "folder_path": path,
-                    "entry": crate::vault::EntryInfo::from((name.as_str(), &entry)),
+                    "entry": info,
                 }));
             }
         }
@@ -2722,10 +3122,17 @@ pub async fn ab_list_entries(
     };
 
     // Fetch each entry and strip credentials
+    let defaults = vault
+        .effective_folder_defaults(&scope, &folder)
+        .await
+        .ok()
+        .flatten();
     let mut entries = Vec::new();
     for name in &entry_names {
         if let Ok(entry) = vault.get_entry(&scope, &folder, name).await {
-            entries.push(crate::vault::EntryInfo::from((name.as_str(), &entry)));
+            let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
+            info.apply_inherited(&entry, defaults.as_ref());
+            entries.push(info);
         }
     }
 
@@ -2873,6 +3280,32 @@ pub async fn ab_connect_entry(
             )
                 .into_response()
         }
+    };
+
+    // An entry without credentials of its own borrows the folder's defaults
+    // for its type (nearest folder on the path wins), unless it is set to
+    // prompt. A NetBox-created entry is then usable the moment it exists.
+    let ab_entry = if !crate::vault::entry_has_own_credentials(&ab_entry)
+        && !ab_entry.prompt_credentials.unwrap_or(false)
+    {
+        let mut e = ab_entry;
+        match vault.effective_folder_defaults(&scope, &folder).await {
+            Ok(Some(d)) => {
+                if crate::vault::apply_folder_defaults(&mut e, &d) {
+                    tracing::debug!(
+                        scope,
+                        folder,
+                        entry,
+                        "entry using folder default credentials"
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(err) => tracing::warn!("Failed to read folder defaults from Vault: {}", err),
+        }
+        e
+    } else {
+        ab_entry
     };
 
     // Resolve credential variable references ($domain_user, $domain_password, etc.)
@@ -3470,6 +3903,7 @@ pub async fn ab_update_entry(
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
+    Query(query): Query<EntryPutQuery>,
     Json(data): Json<AddressBookEntry>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
@@ -3482,6 +3916,7 @@ pub async fn ab_update_entry(
                 .into_response()
         }
     };
+    let move_elsewhere = query.move_;
 
     // Read existing entry to preserve credentials the frontend never sends back
     let merged = match vault.get_entry(&scope, &folder, &entry).await {
@@ -3550,7 +3985,35 @@ pub async fn ab_update_entry(
                 Some(&details),
             )
             .await;
-            Json(json!({"ok": true})).into_response()
+
+            // ?move=true: this folder is now the entry's only home in the scope.
+            let mut removed_from = Vec::new();
+            if move_elsewhere {
+                for other in all_folder_paths(&vault, &scope).await {
+                    if other == folder {
+                        continue;
+                    }
+                    if vault.get_entry(&scope, &other, &entry).await.is_err() {
+                        continue;
+                    }
+                    if vault.delete_entry(&scope, &other, &entry).await.is_ok() {
+                        let details = json!({ "moved_to": folder }).to_string();
+                        log_ab_event(
+                            &database,
+                            &admin_email,
+                            "delete_entry",
+                            &scope,
+                            &other,
+                            Some(&entry),
+                            &ip,
+                            Some(&details),
+                        )
+                        .await;
+                        removed_from.push(other);
+                    }
+                }
+            }
+            Json(json!({"ok": true, "removed_from": removed_from})).into_response()
         }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
@@ -5778,6 +6241,48 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn address_book_mutation_detection() {
+        use axum::http::Method;
+        assert!(ab_request_mutates(
+            &Method::PUT,
+            "/api/addressbook/folders/shared/x/entries/y"
+        ));
+        assert!(ab_request_mutates(
+            &Method::POST,
+            "/api/addressbook/folders"
+        ));
+        assert!(ab_request_mutates(
+            &Method::DELETE,
+            "/api/addressbook/folders/shared/x/defaults"
+        ));
+        assert!(ab_request_mutates(&Method::POST, "/api/addressbook/bulk"));
+        assert!(ab_request_mutates(&Method::PUT, "/api/me/credentials"));
+        // reads and connects are not changes
+        assert!(!ab_request_mutates(&Method::GET, "/api/addressbook"));
+        assert!(!ab_request_mutates(
+            &Method::GET,
+            "/api/addressbook/version"
+        ));
+        assert!(!ab_request_mutates(
+            &Method::POST,
+            "/api/addressbook/folders/shared/x/entries/y/connect"
+        ));
+        assert!(!ab_request_mutates(&Method::POST, "/api/sessions"));
+    }
+
+    #[test]
+    fn address_book_version_counts_and_timestamps() {
+        let v = AddressBookVersion::default();
+        assert_eq!(v.snapshot(), (0, 0));
+        v.bump();
+        let (n, t) = v.snapshot();
+        assert_eq!(n, 1);
+        assert!(t > 1_600_000_000_000);
+        v.bump();
+        assert_eq!(v.snapshot().0, 2);
+    }
     use std::path::Path;
 
     #[test]

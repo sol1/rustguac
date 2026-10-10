@@ -83,6 +83,68 @@ pub struct FolderSubject<'a> {
     pub groups: &'a [String],
 }
 
+/// Credentials a folder lends to entries that have none of their own, keyed
+/// by session type (`ssh`, `rdp`, `vnc`, `web`, ...). Stored at
+/// `<folder>/.defaults` beside `.config`, so an entry created without secrets
+/// (a NetBox webhook, a bulk import) is connectable the moment it exists,
+/// with no second pass to fill it in. A subfolder without its own `.defaults`
+/// inherits its nearest ancestor's, per type.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DefaultCredentials {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+}
+
+impl DefaultCredentials {
+    /// Whether these defaults carry something that can authenticate (a
+    /// username alone does not).
+    pub fn has_secret(&self) -> bool {
+        self.password.as_deref().is_some_and(|p| !p.is_empty())
+            || self.private_key.as_deref().is_some_and(|k| !k.is_empty())
+    }
+}
+
+/// Per-session-type default credentials of one folder.
+pub type FolderDefaults = std::collections::BTreeMap<String, DefaultCredentials>;
+
+/// Whether the entry carries a password or private key of its own.
+pub fn entry_has_own_credentials(e: &AddressBookEntry) -> bool {
+    e.password.as_deref().is_some_and(|p| !p.is_empty())
+        || e.private_key.as_deref().is_some_and(|k| !k.is_empty())
+}
+
+/// Give an entry without credentials of its own the folder defaults for its
+/// session type. The entry's own username and domain win when set; the
+/// defaults' password and private key are taken as they are. Returns whether
+/// anything was applied: false when the entry already has a secret, when the
+/// folder has no defaults for the type, or when those defaults have no secret.
+pub fn apply_folder_defaults(entry: &mut AddressBookEntry, defaults: &FolderDefaults) -> bool {
+    if entry_has_own_credentials(entry) {
+        return false;
+    }
+    let Some(d) = defaults.get(&entry.session_type) else {
+        return false;
+    };
+    if !d.has_secret() {
+        return false;
+    }
+    if entry.username.as_deref().is_none_or(str::is_empty) && d.username.is_some() {
+        entry.username = d.username.clone();
+    }
+    if entry.domain.as_deref().is_none_or(str::is_empty) && d.domain.is_some() {
+        entry.domain = d.domain.clone();
+    }
+    entry.password = d.password.clone().filter(|p| !p.is_empty());
+    entry.private_key = d.private_key.clone().filter(|k| !k.is_empty());
+    true
+}
+
 impl FolderConfig {
     /// Whether this folder's own settings let `who` in: a shared group, or
     /// their email in `allowed_users`. Inheritance is the caller's concern.
@@ -378,8 +440,13 @@ pub struct EntryInfo {
     pub kdc_url: Option<String>,
     /// Whether to prompt for credentials at connect time.
     pub prompt_credentials: Option<bool>,
-    /// Whether the entry has a stored password or private key.
+    /// Whether the entry can authenticate without prompting: a stored
+    /// password or private key of its own, or folder defaults for its type.
     pub has_credentials: bool,
+    /// True when `has_credentials` comes from folder defaults rather than
+    /// the entry itself. Omitted when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub inherited_credentials: bool,
     /// VNC color depth.
     pub color_depth: Option<u8>,
     /// SSH tunnel jump hosts (no credentials exposed).
@@ -528,6 +595,22 @@ pub struct EntryInfo {
     pub wol_wait_time: Option<u32>,
 }
 
+impl EntryInfo {
+    /// Mark an entry as connectable through folder defaults when it has no
+    /// secret of its own and the defaults cover its session type.
+    pub fn apply_inherited(&mut self, e: &AddressBookEntry, defaults: Option<&FolderDefaults>) {
+        if self.has_credentials {
+            return;
+        }
+        if let Some(d) = defaults.and_then(|d| d.get(&e.session_type)) {
+            if d.has_secret() {
+                self.has_credentials = true;
+                self.inherited_credentials = true;
+            }
+        }
+    }
+}
+
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
     fn from((name, e): (&str, &AddressBookEntry)) -> Self {
         let jump_hosts = e.jump_hosts.as_ref().map(|hops| {
@@ -558,8 +641,8 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             auth_pkg: e.auth_pkg.clone(),
             kdc_url: e.kdc_url.clone(),
             prompt_credentials: e.prompt_credentials,
-            has_credentials: e.password.as_ref().is_some_and(|p| !p.is_empty())
-                || e.private_key.as_ref().is_some_and(|k| !k.is_empty()),
+            has_credentials: entry_has_own_credentials(e),
+            inherited_credentials: false,
             color_depth: e.color_depth,
             jump_hosts,
             remote_app: e.remote_app.clone(),
@@ -999,13 +1082,17 @@ impl VaultClient {
         }
     }
 
-    /// List entry names in a folder (excludes .config).
+    /// List entry names in a folder (excludes the `.config` and `.defaults`
+    /// sentinels).
     pub async fn list_entries(&self, scope: &str, folder: &str) -> Result<Vec<String>, VaultError> {
         validate_path(folder)?;
         let scope_prefix = self.resolve_scope_prefix(scope)?;
         let path = format!("{}/", self.metadata_path(&scope_prefix, folder));
         let keys = self.kv_list(&path).await?;
-        Ok(keys.into_iter().filter(|k| k != ".config").collect())
+        Ok(keys
+            .into_iter()
+            .filter(|k| k != ".config" && k != ".defaults")
+            .collect())
     }
 
     /// Get a full entry (with credentials).
@@ -1148,6 +1235,115 @@ impl VaultClient {
         }
     }
 
+    /// Read a folder's `.defaults` (see `FolderDefaults`).
+    pub async fn get_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<FolderDefaults, VaultError> {
+        validate_path(folder)?;
+        let scope_prefix = self.resolve_scope_prefix(scope)?;
+        let path = self.data_path(&scope_prefix, &format!("{}/{}", folder, ".defaults"));
+        let resp = self.request(reqwest::Method::GET, &path, None).await?;
+
+        match resp.status().as_u16() {
+            200 => {
+                let json: serde_json::Value = resp.json().await?;
+                let data = &json["data"]["data"];
+                serde_json::from_value(data.clone())
+                    .map_err(|e| VaultError::Parse(format!("invalid .defaults: {}", e)))
+            }
+            404 => Err(VaultError::NotFound),
+            403 => Err(VaultError::Forbidden),
+            s => Err(VaultError::Parse(format!("unexpected status {}", s))),
+        }
+    }
+
+    /// Write a folder's `.defaults`. An empty map removes the key instead,
+    /// so a folder with nothing to lend has no sentinel at all.
+    pub async fn put_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+        defaults: &FolderDefaults,
+    ) -> Result<(), VaultError> {
+        if defaults.is_empty() {
+            return self.delete_folder_defaults(scope, folder).await;
+        }
+        validate_path(folder)?;
+        let scope_prefix = self.resolve_scope_prefix(scope)?;
+        let path = self.data_path(&scope_prefix, &format!("{}/{}", folder, ".defaults"));
+        let body = serde_json::json!({ "data": defaults });
+        let resp = self
+            .request(reqwest::Method::POST, &path, Some(&body))
+            .await?;
+
+        match resp.status().as_u16() {
+            200 | 204 => Ok(()),
+            403 => Err(VaultError::Forbidden),
+            s => {
+                let text = resp.text().await.unwrap_or_default();
+                Err(VaultError::Parse(format!(
+                    "put folder defaults failed ({}): {}",
+                    s, text
+                )))
+            }
+        }
+    }
+
+    /// Remove a folder's `.defaults`. Absent is fine.
+    pub async fn delete_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<(), VaultError> {
+        validate_path(folder)?;
+        let scope_prefix = self.resolve_scope_prefix(scope)?;
+        let path = self.metadata_path(&scope_prefix, &format!("{}/{}", folder, ".defaults"));
+        let resp = self.request(reqwest::Method::DELETE, &path, None).await?;
+        match resp.status().as_u16() {
+            200 | 204 | 404 => Ok(()),
+            403 => Err(VaultError::Forbidden),
+            s => Err(VaultError::Parse(format!(
+                "delete folder defaults failed ({})",
+                s
+            ))),
+        }
+    }
+
+    /// The defaults that apply to entries in `folder`: its own `.defaults`,
+    /// then each ancestor's for any session type still unset. `None` when no
+    /// folder on the path has any.
+    pub async fn effective_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<Option<FolderDefaults>, VaultError> {
+        validate_path(folder)?;
+        let mut merged = FolderDefaults::new();
+        let mut path = folder.to_string();
+        loop {
+            match self.get_folder_defaults(scope, &path).await {
+                Ok(d) => {
+                    for (session_type, creds) in d {
+                        merged.entry(session_type).or_insert(creds);
+                    }
+                }
+                Err(VaultError::NotFound) => {}
+                Err(e) => return Err(e),
+            }
+            match path.rfind('/') {
+                Some(i) => path.truncate(i),
+                None => break,
+            }
+        }
+        Ok(if merged.is_empty() {
+            None
+        } else {
+            Some(merged)
+        })
+    }
+
     /// Delete an entire folder and its subtree (all entries + .config at every
     /// level). Pre-v1.6.0 this only cleared the top folder, which silently
     /// left subfolder keys in Vault; post-subfolders the UI would then refresh
@@ -1187,8 +1383,13 @@ impl VaultClient {
                 let _ = self.delete_entry(scope, path, &entry).await;
                 entry_count += 1;
             }
-            let cfg_path = self.metadata_path(&scope_prefix, &format!("{}/{}", path, ".config"));
-            let _ = self.request(reqwest::Method::DELETE, &cfg_path, None).await;
+            for sentinel in [".config", ".defaults"] {
+                let sentinel_path =
+                    self.metadata_path(&scope_prefix, &format!("{}/{}", path, sentinel));
+                let _ = self
+                    .request(reqwest::Method::DELETE, &sentinel_path, None)
+                    .await;
+            }
         }
 
         let subfolder_count = queue.len().saturating_sub(1);
@@ -1563,7 +1764,7 @@ fn validate_name(name: &str) -> Result<(), VaultError> {
     if name.is_empty() || name.len() > 64 {
         return Err(VaultError::BadName("name must be 1-64 characters".into()));
     }
-    if name == ".config" || name == "." || name == ".." {
+    if name == ".config" || name == ".defaults" || name == "." || name == ".." {
         return Err(VaultError::BadName("reserved name".into()));
     }
     if name.contains('/') || name.contains('\\') {
@@ -2184,6 +2385,111 @@ mod tests {
         assert!(!is_credential_variable(""));
         assert!(!is_credential_variable("$has spaces"));
         assert!(is_credential_variable("$has-dashes")); // hyphens allowed since v0.8.0
+    }
+
+    #[test]
+    fn folder_defaults_fill_only_entries_without_secrets() {
+        let mut defaults = FolderDefaults::new();
+        defaults.insert(
+            "ssh".into(),
+            DefaultCredentials {
+                username: Some("root".into()),
+                private_key: Some("-----BEGIN KEY-----".into()),
+                ..Default::default()
+            },
+        );
+        defaults.insert(
+            "web".into(),
+            DefaultCredentials {
+                password: Some("router-pw".into()),
+                ..Default::default()
+            },
+        );
+        // username only: nothing to authenticate with
+        defaults.insert(
+            "rdp".into(),
+            DefaultCredentials {
+                username: Some("Administrator".into()),
+                ..Default::default()
+            },
+        );
+
+        // ssh entry without secrets: takes the key, keeps its own username
+        let mut e = AddressBookEntry {
+            session_type: "ssh".into(),
+            username: Some("admin".into()),
+            ..Default::default()
+        };
+        assert!(apply_folder_defaults(&mut e, &defaults));
+        assert_eq!(e.username.as_deref(), Some("admin"));
+        assert_eq!(e.private_key.as_deref(), Some("-----BEGIN KEY-----"));
+        assert!(e.password.is_none());
+
+        // no username at all: the default's username fills it
+        let mut e = AddressBookEntry {
+            session_type: "web".into(),
+            ..Default::default()
+        };
+        assert!(apply_folder_defaults(&mut e, &defaults));
+        assert_eq!(e.password.as_deref(), Some("router-pw"));
+        assert!(e.username.is_none(), "web defaults carry no username");
+
+        // an entry with its own secret is left alone
+        let mut e = AddressBookEntry {
+            session_type: "ssh".into(),
+            password: Some("own".into()),
+            ..Default::default()
+        };
+        assert!(!apply_folder_defaults(&mut e, &defaults));
+        assert_eq!(e.password.as_deref(), Some("own"));
+        assert!(e.private_key.is_none());
+
+        // defaults with no secret do nothing; a type without defaults too
+        let mut e = AddressBookEntry {
+            session_type: "rdp".into(),
+            ..Default::default()
+        };
+        assert!(!apply_folder_defaults(&mut e, &defaults));
+        assert!(e.username.is_none());
+        let mut e = AddressBookEntry {
+            session_type: "vnc".into(),
+            ..Default::default()
+        };
+        assert!(!apply_folder_defaults(&mut e, &defaults));
+    }
+
+    #[test]
+    fn entry_info_marks_inherited_credentials() {
+        let mut defaults = FolderDefaults::new();
+        defaults.insert(
+            "ssh".into(),
+            DefaultCredentials {
+                private_key: Some("k".into()),
+                ..Default::default()
+            },
+        );
+        let e = AddressBookEntry {
+            session_type: "ssh".into(),
+            ..Default::default()
+        };
+        let mut info = EntryInfo::from(("box", &e));
+        assert!(!info.has_credentials);
+        info.apply_inherited(&e, Some(&defaults));
+        assert!(info.has_credentials && info.inherited_credentials);
+
+        // own secret: has_credentials without the inherited flag
+        let e = AddressBookEntry {
+            session_type: "ssh".into(),
+            password: Some("p".into()),
+            ..Default::default()
+        };
+        let mut info = EntryInfo::from(("box", &e));
+        info.apply_inherited(&e, Some(&defaults));
+        assert!(info.has_credentials && !info.inherited_credentials);
+
+        // the JSON omits the flag when false
+        let v = serde_json::to_value(&info).unwrap();
+        assert!(v.get("inherited_credentials").is_none());
     }
 
     #[test]

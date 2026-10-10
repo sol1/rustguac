@@ -595,7 +595,54 @@ For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed u
 
 ### `PUT /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 
-Update a connection entry. Uses read-modify-write: reads existing entry from Vault, merges incoming fields on top. Credentials (`password`, `private_key`) that are omitted from the request are preserved from the existing entry. Jump host credentials are merged per-hop by index.
+Update a connection entry, or create it if it does not exist. Uses read-modify-write: reads existing entry from Vault, merges incoming fields on top. Credentials (`password`, `private_key`) that are omitted from the request are preserved from the existing entry. Jump host credentials are merged per-hop by index.
+
+**`?move=true`** makes this folder the entry's only home in the scope: after the write, same-named entries in every other folder of the scope (subfolders included) are deleted, each with its own `delete_entry` audit record. For upserts keyed on a stable name that can change folder, such as a NetBox webhook writing to the device's current tenant folder: when the tenant changes, the entry follows instead of being doubled. The response lists what was removed:
+
+```json
+{ "ok": true, "removed_from": ["mrgelato"] }
+```
+
+### `GET /api/addressbook/folders/:scope/:folder/defaults` (admin)
+
+The folder's default credentials, secrets stripped. These are lent to entries in the folder (and in subfolders without their own, per session type) that have no password or private key of their own, so an entry created without secrets by a webhook or an import is connectable the moment it exists. An entry's own credentials always win, and an entry set to `prompt_credentials` still prompts.
+
+```json
+{
+  "defaults": {
+    "ssh": { "username": "root", "domain": null, "has_password": false, "has_private_key": true },
+    "web": { "username": null, "domain": null, "has_password": true, "has_private_key": false }
+  }
+}
+```
+
+Entries covered by folder defaults list with `has_credentials: true` and `inherited_credentials: true`.
+
+### `PUT /api/addressbook/folders/:scope/:folder/defaults` (admin)
+
+Set default credentials per session type. Types not mentioned keep what is stored; `null` removes a type. Within a type an omitted field keeps the stored value and `""` clears it, the same rule entry PUTs use for secrets.
+
+```json
+{
+  "ssh": { "username": "root", "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..." },
+  "web": { "password": "router-password" },
+  "rdp": null
+}
+```
+
+Returns the same summary as `GET`. A type left with nothing in it is dropped; a folder left with no types loses its defaults entirely. Audited as `update_folder_defaults`.
+
+### `DELETE /api/addressbook/folders/:scope/:folder/defaults` (admin)
+
+Remove the folder's default credentials. Returns `204`.
+
+### `GET /api/addressbook/version`
+
+A counter rustguac bumps after every successful change made through its API to the address book (entries, folders, folder config and defaults, moves, copies, bulk operations) or to the caller's credential variables. Requires **operator**. It costs no Vault read, so clients can poll it often and reload only when it moves; the Connections page does so every 3 seconds. `changed_at` is unix milliseconds, `0` before the first change since start. The counter is per process: with several rustguac instances on one Vault, each sees only its own changes, so the page also refreshes unconditionally every two minutes.
+
+```json
+{ "version": 17, "changed_at": 1760155200000 }
+```
 
 ### `DELETE /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 
