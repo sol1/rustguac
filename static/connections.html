@@ -184,7 +184,8 @@
            padding and sidebar, 16px cells with less padding, a narrower
            Connect button. Everything then fits with ~250px to spare. */
         @media (max-width: 1800px) {
-            body { padding: var(--s-4) var(--s-4); }
+            /* page padding at this width lives in rustguac.css, shared by
+               every page, so switching tabs does not shift the gutter */
             .layout { gap: var(--s-4); }
             .sidebar { min-width: 240px; max-width: 280px; padding-right: var(--s-3); }
             .entries-table th, .entries-table td {

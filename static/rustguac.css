@@ -57,6 +57,13 @@ body {
     margin: 0;
 }
 
+/* Narrow desktops (a 1710px MacBook display, 1600px monitors): a tighter
+   page gutter. Shared here so every page shifts together and switching
+   tabs does not snap the content sideways. */
+@media (max-width: 1800px) {
+    body { padding: var(--s-4) var(--s-4); }
+}
+
 h1 { color: var(--primary); margin: 0; font-size: 30px; letter-spacing: 0.02em; font-weight: bold; }
 h2 { color: var(--primary); font-size: var(--fz-lg); margin-top: var(--s-5); letter-spacing: 0.02em; }
 h3 { color: var(--text); font-size: var(--fz-md); margin-top: var(--s-4); letter-spacing: 0.02em; }
