@@ -218,3 +218,36 @@ trusted_proxies = ["127.0.0.1/32"]
 
 Without this setting, all requests from behind the proxy appear to come
 from the proxy's own IP.
+
+## Content-Security-Policy
+
+rustguac sends its own `Content-Security-Policy` on every response. Leave
+it alone: the Guacamole client needs `img-src 'self' data: blob:` because
+browsers without WebCodecs `ImageDecoder` (Safari, Firefox) draw every
+image tile from a `data:` URI. If your proxy sets a CSP of its own, keep
+that directive, or SSH/RDP sessions render black in those browsers while
+Chrome looks fine.
+
+Releases up to v1.10.5 shipped a policy with no `img-src`, which is
+exactly that failure (#249). If you can't upgrade, have the proxy replace
+the header. The whole policy has to be repeated because the header is
+replaced, not merged:
+
+HAProxy (backend section):
+
+```
+http-response set-header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: blob:"
+```
+
+nginx:
+
+```nginx
+proxy_hide_header Content-Security-Policy;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: blob:" always;
+```
+
+Caddy:
+
+```
+header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: blob:"
+```

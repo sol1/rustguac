@@ -48,6 +48,21 @@
             font-size: var(--fz-sm);
         }
         .panel th { background: transparent; padding-top: 0; }
+        /* Narrow desktops (a 1710px MacBook display): the 18px table with
+           20px cell padding ran past the right edge. Same treatment as the
+           connections table: 16px cells, tighter padding, 14px headers, and
+           the actions kept on one line. Nothing is hidden. */
+        @media (max-width: 1800px) {
+            #history-table th, #history-table td,
+            #recordings-table th, #recordings-table td,
+            table.list th, table.list td {
+                padding: var(--s-2) var(--s-3);
+                font-size: var(--fz-sm);
+            }
+            #history-table th, #recordings-table th, table.list th { font-size: var(--fz-xs); letter-spacing: 0.08em; }
+            #history-table td:last-child, #recordings-table td:last-child { white-space: nowrap; }
+            .btn-small { padding: 0 var(--s-1); }
+        }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -58,12 +73,13 @@
     </div>
     <nav>
         <a href="/connections.html">Connections</a>
-        <a href="/sessions.html" id="sessions-link">Sessions</a>
+        <a href="/sessions.html" id="sessions-link" data-min-role="poweruser">Sessions</a>
         <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" class="active">Reports</a>
+        <a href="/reports.html" class="active" id="reports-link" data-min-role="poweruser">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
-        <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
+        <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
+        <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
+        <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
 
@@ -155,6 +171,8 @@
         // Check auth: either API key or cookie
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
         if (apiKey) {
+            // A key is never on the page GET, so the server served the anonymous variant.
+            document.documentElement.setAttribute('data-role-level', '4');
             document.getElementById('admin-link').style.display = '';
             document.getElementById('tokens-link').style.display = '';
         } else {
@@ -168,6 +186,9 @@
                 if (!data) return;
                 if (data.role === 'admin') document.getElementById('admin-link').style.display = '';
                 var level = roleLevel[data.role] || 0;
+                // Reconcile the server-written nav gate (see rustguac.css): the page
+                // GET carried no API key, so key users arrive on the anonymous variant.
+                document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
                 if (level >= 2) document.getElementById('tokens-link').style.display = '';
                 if (level < 3) {
                     document.getElementById('sessions-link').style.display = 'none';
@@ -188,6 +209,13 @@
             return h;
         }
 
+        // "host (Tenant)" display names, as the NetBox sync writes them, read
+        // as the host over a quieter tenant line (same as Connections).
+        function entryNameHtml(label) {
+            var m = /^(.*\S)\s+\(([^()]+)\)$/.exec(label || '');
+            if (!m) return escapeHtml(label || '');
+            return '<span class="entry-name">' + escapeHtml(m[1]) + '</span><span class="entry-sub">' + escapeHtml(m[2]) + '</span>';
+        }
         function escapeHtml(s) {
             if (!s) return '';
             var d = document.createElement('div');
@@ -323,7 +351,7 @@
                 }
                 html += '<tr>' +
                     '<td>' + escapeHtml(s.created_by || s.username || '') + '</td>' +
-                    '<td>' + escapeHtml(s.entry_display_name || s.address_book_entry || '') + '</td>' +
+                    '<td>' + entryNameHtml(s.entry_display_name || s.address_book_entry || '') + '</td>' +
                     '<td>' + escapeHtml(s.address_book_folder || '') + '</td>' +
                     '<td>' + typeBadge(s.session_type) + '</td>' +
                     '<td>' + escapeHtml(s.hostname || '') + '</td>' +
@@ -419,7 +447,7 @@
                 var html = '';
                 data.forEach(function(c) {
                     html += '<tr>' +
-                        '<td>' + escapeHtml(c.name || c.address_book_entry || '') + '</td>' +
+                        '<td>' + entryNameHtml(c.name || c.address_book_entry || '') + '</td>' +
                         '<td>' + typeBadge(c.session_type) + '</td>' +
                         '<td>' + (c.session_count || 0) + '</td>' +
                         '<td>' + (c.total_hours != null ? c.total_hours.toFixed(1) : '0') + '</td>' +

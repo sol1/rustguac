@@ -95,12 +95,13 @@
     </div>
     <nav>
             <a href="/connections.html">Connections</a>
-            <a href="/sessions.html" id="sessions-link">Sessions</a>
+            <a href="/sessions.html" id="sessions-link" data-min-role="poweruser">Sessions</a>
             <a href="/recordings.html">Recordings</a>
-            <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
+            <a href="/reports.html" id="reports-link" data-min-role="poweruser">Reports</a>
             <a href="/docs.html" class="active">Docs</a>
-            <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
-            <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
+            <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
+            <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
+            <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
             <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
         </nav>
 
@@ -189,6 +190,8 @@
         var apiKey = sessionStorage.getItem('rustguac_api_key');
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
         if (apiKey) {
+            // A key is never on the page GET, so the server served the anonymous variant.
+            document.documentElement.setAttribute('data-role-level', '4');
             document.getElementById('admin-link').style.display = '';
             document.getElementById('tokens-link').style.display = '';
             document.getElementById('reports-link').style.display = '';
@@ -203,6 +206,9 @@
                 if (!data) return;
                 if (data.role === 'admin') document.getElementById('admin-link').style.display = '';
                 var level = roleLevel[data.role] || 0;
+                // Reconcile the server-written nav gate (see rustguac.css): the page
+                // GET carried no API key, so key users arrive on the anonymous variant.
+                document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
                 if (level >= 2) document.getElementById('tokens-link').style.display = '';
                 if (level >= 3) {
                     document.getElementById('reports-link').style.display = '';

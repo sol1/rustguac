@@ -301,6 +301,8 @@
         // show in the in-fullscreen top bar. Populated from the same fetch.
         var entryDisplayName = '';
         var wantFullscreen = false;
+        var bitmapSession = false;   // rdp/vnc: a server-side resize is slow and visible
+        var fsEverEntered = false;   // after the first fullscreen, size to the window again
         // Per-entry autohide of the clipboard/files side tabs; populated from
         // the same /api/sessions/:id fetch and read when the tabs are built.
         var wantAutohideTabs = false;
@@ -378,6 +380,7 @@
                 }
                 if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
+                bitmapSession = !!(session && (session.session_type === 'rdp' || session.session_type === 'vnc'));
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 return showBanner(session.banner);
             })
@@ -1439,6 +1442,22 @@
                     || document.mozFullScreenElement
                     || document.msFullscreenElement || null;
             }
+            // The size the session should be. An RDP/VNC entry that opens
+            // fullscreen on connect is kept at the screen's size even while
+            // the window is still windowed: the framebuffer is scaled to fit
+            // until the gesture lands, and nothing has to change when it
+            // does. One size from the first request to the fullscreen
+            // desktop, instead of window size, scaled fit, fullscreen size,
+            // refit (#257). A terminal reflows instantly and must stay
+            // crisp, so it keeps the window's size and resizes on fullscreen.
+            // Only until fullscreen has been entered once: after an Esc the
+            // user is working windowed, and the window's size is the right
+            // one again.
+            function rgTargetSize(anyPanelOpen) {
+                if (wantFullscreen && bitmapSession && !fsEverEntered && !rgFullscreenEl() && window.screen && screen.width > 0 && screen.height > 0)
+                    return [screen.width, screen.height];
+                return [anyPanelOpen ? window.innerWidth - 380 : window.innerWidth, window.innerHeight];
+            }
             function rgEnterFullscreen() {
                 var el = document.documentElement;
                 var req = el.requestFullscreen
@@ -1466,13 +1485,36 @@
                 if (x) { try { x.call(document); } catch (e) {} }
             }
             function rgArmFullscreenGesture() {
-                var fire = function() {
+                var fire = function(e) {
                     document.removeEventListener('mousedown', fire, true);
                     document.removeEventListener('keydown', fire, true);
+                    // This press is the browser's fullscreen gesture, not
+                    // input for the remote. The transition it starts re-lays
+                    // out the display and swallows the matching release, and
+                    // a press guacd never sees released turns every later
+                    // pointer move into a drag selection (#256). Keep it from
+                    // the display's handlers; rgReleaseAllInput() covers a
+                    // release lost for any other reason once fullscreen lands.
+                    e.stopPropagation();
+                    e.preventDefault();
                     rgEnterFullscreen();
                 };
                 document.addEventListener('mousedown', fire, true);
                 document.addEventListener('keydown', fire, true);
+            }
+            // Tell the remote that nothing is held: every key the keyboard
+            // tracks as down, and all mouse buttons at the last pointer
+            // position. Used after a fullscreen transition, during which the
+            // browser may not deliver the releases to the display element.
+            function rgReleaseAllInput() {
+                try { if (keyboard) keyboard.reset(); } catch (e) {}
+                try {
+                    if (!mouse || !mouse.currentState) return;
+                    var st = new Guacamole.Mouse.State(mouse.currentState);
+                    st.left = st.middle = st.right = st.up = st.down = false;
+                    if (fillX !== 1 || fillY !== 1) { st.x /= fillX; st.y /= fillY; }
+                    client.sendMouseState(st, true);
+                } catch (e) {}
             }
             function rgShowEscNoticeOnce() {
                 if (sessionStorage.getItem('rustguac_esc_notice_seen')) return;
@@ -1526,6 +1568,7 @@
             function rgOnFullscreenChange() {
                 var inFs = !!rgFullscreenEl();
                 var bar = document.getElementById('fs-bar');
+                if (inFs) { fsEverEntered = true; rgReleaseAllInput(); }
                 if (bar) {
                     if (inFs) {
                         bar.classList.add('visible');
@@ -1575,8 +1618,8 @@
                             var fitToWindow = function() {
                                 scaleDisplay();
                                 var anyPanelOpen = panelOpen || filePanelOpen;
-                                var sw = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
-                                var sh = window.innerHeight;
+                                var ts = rgTargetSize(anyPanelOpen);
+                                var sw = ts[0], sh = ts[1];
                                 if (sw > 0 && sh > 0) {
                                     // Sent whether or not it would change
                                     // anything: the repeats above are
@@ -1726,6 +1769,8 @@
                 var body = {
                     width: window.innerWidth,
                     height: window.innerHeight,
+                    screen_width: screen.width,
+                    screen_height: screen.height,
                     dpi: Math.round((window.devicePixelRatio || 1) * 96)
                 };
 
@@ -1835,11 +1880,45 @@
                 if (document.hidden) keyboard.reset();
             });
 
-            // Mouse input
+            // Mouse input. Pointer positions come in screen pixels of the
+            // display element; sendMouseState divides out the uniform display
+            // scale, and the fill factors from scaleDisplay() are divided out
+            // here, since they are a transform the display knows nothing about.
+            var fillX = 1, fillY = 1;
             var mouse = new Guacamole.Mouse(client.getDisplay().getElement());
             mouse.onEach(['mousedown', 'mousemove', 'mouseup'], function(e) {
-                client.sendMouseState(e.state, true);
+                var state = e.state;
+                if (fillX !== 1 || fillY !== 1) {
+                    state = new Guacamole.Mouse.State(state);
+                    state.x /= fillX;
+                    state.y /= fillY;
+                }
+                client.sendMouseState(state, true);
             });
+
+            // Absorb a small shortfall between the framebuffer and the
+            // viewport. The uniform fit in scaleDisplay() makes one axis match
+            // exactly and leaves the other short when the server could not
+            // honour the requested size: Windows RDP without GFX rounds the
+            // width down to a multiple of 16, so a 1710-wide window gets a
+            // 1696-wide desktop and a 14px strip of bare page down the right
+            // edge (#251). A stretch of that last percent or two is invisible;
+            // the strip is not. A larger gap is a real aspect mismatch (fixed
+            // resolution, no resize support) and keeps the letterbox.
+            var FILL_MAX = 1.025;
+            function applyFill(el, w, h, availW, availH) {
+                fillX = 1;
+                fillY = 1;
+                if (w > 0 && w < availW && availW / w <= FILL_MAX) fillX = availW / w;
+                if (h > 0 && h < availH && availH / h <= FILL_MAX) fillY = availH / h;
+                if (fillX !== 1 || fillY !== 1) {
+                    el.style.transformOrigin = '0 0';
+                    el.style.transform = 'scale(' + fillX + ', ' + fillY + ')';
+                } else {
+                    el.style.transformOrigin = '';
+                    el.style.transform = '';
+                }
+            }
 
             // Show the remote pointer image as the browser's own pointer, and
             // only fall back to the display's software cursor layer where CSS
@@ -1918,10 +1997,12 @@
                     // Monitor 0 is at combined (0,0); no negative offset needed.
                     el.style.marginLeft = '0';
                     el.style.marginTop = '0';
+                    applyFill(el, 0, 0, 0, 0);
                 }
                 else {
                     // Single display: scale the whole framebuffer to fit.
                     display.scale(Math.min(availW / dw, availH / dh));
+                    applyFill(el, dw * display.getScale(), dh * display.getScale(), availW, availH);
                     displayEl.style.overflow = '';
                     displayEl.style.position = '';
                     displayEl.style.width = '';
@@ -1946,8 +2027,8 @@
                 clearTimeout(resizeTimer);
                 resizeTimer = setTimeout(function() {
                     var anyPanelOpen = panelOpen || filePanelOpen;
-                    var sw = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
-                    var sh = window.innerHeight;
+                    var ts = rgTargetSize(anyPanelOpen);
+                    var sw = ts[0], sh = ts[1];
                     if (sizeWouldChange(sw, sh))
                         client.sendSize(sw, sh);
                 }, 500);

@@ -140,8 +140,8 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 
 2. **Create the Webhook**:
    - Name: `rustguac-sync-create`
-   - URL: `https://console.example.com/api/addressbook/folders/shared/netbox-sync/entries`
-   - HTTP method: POST
+   - URL: `https://console.example.com/api/addressbook/folders/shared/netbox-sync/entries/{{ data.name | lower }}?move=true`
+   - HTTP method: PUT
    - HTTP content type: `application/json`
    - Additional headers:
      ```
@@ -160,6 +160,21 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
      ```
 
      **Important:** The entry field is `type`, not `session_type` (it matches the Vault storage format). The hostname uses `.split('/')[0]` to strip the CIDR prefix from NetBox IP addresses (e.g. `10.0.0.1/24` → `10.0.0.1`). Avoid `regex_replace` and `cut` filters — they are not available in NetBox's Jinja2 environment.
+
+     `PUT` creates the entry on first sight and updates it afterwards, keeping any password or key already stored in Vault. `?move=true` matters when the folder is computed from the device, for example one folder per tenant (`.../folders/shared/{{ data.tenant.slug }}/entries/{{ data.name | lower }}?move=true`): when a device changes tenant, the entry follows it and the copy in the old folder is removed, instead of both existing. See [`PUT .../entries/:entry`](api.md#put-apiaddressbookfoldersscopefolderentriesentry-admin).
+
+### Credentials for synced entries
+
+NetBox never carries secrets, so a webhook creates entries without a password or key. Rather than a second pass that fills them in later, give the folder **default credentials**: a per-session-type username, password or private key that entries without their own borrow at connect time. Set them once on the folder (Connections, edit folder, Default credentials; or [`PUT .../defaults`](api.md#put-apiaddressbookfoldersscopefolderdefaults-admin)):
+
+```bash
+curl -X PUT https://console.example.com/api/addressbook/folders/shared/netbox-sync/defaults \
+  -H "Authorization: Bearer <admin-api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"ssh": {"username": "root", "private_key": "'"$(sed ':a;N;$!ba;s/\n/\\n/g' fleet-key)"'"}}'
+```
+
+A synced entry then shows **Connect**, not **Login...**, from the moment the webhook fires. An entry that is given credentials of its own keeps them; an entry with `"prompt_credentials": true` still prompts. The Connections page picks all of this up on its own within a few seconds (it polls [`GET /api/addressbook/version`](api.md#get-apiaddressbookversion)), so nobody has to reload.
 
 ### Create webhook: device deleted
 

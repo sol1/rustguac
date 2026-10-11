@@ -653,6 +653,23 @@ fn cmd_map_group(database: &Db, group: &str, role: &str, force: bool) {
 #[derive(Clone)]
 struct TlsEnabled(bool);
 
+/// Content-Security-Policy sent with every response.
+///
+/// `img-src` must allow `data:` and `blob:`. The Guacamole client draws each
+/// `img` stream by loading a `data:image/...;base64,...` URI into an `Image`
+/// (the `DataURIReader` path in `Display.drawStream`) on browsers without
+/// WebCodecs `ImageDecoder`, which is Safari and Firefox. Without `img-src`
+/// the `default-src 'self'` fallback refuses those loads, the client silently
+/// skips the draw, and SSH/RDP sessions render black with only rect fills
+/// showing (#249). Chromium decodes straight from the stream bytes and never
+/// fetches a URL, so it hid the problem. The remote mouse cursor
+/// (`cursor: url(data:...)`) and blob: image URLs need the same allowance.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+    script-src 'self' 'unsafe-inline'; \
+    style-src 'self' 'unsafe-inline'; \
+    connect-src 'self' wss: ws:; \
+    img-src 'self' data: blob:";
+
 async fn security_headers(
     tls: Extension<TlsEnabled>,
     request: Request,
@@ -672,7 +689,7 @@ async fn security_headers(
     );
     headers.insert(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:".parse().unwrap(),
+        CONTENT_SECURITY_POLICY.parse().unwrap(),
     );
     if tls.0 .0 {
         headers.insert(
@@ -881,6 +898,7 @@ async fn run_server(config: Config, database: Db) {
 
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
     let vault_configured = VaultConfigured(config.vault.is_some());
+    let ab_version = api::AddressBookVersion::default();
     let credential_default_scope =
         CredentialDefaultScope(config.user_credentials_default_scope.clone());
     let drive_configured = DriveConfigured(config.drive.is_some());
@@ -1279,6 +1297,19 @@ async fn run_server(config: Config, database: Db) {
             get(api::ab_list_subfolders),
         )
         .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            get(api::ab_get_folder_defaults),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            put(api::ab_put_folder_defaults),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            delete(api::ab_delete_folder_defaults),
+        )
+        .route("/api/addressbook/version", get(api::ab_version))
+        .route(
             "/api/addressbook/folders/{scope}/{folder}/entries",
             get(api::ab_list_entries),
         )
@@ -1310,11 +1341,15 @@ async fn run_server(config: Config, database: Db) {
         .merge(session_create_route)
         .with_state(manager.clone())
         .layer(middleware::from_fn(auth::require_auth))
+        // Inside auth: only requests allowed to change the address book
+        // count. The counter itself is layered below so this sees it.
+        .layer(middleware::from_fn(api::ab_version_bump))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(credential_default_scope.clone()))
-        .layer(Extension(database.clone()));
+        .layer(Extension(database.clone()))
+        .layer(Extension(ab_version.clone()));
     // Applied OUTSIDE require_auth so requests with bad credentials are
     // counted too: a flood of bogus keys is throttled before each one
     // queues on the database lock to be looked up.
@@ -1379,7 +1414,13 @@ async fn run_server(config: Config, database: Db) {
         .route("/reports.html", get(serve_branded_page))
         .route("/admin.html", get(serve_branded_page))
         .route("/tokens.html", get(serve_branded_page))
-        .route("/docs.html", get(serve_branded_page));
+        .route("/docs.html", get(serve_branded_page))
+        // Optional auth only: an anonymous request still gets the page (the
+        // page itself sends the user to log in), but a logged-in one gets
+        // the variant with its navigation already right.
+        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(ws_ticket_store.clone()))
+        .layer(Extension(database.clone()));
 
     // Build full router (all Router<()> at this point)
     let mut app: Router<()> = Router::new()
@@ -1565,23 +1606,63 @@ fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {
     Some(tokio_rustls::TlsConnector::from(Arc::new(tls_config)))
 }
 
-/// One pre-branded HTML page and the ETag its bytes hash to.
+/// One pre-branded HTML page, in one variant per role level, each with the
+/// ETag its bytes hash to.
 ///
 /// The pages are branded once at startup and cannot change until a restart,
-/// so the tag is computed there too -- serving one is a string compare.
+/// so the tags are computed there too -- serving one is a string compare.
+///
+/// The variants differ only in the `data-role-level` attribute written on
+/// `<html>`: the stylesheet gates navigation links and admin-only controls on
+/// it, so the header is right on first paint for whoever the page is served
+/// to, instead of hiding everything gated and showing it after `/api/me`
+/// answers, which flashed and reflowed on every navigation.
 struct BrandedPage {
+    /// Indexed by role level, 0 (anonymous) to 4 (admin).
+    variants: Vec<BrandedVariant>,
+}
+
+struct BrandedVariant {
     html: String,
     etag: String,
 }
 
+/// Highest role level, the index of the last page variant.
+const MAX_ROLE_LEVEL: u8 = 4;
+
 impl BrandedPage {
     fn new(html: String) -> Self {
         use sha2::{Digest, Sha256};
-        // Quoted, because an ETag is a quoted-string on the wire. A bare hash
-        // tends to be ignored rather than rejected, which would look exactly
-        // like the stale-cache bug this exists to fix.
-        let etag = format!("\"{}\"", hex::encode(Sha256::digest(html.as_bytes())));
-        Self { html, etag }
+        let variants = (0..=MAX_ROLE_LEVEL)
+            .map(|level| {
+                let html = role_variant_html(&html, level);
+                // Quoted, because an ETag is a quoted-string on the wire. A
+                // bare hash tends to be ignored rather than rejected, which
+                // would look exactly like the stale-cache bug this exists to
+                // fix.
+                let etag = format!("\"{}\"", hex::encode(Sha256::digest(html.as_bytes())));
+                BrandedVariant { html, etag }
+            })
+            .collect();
+        Self { variants }
+    }
+
+    fn variant(&self, level: u8) -> &BrandedVariant {
+        &self.variants[level.min(MAX_ROLE_LEVEL) as usize]
+    }
+}
+
+/// Write the caller's role level onto the page's `<html>` tag. A page that
+/// has no bare `<html>` start tag is returned unchanged. Extracted for test.
+fn role_variant_html(html: &str, level: u8) -> String {
+    match html.find("<html>") {
+        Some(i) => format!(
+            "{}<html data-role-level=\"{}\">{}",
+            &html[..i],
+            level,
+            &html[i + "<html>".len()..]
+        ),
+        None => html.to_string(),
     }
 }
 
@@ -1607,10 +1688,15 @@ fn etag_matches(if_none_match: &str, etag: &str) -> bool {
 /// costs a 304 and a rebuilt one lands on the next load. Without it these
 /// responses carry no freshness information at all and Chrome caches them
 /// heuristically, serving a stale page long after a restart.
-fn page_response(page: &BrandedPage, headers: &axum::http::HeaderMap) -> axum::response::Response {
+fn page_response(
+    page: &BrandedPage,
+    level: u8,
+    headers: &axum::http::HeaderMap,
+) -> axum::response::Response {
     use axum::http::{header, StatusCode};
     use axum::response::IntoResponse;
 
+    let page = page.variant(level);
     let cache_headers = [
         (header::CACHE_CONTROL, "no-cache"),
         (header::ETAG, page.etag.as_str()),
@@ -1728,7 +1814,12 @@ fn asset_hash(
     if !url.starts_with('/') || url.starts_with("//") || url.contains('?') || url.contains('#') {
         return None;
     }
-    if !(url.ends_with(".js") || url.ends_with(".css")) {
+    if !(url.ends_with(".js")
+        || url.ends_with(".css")
+        || url.ends_with(".svg")
+        || url.ends_with(".png")
+        || url.ends_with(".ico"))
+    {
         return None;
     }
     let rel = url.trim_start_matches('/');
@@ -1757,14 +1848,21 @@ fn asset_hash(
 /// Serve a branded HTML page from the pre-processed in-memory map.
 async fn serve_branded_page(
     Extension(pages): Extension<BrandedPages>,
+    identity: Option<Extension<auth::AuthIdentity>>,
     request: axum::extract::Request,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     let path = request.uri().path().trim_start_matches('/');
     let key = if path.is_empty() { "index.html" } else { path };
+    // Whoever the page is for decides which navigation it carries. An API-key
+    // user sends no credential on the page GET and gets the anonymous
+    // variant; the page reconciles that from /api/me.
+    let level = identity
+        .map(|Extension(id)| auth::role_level(id.role()))
+        .unwrap_or(0);
     match pages.get(key) {
-        Some(page) => page_response(page, request.headers()),
+        Some(page) => page_response(page, level, request.headers()),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -1777,7 +1875,7 @@ async fn serve_client_page(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     match pages.get("client.html") {
-        Some(page) => page_response(page, &headers),
+        Some(page) => page_response(page, 0, &headers),
         // Unreachable: the map always carries the embedded copy.
         None => Html(include_str!("../static/client.html")).into_response(),
     }
@@ -1819,6 +1917,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn role_variant_writes_level_on_html_tag_only() {
+        let page = "<!DOCTYPE html>\n<html>\n<head><title>x</title></head><body><html>text</html></body></html>";
+        let v = role_variant_html(page, 4);
+        assert!(v.starts_with("<!DOCTYPE html>\n<html data-role-level=\"4\">\n<head>"));
+        // only the first bare start tag is touched; the literal later on is content
+        assert_eq!(v.matches("data-role-level").count(), 1);
+        assert_eq!(
+            role_variant_html("<p>no html tag</p>", 2),
+            "<p>no html tag</p>"
+        );
+        let branded = BrandedPage::new(page.to_string());
+        assert_eq!(branded.variants.len(), 5);
+        assert_ne!(branded.variant(0).etag, branded.variant(4).etag);
+        assert_eq!(
+            branded.variant(9).etag,
+            branded.variant(4).etag,
+            "levels clamp to admin"
+        );
+    }
+
+    #[test]
+    fn test_csp_allows_data_and_blob_images() {
+        // Safari and Firefox draw Guacamole image streams through data: URIs
+        // (#249). Chromium uses ImageDecoder and would not catch a regression.
+        let directives: Vec<&str> = CONTENT_SECURITY_POLICY.split(';').map(str::trim).collect();
+        let img_src = directives
+            .iter()
+            .find(|d| d.starts_with("img-src "))
+            .expect("CSP must carry an explicit img-src directive");
+        let sources: Vec<&str> = img_src.split_whitespace().skip(1).collect();
+        assert!(sources.contains(&"'self'"), "img-src must allow 'self'");
+        assert!(sources.contains(&"data:"), "img-src must allow data: URIs");
+        assert!(sources.contains(&"blob:"), "img-src must allow blob: URLs");
+        // The string continuation must not leave stray whitespace runs.
+        assert!(!CONTENT_SECURITY_POLICY.contains("  "));
+        assert!(!CONTENT_SECURITY_POLICY.contains('\n'));
+    }
+
+    #[test]
     fn test_version_assets_rewrites_local_js_and_css() {
         // Tests run from the crate root, so this is the real static tree.
         let static_path = std::path::Path::new("static");
@@ -1836,6 +1973,21 @@ mod tests {
     }
 
     #[test]
+    fn test_version_assets_versions_the_logo() {
+        // The logo used to be revalidated on every page load, which blanked
+        // it for a moment on each navigation in some browsers. It is content
+        // addressed like the scripts now.
+        let static_path = std::path::Path::new("static");
+        let mut hashes = std::collections::HashMap::new();
+        let out = version_assets(
+            "<img id=\"site-logo\" src=\"/logo.svg\" alt=\"\">",
+            static_path,
+            &mut hashes,
+        );
+        assert!(out.contains("src=\"/logo.svg?v="), "{out}");
+    }
+
+    #[test]
     fn test_version_assets_leaves_everything_else_alone() {
         let static_path = std::path::Path::new("static");
         let mut hashes = std::collections::HashMap::new();
@@ -1845,8 +1997,8 @@ mod tests {
             "<script src=\"//cdn.example/x.js\"></script>",
             // Already says something about this URL.
             "<script src=\"/guac/Client.js?debug=1\"></script>",
-            // Not a kind that goes stale behind a stable name.
-            "<img src=\"/logo.svg\">",
+            // Not a kind we version (a page, a download).
+            "<a href=\"/docs.html\">",
             // No such file: a hash of nothing is worse than none.
             "<script src=\"/guac/NoSuchFile.js\"></script>",
             // Traversal, which these paths have no business doing.
@@ -1896,6 +2048,7 @@ mod tests {
     fn test_branded_page_etag_tracks_content() {
         let a = BrandedPage::new("<html>one</html>".to_string());
         let b = BrandedPage::new("<html>two</html>".to_string());
+        let (a, b) = (a.variant(0), b.variant(0));
         assert_ne!(a.etag, b.etag);
         // Quoted, or caches ignore it.
         assert!(a.etag.starts_with('"') && a.etag.ends_with('"'));
