@@ -918,6 +918,8 @@ impl SessionManager {
                     session_id = %session_id,
                     hostname = %hostname,
                     username = %username,
+                    width,
+                    height,
                     "Creating new SSH session"
                 );
 

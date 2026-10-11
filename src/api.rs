@@ -3245,6 +3245,27 @@ pub struct ProbeHostKeyRequest {
 
 /// POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect — Create session from entry.
 #[allow(clippy::too_many_arguments)]
+/// The size a new session is created at.
+///
+/// An RDP or VNC entry that opens fullscreen on connect is sized to the
+/// screen from the start: the window's size would be replaced moments later
+/// by the fullscreen one, and a bitmap desktop is scaled, resized and refit
+/// in between (#257). Everything else keeps the window's size: a terminal
+/// reflows instantly and must stay crisp, so for it the fullscreen resize is
+/// the cheap path and a scaled interim view would be the regression.
+pub fn initial_session_size(
+    session_type: &str,
+    fullscreen_on_connect: bool,
+    window: (Option<u32>, Option<u32>),
+    screen: (Option<u32>, Option<u32>),
+) -> (Option<u32>, Option<u32>) {
+    let bitmap = matches!(session_type, "rdp" | "vnc");
+    match (bitmap && fullscreen_on_connect, screen) {
+        (true, (Some(w), Some(h))) if w > 0 && h > 0 => (Some(w), Some(h)),
+        _ => window,
+    }
+}
+
 pub async fn ab_connect_entry(
     State(manager): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -3371,15 +3392,12 @@ pub async fn ab_connect_entry(
     // Build CreateSessionRequest from the Vault entry + connect request display params.
     // ConnectRequest credentials override address book values (for prompted credentials).
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
-    // An entry that opens fullscreen on connect is sized to the screen from
-    // the start: the window's size would be replaced moments later by the
-    // fullscreen one, and the display would be scaled, resized and refit
-    // in between (#257).
-    let fullscreen = ab_entry.fullscreen_on_connect.unwrap_or(false);
-    let (initial_width, initial_height) = match (fullscreen, req.screen_width, req.screen_height) {
-        (true, Some(w), Some(h)) if w > 0 && h > 0 => (Some(w), Some(h)),
-        _ => (req.width, req.height),
-    };
+    let (initial_width, initial_height) = initial_session_size(
+        &ab_entry.session_type,
+        ab_entry.fullscreen_on_connect.unwrap_or(false),
+        (req.width, req.height),
+        (req.screen_width, req.screen_height),
+    );
 
     let create_req = CreateSessionRequest {
         session_type,
@@ -6258,6 +6276,26 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fullscreen_sizing_applies_to_bitmap_sessions_only() {
+        let win = (Some(1710), Some(954));
+        let scr = (Some(1710), Some(1112));
+        // RDP/VNC opening fullscreen: created at the screen's size
+        assert_eq!(initial_session_size("rdp", true, win, scr), scr);
+        assert_eq!(initial_session_size("vnc", true, win, scr), scr);
+        // a terminal reflows instantly: window size, fullscreen or not
+        assert_eq!(initial_session_size("ssh", true, win, scr), win);
+        assert_eq!(initial_session_size("telnet", true, win, scr), win);
+        assert_eq!(initial_session_size("web", true, win, scr), win);
+        // not fullscreen, or no screen size offered: window size
+        assert_eq!(initial_session_size("rdp", false, win, scr), win);
+        assert_eq!(initial_session_size("rdp", true, win, (None, None)), win);
+        assert_eq!(
+            initial_session_size("rdp", true, win, (Some(0), Some(0))),
+            win
+        );
+    }
 
     #[test]
     fn address_book_mutation_detection() {
