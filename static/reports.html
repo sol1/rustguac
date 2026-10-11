@@ -194,6 +194,13 @@
             return h;
         }
 
+        // "host (Tenant)" display names, as the NetBox sync writes them, read
+        // as the host over a quieter tenant line (same as Connections).
+        function entryNameHtml(label) {
+            var m = /^(.*\S)\s+\(([^()]+)\)$/.exec(label || '');
+            if (!m) return escapeHtml(label || '');
+            return '<span class="entry-name">' + escapeHtml(m[1]) + '</span><span class="entry-sub">' + escapeHtml(m[2]) + '</span>';
+        }
         function escapeHtml(s) {
             if (!s) return '';
             var d = document.createElement('div');
@@ -329,7 +336,7 @@
                 }
                 html += '<tr>' +
                     '<td>' + escapeHtml(s.created_by || s.username || '') + '</td>' +
-                    '<td>' + escapeHtml(s.entry_display_name || s.address_book_entry || '') + '</td>' +
+                    '<td>' + entryNameHtml(s.entry_display_name || s.address_book_entry || '') + '</td>' +
                     '<td>' + escapeHtml(s.address_book_folder || '') + '</td>' +
                     '<td>' + typeBadge(s.session_type) + '</td>' +
                     '<td>' + escapeHtml(s.hostname || '') + '</td>' +
@@ -425,7 +432,7 @@
                 var html = '';
                 data.forEach(function(c) {
                     html += '<tr>' +
-                        '<td>' + escapeHtml(c.name || c.address_book_entry || '') + '</td>' +
+                        '<td>' + entryNameHtml(c.name || c.address_book_entry || '') + '</td>' +
                         '<td>' + typeBadge(c.session_type) + '</td>' +
                         '<td>' + (c.session_count || 0) + '</td>' +
                         '<td>' + (c.total_hours != null ? c.total_hours.toFixed(1) : '0') + '</td>' +
