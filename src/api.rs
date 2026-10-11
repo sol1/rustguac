@@ -3145,6 +3145,13 @@ pub struct ConnectRequest {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    /// The screen's size in CSS pixels. An entry that opens fullscreen on
+    /// connect is created at this size instead of the window's, so nothing
+    /// has to be resized once the fullscreen transition lands.
+    #[serde(default)]
+    pub screen_width: Option<u32>,
+    #[serde(default)]
+    pub screen_height: Option<u32>,
     #[serde(default)]
     pub dpi: Option<u32>,
     #[serde(default)]
@@ -3364,6 +3371,16 @@ pub async fn ab_connect_entry(
     // Build CreateSessionRequest from the Vault entry + connect request display params.
     // ConnectRequest credentials override address book values (for prompted credentials).
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+    // An entry that opens fullscreen on connect is sized to the screen from
+    // the start: the window's size would be replaced moments later by the
+    // fullscreen one, and the display would be scaled, resized and refit
+    // in between (#257).
+    let fullscreen = ab_entry.fullscreen_on_connect.unwrap_or(false);
+    let (initial_width, initial_height) = match (fullscreen, req.screen_width, req.screen_height) {
+        (true, Some(w), Some(h)) if w > 0 && h > 0 => (Some(w), Some(h)),
+        _ => (req.width, req.height),
+    };
+
     let create_req = CreateSessionRequest {
         session_type,
         hostname: ab_entry.hostname,
@@ -3387,8 +3404,8 @@ pub async fn ab_connect_entry(
         jump_username: None,
         jump_password: None,
         jump_private_key: None,
-        width: req.width,
-        height: req.height,
+        width: initial_width,
+        height: initial_height,
         dpi: req.dpi,
         banner: req.banner.or(ab_entry.banner),
         enable_drive: ab_entry.enable_drive,

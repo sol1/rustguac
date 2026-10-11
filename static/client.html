@@ -1439,6 +1439,17 @@
                     || document.mozFullScreenElement
                     || document.msFullscreenElement || null;
             }
+            // The size the session should be. An entry that opens fullscreen
+            // on connect is kept at the screen's size even while the window
+            // is still windowed: the framebuffer is scaled to fit until the
+            // gesture lands, and nothing has to change when it does. One
+            // size from the first request to the fullscreen desktop, instead
+            // of window size, scaled fit, fullscreen size, refit (#257).
+            function rgTargetSize(anyPanelOpen) {
+                if (wantFullscreen && !rgFullscreenEl() && window.screen && screen.width > 0 && screen.height > 0)
+                    return [screen.width, screen.height];
+                return [anyPanelOpen ? window.innerWidth - 380 : window.innerWidth, window.innerHeight];
+            }
             function rgEnterFullscreen() {
                 var el = document.documentElement;
                 var req = el.requestFullscreen
@@ -1599,8 +1610,8 @@
                             var fitToWindow = function() {
                                 scaleDisplay();
                                 var anyPanelOpen = panelOpen || filePanelOpen;
-                                var sw = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
-                                var sh = window.innerHeight;
+                                var ts = rgTargetSize(anyPanelOpen);
+                                var sw = ts[0], sh = ts[1];
                                 if (sw > 0 && sh > 0) {
                                     // Sent whether or not it would change
                                     // anything: the repeats above are
@@ -1750,6 +1761,8 @@
                 var body = {
                     width: window.innerWidth,
                     height: window.innerHeight,
+                    screen_width: screen.width,
+                    screen_height: screen.height,
                     dpi: Math.round((window.devicePixelRatio || 1) * 96)
                 };
 
@@ -2006,8 +2019,8 @@
                 clearTimeout(resizeTimer);
                 resizeTimer = setTimeout(function() {
                     var anyPanelOpen = panelOpen || filePanelOpen;
-                    var sw = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
-                    var sh = window.innerHeight;
+                    var ts = rgTargetSize(anyPanelOpen);
+                    var sw = ts[0], sh = ts[1];
                     if (sizeWouldChange(sw, sh))
                         client.sendSize(sw, sh);
                 }, 500);
