@@ -547,7 +547,11 @@
            page its bottom hung off screen and the page had to be scrolled
            before the list could be scrolled to its end. */
         html, body { height: 100%; }
-        body { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+        /* overflow: clip, not hidden: hidden still lets scripts scroll the
+           body (scrollIntoView on anything inside), which moved the header
+           out of view; clip makes the body unscrollable for good. The border
+           box is the full height so the page padding is inside the viewport. */
+        body { display: flex; flex-direction: column; overflow: clip; min-height: 0; box-sizing: border-box; }
         #main-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
         #main-content > :not(.layout) { flex: none; }
         .layout { flex: 1 1 auto; min-height: 0; align-items: stretch; }
@@ -1668,7 +1672,7 @@
                 method: 'POST',
                 headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
                 credentials: 'same-origin',
-                body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+                body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, screen_width: screen.width, screen_height: screen.height })
             })
             .then(function(res) { return res.json(); })
             .then(function(data) {
@@ -1968,7 +1972,7 @@
                                     method: 'POST',
                                     headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
                                     credentials: 'same-origin',
-                                    body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+                                    body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, screen_width: screen.width, screen_height: screen.height })
                                 }).then(function(res) { return res.json(); }).then(function(data) {
                                     if (data.session_id) window.open('/client/' + data.session_id, '_blank');
                                     else showError(data.error || 'Failed to reconnect');
@@ -5314,14 +5318,17 @@
         // sidebar, or pushed into the lower half by the strips above it).
         function jumpToEntriesHeader(header) {
             if (!header) return;
-            var r = header.getBoundingClientRect();
-            var vh = window.innerHeight || document.documentElement.clientHeight;
-            var inView = r.top >= 0 && r.top <= vh * 0.5 && r.bottom <= vh;
-            if (inView) return;
-            try {
-                header.scrollIntoView({ block: 'start', behavior: prefersReducedMotion ? 'auto' : 'smooth' });
-            } catch (e) {
-                header.scrollIntoView(true);
+            // Scroll the entries pane only. scrollIntoView() would also scroll
+            // every scrollable ancestor, and a body with overflow hidden can
+            // still be scrolled by script: that pushed the brand row and the
+            // nav off the top of the page.
+            var pane = header.closest('.main');
+            if (pane && pane.scrollHeight > pane.clientHeight) {
+                try {
+                    pane.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+                } catch (e) {
+                    pane.scrollTop = 0;
+                }
             }
         }
 
