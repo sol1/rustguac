@@ -48,6 +48,21 @@
             font-size: var(--fz-sm);
         }
         .panel th { background: transparent; padding-top: 0; }
+        /* Narrow desktops (a 1710px MacBook display): the 18px table with
+           20px cell padding ran past the right edge. Same treatment as the
+           connections table: 16px cells, tighter padding, 14px headers, and
+           the actions kept on one line. Nothing is hidden. */
+        @media (max-width: 1800px) {
+            #history-table th, #history-table td,
+            #recordings-table th, #recordings-table td,
+            table.list th, table.list td {
+                padding: var(--s-2) var(--s-3);
+                font-size: var(--fz-sm);
+            }
+            #history-table th, #recordings-table th, table.list th { font-size: var(--fz-xs); letter-spacing: 0.08em; }
+            #history-table td:last-child, #recordings-table td:last-child { white-space: nowrap; }
+            .btn-small { padding: 0 var(--s-1); }
+        }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
