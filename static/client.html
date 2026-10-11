@@ -1466,13 +1466,36 @@
                 if (x) { try { x.call(document); } catch (e) {} }
             }
             function rgArmFullscreenGesture() {
-                var fire = function() {
+                var fire = function(e) {
                     document.removeEventListener('mousedown', fire, true);
                     document.removeEventListener('keydown', fire, true);
+                    // This press is the browser's fullscreen gesture, not
+                    // input for the remote. The transition it starts re-lays
+                    // out the display and swallows the matching release, and
+                    // a press guacd never sees released turns every later
+                    // pointer move into a drag selection (#256). Keep it from
+                    // the display's handlers; rgReleaseAllInput() covers a
+                    // release lost for any other reason once fullscreen lands.
+                    e.stopPropagation();
+                    e.preventDefault();
                     rgEnterFullscreen();
                 };
                 document.addEventListener('mousedown', fire, true);
                 document.addEventListener('keydown', fire, true);
+            }
+            // Tell the remote that nothing is held: every key the keyboard
+            // tracks as down, and all mouse buttons at the last pointer
+            // position. Used after a fullscreen transition, during which the
+            // browser may not deliver the releases to the display element.
+            function rgReleaseAllInput() {
+                try { if (keyboard) keyboard.reset(); } catch (e) {}
+                try {
+                    if (!mouse || !mouse.currentState) return;
+                    var st = new Guacamole.Mouse.State(mouse.currentState);
+                    st.left = st.middle = st.right = st.up = st.down = false;
+                    if (fillX !== 1 || fillY !== 1) { st.x /= fillX; st.y /= fillY; }
+                    client.sendMouseState(st, true);
+                } catch (e) {}
             }
             function rgShowEscNoticeOnce() {
                 if (sessionStorage.getItem('rustguac_esc_notice_seen')) return;
@@ -1526,6 +1549,7 @@
             function rgOnFullscreenChange() {
                 var inFs = !!rgFullscreenEl();
                 var bar = document.getElementById('fs-bar');
+                if (inFs) rgReleaseAllInput();
                 if (bar) {
                     if (inFs) {
                         bar.classList.add('visible');
