@@ -123,6 +123,31 @@
             <label>Domain (optional)
                 <input type="text" id="rdp-domain">
             </label>
+            <div id="rdp-gateway-section" style="margin-top:0.6em;padding-top:0.6em;border-top:1px solid var(--border)">
+            <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="rdp-gateway-toggle">
+                <span id="rdp-gateway-arrow">&#9654;</span> RD Gateway
+            </label>
+            <div id="rdp-gateway-fields" style="display:none">
+            <label>Gateway hostname
+                <input type="text" id="rdp-gateway-hostname" placeholder="gateway.example.com">
+            </label>
+            <label>Gateway port
+                <input type="number" id="rdp-gateway-port" placeholder="443">
+            </label>
+            <label>Gateway username
+                <input type="text" id="rdp-gateway-username" autocomplete="off">
+            </label>
+            <label>Gateway password
+                <input type="password" id="rdp-gateway-password">
+            </label>
+            <label>Gateway domain (optional)
+                <input type="text" id="rdp-gateway-domain">
+            </label>
+            <label>Load balance info (optional)
+                <input type="text" id="rdp-load-balance-info" placeholder="tsv://MS Terminal Services Plugin.1.CollectionName">
+            </label>
+            </div>
+            </div>
             <label>Security
                 <select id="rdp-security" style="display:block;width:100%;padding:0.4em;margin-top:0.2em;background:var(--input);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:1em;border-radius:3px;">
                     <option value="" selected>Default</option>
@@ -340,6 +365,18 @@
             }
         });
 
+        document.getElementById('rdp-gateway-toggle').addEventListener('click', function() {
+            var fields = document.getElementById('rdp-gateway-fields');
+            var arrow = document.getElementById('rdp-gateway-arrow');
+            if (fields.style.display === 'none') {
+                fields.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                fields.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
+        });
+
         // ── Escape helpers ──
         function escapeHtml(s) {
             var d = document.createElement('div');
@@ -521,6 +558,18 @@
                 if (pw) body.password = pw;
                 var dom = document.getElementById('rdp-domain').value;
                 if (dom) body.domain = dom;
+                var gatewayHost = document.getElementById('rdp-gateway-hostname').value.trim();
+                if (gatewayHost) body.gateway_hostname = gatewayHost;
+                var gatewayPort = parseInt(document.getElementById('rdp-gateway-port').value);
+                if (gatewayPort) body.gateway_port = gatewayPort;
+                var gatewayUsername = document.getElementById('rdp-gateway-username').value;
+                if (gatewayUsername) body.gateway_username = gatewayUsername;
+                var gatewayPassword = document.getElementById('rdp-gateway-password').value;
+                if (gatewayPassword) body.gateway_password = gatewayPassword;
+                var gatewayDomain = document.getElementById('rdp-gateway-domain').value;
+                if (gatewayDomain) body.gateway_domain = gatewayDomain;
+                var loadBalanceInfo = document.getElementById('rdp-load-balance-info').value.trim();
+                if (loadBalanceInfo) body.load_balance_info = loadBalanceInfo;
                 var sec = document.getElementById('rdp-security').value;
                 if (sec) body.security = sec;
                 if (document.getElementById('rdp-ignore-cert').checked) body.ignore_cert = true;
