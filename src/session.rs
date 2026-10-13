@@ -1071,6 +1071,7 @@ impl SessionManager {
 
                 let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
+                let printing_enabled = req.enable_printing.unwrap_or(false);
                 tracing::info!(
                     %session_id,
                     drive_enabled,
@@ -1080,12 +1081,19 @@ impl SessionManager {
                     "Drive configuration"
                 );
 
-                // Create per-session drive directory for RDP
-                let session_drive_path = if drive_enabled {
+                // RDP printer redirection also needs a drive device. Give a
+                // print-only device a managed per-session directory so guacd
+                // never receives an unchecked path under the shared /tmp.
+                let session_drive_path = if drive_enabled || printing_enabled {
                     match drive::create_session_dir(&drive_cfg, session_id) {
                         Ok(path) => Some(path),
                         Err(e) => {
                             tracing::warn!(session_id = %session_id, "Failed to create drive dir: {}", e);
+                            if printing_enabled {
+                                return Err(SessionError::VdiError(format!(
+                                    "failed to prepare RDP printer drive: {e}"
+                                )));
+                            }
                             None
                         }
                     }
@@ -1095,19 +1103,14 @@ impl SessionManager {
 
                 let rdp_ignore_cert = req.ignore_cert.unwrap_or(false);
                 let rdp_security = req.security.clone();
-                let printing_enabled = req.enable_printing.unwrap_or(false);
                 // Keep the printer's redirected drive endpoint private when
                 // normal file transfer is disabled. The browser file manager
                 // remains disabled unless a real session drive is configured.
-                let hidden_print_drive = printing_enabled && session_drive_path.is_none();
-                let rdp_enable_drive = session_drive_path.is_some() || hidden_print_drive;
+                let hidden_print_drive = printing_enabled && !drive_enabled;
+                let rdp_enable_drive = session_drive_path.is_some();
                 let rdp_drive_path = session_drive_path
                     .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .or_else(|| {
-                        hidden_print_drive
-                            .then(|| format!("/tmp/inaccessible/guac/drive/{session_id}"))
-                    });
+                    .map(|p| p.to_string_lossy().to_string());
                 let rdp_drive_name = if hidden_print_drive {
                     "rustguac Redirected Drive".to_string()
                 } else {
@@ -1895,6 +1898,9 @@ impl SessionManager {
                     if let Some(mut bs) = browser_session {
                         self.browser_manager.kill(&mut bs).await;
                     }
+                    if let Some(path) = session_drive_path.as_ref() {
+                        drive::cleanup_session_dir(path.clone(), session_id, 0).await;
+                    }
                     tracing::error!(session_id = %session_id, error = %e, "Failed to connect to guacd");
                     return Err(SessionError::GuacdConnection(e.to_string()));
                 }
@@ -1963,7 +1969,9 @@ impl SessionManager {
                     && (drive_cfg.allow_download || drive_cfg.allow_upload)
             }
             SessionType::Rdp => {
-                session_drive_path.is_some() && (drive_cfg.allow_download || drive_cfg.allow_upload)
+                drive::is_drive_enabled(&self.config.drive, req.enable_drive)
+                    && session_drive_path.is_some()
+                    && (drive_cfg.allow_download || drive_cfg.allow_upload)
             }
             _ => true,
         };

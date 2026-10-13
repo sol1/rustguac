@@ -164,8 +164,8 @@ pub struct RdpParams {
     pub enable_drive: bool,
     /// Enable the Guacamole virtual printer (PDF print jobs delivered to the client).
     pub enable_printing: bool,
-    /// Create the drive path if missing. Printing-only sessions leave this false
-    /// and point drive redirection at an inaccessible path.
+    /// Create the drive path if missing. Print-only sessions use a managed,
+    /// per-session directory while keeping file transfers disabled.
     pub create_drive_path: bool,
     pub drive_path: Option<String>,
     pub drive_name: String,

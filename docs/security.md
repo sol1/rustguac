@@ -164,7 +164,7 @@ All responses include the following headers:
 
 | Header | Value |
 |--------|-------|
-| Content-Security-Policy | `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'` |
+| Content-Security-Policy | `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: blob:; frame-src 'self' blob:` |
 | X-Frame-Options | `DENY` |
 | X-Content-Type-Options | `nosniff` |
 | Strict-Transport-Security | `max-age=31536000; includeSubDomains` (when TLS enabled) |
@@ -251,6 +251,8 @@ Chromium runs with its normal sandbox enabled (via the SUID `chrome-sandbox` hel
 | Recording files | 0640 (rw-r-----) | rustguac:rustguac |
 | Recording directory | 0750 (rwxr-x---) | rustguac:rustguac |
 | TLS private key | 0600 (rw-------) | rustguac:rustguac |
+
+Print-only RDP sessions also use a per-session directory under the configured drive base, created with mode 0750. The browser file manager remains disabled and RDP uploads and downloads are disabled for that drive. The `frame-src` CSP allowance for `blob:` is used only to load the generated print PDF in the hidden frame that invokes the browser's local print dialog.
 
 ## SQL injection protection
 
