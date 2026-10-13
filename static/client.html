@@ -304,6 +304,9 @@
         // Per-entry autohide of the clipboard/files side tabs; populated from
         // the same /api/sessions/:id fetch and read when the tabs are built.
         var wantAutohideTabs = false;
+        // A print-only RDP drive is available to the protocol for print jobs,
+        // but must not be exposed through the browser's file manager.
+        var wantFileManager = urlParams.get('file_manager') !== 'false';
 
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             var siteTitle = d.site_title || 'rustguac';
@@ -379,6 +382,7 @@
                 if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
+                wantFileManager = session && session.file_manager_enabled === true;
                 return showBanner(session.banner);
             })
             .then(function() { startGuacamole(); })
@@ -1354,6 +1358,7 @@
 
             // ── Filesystem handler (fires when drive/SFTP is available) ──
             client.onfilesystem = function(object, name) {
+                if (!wantFileManager) return;
                 filesystem = object;
                 tracing_log('Filesystem available: ' + name);
                 // Show file manager tab
@@ -1367,9 +1372,31 @@
 
             // ── File download handler (server-initiated file transfer) ──
             client.onfile = function(stream, mimetype, filename) {
+                var isPrintJob = /^application\/pdf(?:\s*;|$)/i.test(mimetype || '');
                 var reader = new Guacamole.BlobReader(stream, mimetype);
+                reader.onprogress = function(length) {
+                    stream.sendAck('Received', Guacamole.Status.Code.SUCCESS);
+                };
                 reader.onend = function() {
                     var blob = reader.getBlob();
+                    if (isPrintJob) {
+                        var frame = document.createElement('iframe');
+                        frame.style.display = 'none';
+                        document.body.appendChild(frame);
+                        frame.onload = function() {
+                            setTimeout(function() {
+                                frame.focus();
+                                frame.contentWindow.print();
+                            }, 1);
+                        };
+                        var printUrl = URL.createObjectURL(blob);
+                        frame.src = printUrl;
+                        setTimeout(function() {
+                            if (frame.parentNode) frame.parentNode.removeChild(frame);
+                            URL.revokeObjectURL(printUrl);
+                        }, 60000);
+                        return;
+                    }
                     var a = document.createElement('a');
                     a.href = URL.createObjectURL(blob);
                     a.download = filename;
@@ -1379,6 +1406,7 @@
                     setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
                     setFileStatus('Received file: ' + filename);
                 };
+                stream.sendAck('OK', Guacamole.Status.Code.SUCCESS);
             };
 
             function tracing_log(msg) {

@@ -75,6 +75,10 @@ pub struct CreateSessionRequest {
     pub banner: Option<String>,
     /// Override drive/file transfer setting for this session.
     pub enable_drive: Option<bool>,
+    /// Enable RDP printer redirection. Print jobs are delivered as PDFs to the browser.
+    pub enable_printing: Option<bool>,
+    /// Display name advertised for the redirected RDP printer.
+    pub printer_name: Option<String>,
     // RDP RemoteApp (RAIL)
     pub remote_app: Option<String>,
     pub remote_app_dir: Option<String>,
@@ -261,6 +265,9 @@ pub struct SessionInfo {
     /// client.html from the /api/sessions/:id fetch; omitted when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub autohide_side_tabs: bool,
+    /// Whether the browser should expose the session's file transfer drive.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub file_manager_enabled: bool,
 }
 
 /// Internal session state including the guacd connection.
@@ -329,6 +336,8 @@ pub struct Session {
     /// Surfaced in `SessionInfo` so client.html can auto-hide the
     /// clipboard/files side tabs.
     pub autohide_side_tabs: bool,
+    /// Whether the browser should expose the session's file transfer drive.
+    pub file_manager_enabled: bool,
 }
 
 /// A short-lived viewer token issued by an admin to shadow an active session.
@@ -644,14 +653,23 @@ impl Session {
             session_type: self.session_type.clone(),
             status: self.status.clone(),
             created_at: self.created_at,
-            client_url: format!("/client/{}", self.id),
+            client_url: format!(
+                "/client/{}?file_manager={}",
+                self.id, self.file_manager_enabled
+            ),
             share_url: if self.share_allowed {
-                Some(format!("/client/{}?token={}", self.id, self.share_token))
+                Some(format!(
+                    "/client/{}?token={}&file_manager={}",
+                    self.id, self.share_token, self.file_manager_enabled
+                ))
             } else {
                 None
             },
             share_url_readonly: if self.share_allowed {
-                Some(format!("/client/{}?token={}", self.id, self.share_token_ro))
+                Some(format!(
+                    "/client/{}?token={}&file_manager={}",
+                    self.id, self.share_token_ro, self.file_manager_enabled
+                ))
             } else {
                 None
             },
@@ -668,6 +686,7 @@ impl Session {
             thumbnail_url: Some(format!("/api/sessions/{}/thumbnail", self.id)),
             fullscreen_on_connect: self.fullscreen_on_connect,
             autohide_side_tabs: self.autohide_side_tabs,
+            file_manager_enabled: self.file_manager_enabled,
         }
     }
 }
@@ -1076,7 +1095,24 @@ impl SessionManager {
 
                 let rdp_ignore_cert = req.ignore_cert.unwrap_or(false);
                 let rdp_security = req.security.clone();
-                let rdp_enable_drive = session_drive_path.is_some();
+                let printing_enabled = req.enable_printing.unwrap_or(false);
+                // Keep the printer's redirected drive endpoint private when
+                // normal file transfer is disabled. The browser file manager
+                // remains disabled unless a real session drive is configured.
+                let hidden_print_drive = printing_enabled && session_drive_path.is_none();
+                let rdp_enable_drive = session_drive_path.is_some() || hidden_print_drive;
+                let rdp_drive_path = session_drive_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .or_else(|| {
+                        hidden_print_drive
+                            .then(|| format!("/tmp/inaccessible/guac/drive/{session_id}"))
+                    });
+                let rdp_drive_name = if hidden_print_drive {
+                    "rustguac Redirected Drive".to_string()
+                } else {
+                    drive_cfg.drive_name.clone()
+                };
                 tracing::info!(
                     %session_id,
                     ignore_cert = rdp_ignore_cert,
@@ -1100,12 +1136,17 @@ impl SessionManager {
                     dpi,
                     ignore_cert: rdp_ignore_cert,
                     enable_drive: rdp_enable_drive,
-                    drive_path: session_drive_path
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().to_string()),
-                    drive_name: drive_cfg.drive_name.clone(),
-                    disable_download: !drive_cfg.allow_download,
-                    disable_upload: !drive_cfg.allow_upload,
+                    enable_printing: printing_enabled,
+                    create_drive_path: session_drive_path.is_some(),
+                    drive_path: rdp_drive_path,
+                    drive_name: rdp_drive_name,
+                    printer_name: req
+                        .printer_name
+                        .clone()
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| "rustguac".to_string()),
+                    disable_download: hidden_print_drive || !drive_cfg.allow_download,
+                    disable_upload: hidden_print_drive || !drive_cfg.allow_upload,
                     auth_pkg: resolve_rdp_auth_pkg(req.auth_pkg.as_deref(), &self.config),
                     kdc_url: req.kdc_url.clone(),
                     kerberos_cache: req.kerberos_cache.clone(),
@@ -1615,8 +1656,11 @@ impl SessionManager {
                     dpi,
                     ignore_cert: true,
                     enable_drive: false,
+                    enable_printing: false,
+                    create_drive_path: false,
                     drive_path: None,
                     drive_name: String::new(),
+                    printer_name: "rustguac".to_string(),
                     disable_download: true,
                     disable_upload: true,
                     auth_pkg: None,
@@ -1912,6 +1956,18 @@ impl SessionManager {
             .allow_sharing
             .unwrap_or(req.address_book_entry.is_none());
 
+        let drive_cfg = drive::drive_config_or_default(&self.config.drive);
+        let file_manager_enabled = match &req.session_type {
+            SessionType::Ssh => {
+                drive::is_drive_enabled(&self.config.drive, req.enable_drive)
+                    && (drive_cfg.allow_download || drive_cfg.allow_upload)
+            }
+            SessionType::Rdp => {
+                session_drive_path.is_some() && (drive_cfg.allow_download || drive_cfg.allow_upload)
+            }
+            _ => true,
+        };
+
         let session = Session {
             id: session_id,
             session_type: req.session_type,
@@ -1946,6 +2002,7 @@ impl SessionManager {
             share_allowed,
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
             autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
+            file_manager_enabled,
         };
 
         let info = session.info();
@@ -2916,6 +2973,7 @@ mod tests {
             share_allowed: true,
             fullscreen_on_connect: false,
             autohide_side_tabs: false,
+            file_manager_enabled: true,
         }
     }
 
@@ -3039,11 +3097,26 @@ mod tests {
         let info = session.info();
         assert_eq!(
             info.share_url.as_deref(),
-            Some(format!("/client/{}?token=rw", session.id).as_str())
+            Some(format!("/client/{}?token=rw&file_manager=true", session.id).as_str())
         );
         assert_eq!(
             info.share_url_readonly.as_deref(),
-            Some(format!("/client/{}?token=rw-ro", session.id).as_str())
+            Some(format!("/client/{}?token=rw-ro&file_manager=true", session.id).as_str())
+        );
+        assert_eq!(
+            info.client_url,
+            format!("/client/{}?file_manager=true", session.id)
+        );
+
+        session.file_manager_enabled = false;
+        let info = session.info();
+        assert_eq!(
+            info.client_url,
+            format!("/client/{}?file_manager=false", session.id)
+        );
+        assert_eq!(
+            info.share_url.as_deref(),
+            Some(format!("/client/{}?token=rw&file_manager=false", session.id).as_str())
         );
 
         session.share_allowed = false;

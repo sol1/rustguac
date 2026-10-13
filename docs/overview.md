@@ -93,7 +93,7 @@ Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reac
 
 ### RDP
 
-Connects guacd to a target RDP server. Supports username/password, domain, and various RDP settings (security mode, certificate ignore, display resize). Drive redirection provides file transfer via a per-session directory on the rustguac server.
+Connects guacd to a target RDP server. Supports username/password, domain, and various RDP settings (security mode, certificate ignore, display resize). Drive redirection provides file transfer via a per-session directory on the rustguac server. Optional printer redirection opens remote print jobs in the browser's local print dialog and requires Ghostscript on the guacd host.
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) and [Kerberos NLA authentication](integrations.md#rdp-kerberos-nla-authentication).
 

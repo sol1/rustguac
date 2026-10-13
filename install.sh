@@ -113,7 +113,7 @@ install_deps() {
 
     # Runtime utilities
     apt-get install -y \
-        curl ca-certificates
+        curl ca-certificates ghostscript
 
     info "System packages installed."
 }
