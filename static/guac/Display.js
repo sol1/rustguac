@@ -1026,9 +1026,15 @@ Guacamole.Display = function() {
      * @param {Array} [rects]
      *     The regions of the decoded picture that are valid, if the server
      *     supplied them.
+     *
+     * @param {number} [view]
+     *     Which view of an AVC444 picture this access unit carries.
+     *
+     * @param {boolean} [paired]
+     *     Whether an auxiliary chroma view for this same picture follows.
      */
     this.drawH264 = function(layer, decoder, x, y, width, height, nalData,
-            isKeyFrame, rects, view) {
+            isKeyFrame, rects, view, paired, recreated) {
 
         var token = null;
 
@@ -1056,7 +1062,7 @@ Guacamole.Display = function() {
          * required either way, or this frame and every frame behind it stalls
          * in the queue. */
         token = decoder.decode(layer, x, y, width, height, nalData,
-                isKeyFrame, rects, unblock, view);
+                isKeyFrame, rects, unblock, view, paired, recreated);
 
         decoding = false;
         if (readyDuringDecode)
