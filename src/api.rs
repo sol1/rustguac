@@ -2749,6 +2749,14 @@ pub struct ConnectRequest {
     pub password: Option<String>,
     #[serde(default)]
     pub domain: Option<String>,
+    #[serde(default)]
+    pub gateway_username: Option<String>,
+    #[serde(default)]
+    pub gateway_password: Option<String>,
+    #[serde(default)]
+    pub gateway_domain: Option<String>,
+    #[serde(default)]
+    pub load_balance_info: Option<String>,
 }
 
 /// POST /api/ssh/probe-host-key — Probe an SSH server to retrieve its host key.
@@ -2941,6 +2949,12 @@ pub async fn ab_connect_entry(
         generate_keypair: None,
         url: ab_entry.url,
         domain: req.domain.or(ab_entry.domain),
+        gateway_hostname: ab_entry.gateway_hostname,
+        gateway_port: ab_entry.gateway_port,
+        gateway_username: req.gateway_username.or(ab_entry.gateway_username),
+        gateway_password: req.gateway_password.or(ab_entry.gateway_password),
+        gateway_domain: req.gateway_domain.or(ab_entry.gateway_domain),
+        load_balance_info: req.load_balance_info.or(ab_entry.load_balance_info),
         security: ab_entry.security,
         server_layout: ab_entry.server_layout,
         ignore_cert: ab_entry.ignore_cert,
@@ -3521,6 +3535,7 @@ pub async fn ab_update_entry(
 
             AddressBookEntry {
                 password: data.password.or(existing.password),
+                gateway_password: data.gateway_password.or(existing.gateway_password),
                 private_key: data.private_key.or(existing.private_key),
                 container_password: data.container_password.or(existing.container_password),
                 proxmox_token_secret: data.proxmox_token_secret.or(existing.proxmox_token_secret),
@@ -5431,6 +5446,12 @@ pub async fn quick_connect(
             generate_keypair: None,
             url: ab_entry.url,
             domain: ab_entry.domain,
+            gateway_hostname: ab_entry.gateway_hostname,
+            gateway_port: ab_entry.gateway_port,
+            gateway_username: ab_entry.gateway_username,
+            gateway_password: ab_entry.gateway_password,
+            gateway_domain: ab_entry.gateway_domain,
+            load_balance_info: ab_entry.load_balance_info,
             security: ab_entry.security,
             server_layout: ab_entry.server_layout,
             ignore_cert: ab_entry.ignore_cert,
@@ -5558,6 +5579,12 @@ pub async fn quick_connect(
         generate_keypair: None,
         url: query.url,
         domain: None,
+        gateway_hostname: None,
+        gateway_port: None,
+        gateway_username: None,
+        gateway_password: None,
+        gateway_domain: None,
+        load_balance_info: None,
         security: None,
         server_layout: None,
         ignore_cert: None,
