@@ -124,6 +124,12 @@ pub struct AddressBookEntry {
     pub display_name: Option<String>,
     /// Override drive/file transfer setting for this entry.
     pub enable_drive: Option<bool>,
+    /// Enable RDP printer redirection (PDF print jobs are delivered to the browser).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_printing: Option<bool>,
+    /// Display name advertised for the redirected RDP printer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub printer_name: Option<String>,
     /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
     pub auth_pkg: Option<String>,
     /// Kerberos KDC URL (optional).
@@ -372,6 +378,10 @@ pub struct EntryInfo {
     pub security: Option<String>,
     pub ignore_cert: Option<bool>,
     pub enable_drive: Option<bool>,
+    /// Enable RDP printer redirection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_printing: Option<bool>,
+    pub printer_name: Option<String>,
     /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
     pub auth_pkg: Option<String>,
     /// Kerberos KDC URL (optional).
@@ -555,6 +565,8 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             security: e.security.clone(),
             ignore_cert: e.ignore_cert,
             enable_drive: e.enable_drive,
+            enable_printing: e.enable_printing,
+            printer_name: e.printer_name.clone(),
             auth_pkg: e.auth_pkg.clone(),
             kdc_url: e.kdc_url.clone(),
             prompt_credentials: e.prompt_credentials,
@@ -2264,6 +2276,33 @@ mod tests {
         let json3 = r#"{"type":"rdp","hostname":"test","enable_h264":false}"#;
         let entry3: AddressBookEntry = serde_json::from_str(json3).unwrap();
         assert_eq!(entry3.enable_h264, Some(false));
+    }
+
+    #[test]
+    fn test_enable_printing_serde_roundtrip() {
+        let entry: AddressBookEntry =
+            serde_json::from_str(r#"{"type":"rdp","hostname":"test","enable_printing":true}"#)
+                .unwrap();
+        assert_eq!(entry.enable_printing, Some(true));
+
+        let serialized = serde_json::to_string(&entry).unwrap();
+        assert!(serialized.contains("\"enable_printing\":true"));
+
+        let legacy: AddressBookEntry =
+            serde_json::from_str(r#"{"type":"rdp","hostname":"test"}"#).unwrap();
+        assert_eq!(legacy.enable_printing, None);
+    }
+
+    #[test]
+    fn test_printer_name_serde_roundtrip() {
+        let entry: AddressBookEntry = serde_json::from_str(
+            r#"{"type":"rdp","hostname":"test","printer_name":"Office Printer"}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.printer_name.as_deref(), Some("Office Printer"));
+
+        let serialized = serde_json::to_string(&entry).unwrap();
+        assert!(serialized.contains("\"printer_name\":\"Office Printer\""));
     }
 
     // ── Path-traversal regression tests (v1.5.4 fix) ──────────────────────

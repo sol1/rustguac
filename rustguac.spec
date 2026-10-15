@@ -32,6 +32,7 @@ Requires:       libtelnet
 Requires:       libwebsockets
 Requires:       freerdp-libs
 Requires:       ca-certificates
+Requires:       ghostscript
 
 Recommends:     tigervnc-server
 Recommends:     chromium

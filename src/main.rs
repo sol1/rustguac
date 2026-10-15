@@ -664,11 +664,14 @@ struct TlsEnabled(bool);
 /// showing (#249). Chromium decodes straight from the stream bytes and never
 /// fetches a URL, so it hid the problem. The remote mouse cursor
 /// (`cursor: url(data:...)`) and blob: image URLs need the same allowance.
+/// `frame-src` separately permits the browser-generated PDF blob in the hidden
+/// print frame without widening the default policy for other resource types.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
     script-src 'self' 'unsafe-inline'; \
     style-src 'self' 'unsafe-inline'; \
     connect-src 'self' wss: ws:; \
-    img-src 'self' data: blob:";
+    img-src 'self' data: blob:; \
+    frame-src 'self' blob:";
 
 async fn security_headers(
     tls: Extension<TlsEnabled>,
@@ -1848,6 +1851,13 @@ mod tests {
         assert!(sources.contains(&"'self'"), "img-src must allow 'self'");
         assert!(sources.contains(&"data:"), "img-src must allow data: URIs");
         assert!(sources.contains(&"blob:"), "img-src must allow blob: URLs");
+        let frame_src = directives
+            .iter()
+            .find(|d| d.starts_with("frame-src "))
+            .expect("CSP must explicitly scope PDF blob access to frames");
+        let frame_sources: Vec<&str> = frame_src.split_whitespace().skip(1).collect();
+        assert!(frame_sources.contains(&"'self'"));
+        assert!(frame_sources.contains(&"blob:"));
         // The string continuation must not leave stray whitespace runs.
         assert!(!CONTENT_SECURITY_POLICY.contains("  "));
         assert!(!CONTENT_SECURITY_POLICY.contains('\n'));

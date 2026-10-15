@@ -134,6 +134,13 @@
             <label style="margin-top:0.8em">
                 <input type="checkbox" id="rdp-ignore-cert" style="display:inline;width:auto;margin-right:0.4em"> Ignore certificate errors
             </label>
+            <label style="margin-top:0.8em">
+                <input type="checkbox" id="rdp-enable-printing" style="display:inline;width:auto;margin-right:0.4em"> Enable printer redirection
+                <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Print jobs open your browser's local print dialog. The guacd host needs Ghostscript installed.</div>
+            </label>
+            <label>Printer name
+                <input type="text" id="rdp-printer-name" placeholder="rustguac" maxlength="64">
+            </label>
         </div>
         <div id="vnc-fields" style="display:none">
             <label>Host
@@ -524,6 +531,9 @@
                 var sec = document.getElementById('rdp-security').value;
                 if (sec) body.security = sec;
                 if (document.getElementById('rdp-ignore-cert').checked) body.ignore_cert = true;
+                if (document.getElementById('rdp-enable-printing').checked) body.enable_printing = true;
+                var printerName = document.getElementById('rdp-printer-name').value.trim();
+                if (printerName) body.printer_name = printerName;
             } else {
                 body.session_type = 'ssh';
                 body.hostname = document.getElementById('hostname').value;
