@@ -820,8 +820,8 @@ async fn run_server(config: Config, database: Db) {
     let mut local_cell = default_cell.clone();
 
     if let Some(ref vault_config) = config.vault {
-        match std::env::var("VAULT_SECRET_ID") {
-            Ok(sid) if !sid.is_empty() => {
+        match vault_config.secret_id_from_env("VAULT_SECRET_ID") {
+            Ok(sid) if vault_config.jwt_auth.is_some() || !sid.is_empty() => {
                 connect_vault_backend(
                     "default",
                     default_cell.clone(),
@@ -839,8 +839,8 @@ async fn run_server(config: Config, database: Db) {
     }
 
     if let Some(ref vc) = config.vault_shared {
-        match std::env::var("VAULT_SHARED_SECRET_ID") {
-            Ok(sid) if !sid.is_empty() => {
+        match vc.secret_id_from_env("VAULT_SHARED_SECRET_ID") {
+            Ok(sid) if vc.jwt_auth.is_some() || !sid.is_empty() => {
                 let cell: VaultCell = Arc::new(tokio::sync::RwLock::new(None));
                 connect_vault_backend("shared", cell.clone(), vc.clone(), sid, None).await;
                 shared_cell = cell;
@@ -852,8 +852,8 @@ async fn run_server(config: Config, database: Db) {
     }
 
     if let Some(ref vc) = config.vault_local {
-        match std::env::var("VAULT_LOCAL_SECRET_ID") {
-            Ok(sid) if !sid.is_empty() => {
+        match vc.secret_id_from_env("VAULT_LOCAL_SECRET_ID") {
+            Ok(sid) if vc.jwt_auth.is_some() || !sid.is_empty() => {
                 let cell: VaultCell = Arc::new(tokio::sync::RwLock::new(None));
                 connect_vault_backend("local", cell.clone(), vc.clone(), sid, None).await;
                 local_cell = cell;
