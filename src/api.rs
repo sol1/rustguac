@@ -1570,6 +1570,69 @@ pub async fn list_users(
 }
 
 #[derive(Deserialize)]
+pub struct CreateUserRequest {
+    pub email: String,
+    #[serde(default)]
+    pub name: String,
+    pub role: String,
+}
+
+/// POST /api/users — Pre-provision a user for OIDC login (needed when
+/// `auto_create_users = false`). Admin only.
+pub async fn create_user(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Json(req): Json<CreateUserRequest>,
+) -> impl IntoResponse {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "admin role required"})),
+        )
+            .into_response();
+    }
+
+    let email = req.email.trim().to_string();
+    if email.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "email is required"})),
+        )
+            .into_response();
+    }
+    if !["admin", "poweruser", "operator", "viewer"].contains(&req.role.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "role must be admin, poweruser, operator, or viewer"})),
+        )
+            .into_response();
+    }
+
+    let db_clone = database.clone();
+    let name = req.name.trim().to_string();
+    let role = req.role.clone();
+    match tokio::task::spawn_blocking(move || db::create_user(&db_clone, &email, &name, &role))
+        .await
+    {
+        Ok(Ok(user)) => (StatusCode::CREATED, Json(json!(user))).into_response(),
+        Ok(Err(e)) if e.to_string().contains("UNIQUE") => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "user already exists"})),
+        )
+            .into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to create user"})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
 pub struct SetRoleRequest {
     pub role: String,
 }

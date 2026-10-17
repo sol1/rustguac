@@ -26,6 +26,11 @@ pub struct OidcConfig {
     pub redirect_uri: String,
     #[serde(default = "default_oidc_default_role")]
     pub default_role: String,
+    /// Create a user account on first OIDC login (default: true). When false,
+    /// only users already in the database (pre-provisioned with `add-user`,
+    /// `POST /api/users` or the Admin page) can log in.
+    #[serde(default = "default_true")]
+    pub auto_create_users: bool,
     /// Name of the OIDC claim containing group memberships (default: "groups").
     #[serde(default = "default_groups_claim")]
     pub groups_claim: String,
@@ -53,6 +58,7 @@ impl std::fmt::Debug for OidcConfig {
             )
             .field("redirect_uri", &self.redirect_uri)
             .field("default_role", &self.default_role)
+            .field("auto_create_users", &self.auto_create_users)
             .field("groups_claim", &self.groups_claim)
             .field("extra_scopes", &self.extra_scopes)
             .field("tls_skip_verify", &self.tls_skip_verify)
@@ -1535,6 +1541,7 @@ mod tests {
             client_secret: Some("sensitive-value".into()),
             redirect_uri: "https://console.example.com/oidc/callback".into(),
             default_role: default_oidc_default_role(),
+            auto_create_users: true,
             groups_claim: default_groups_claim(),
             extra_scopes: vec![],
             tls_skip_verify: false,

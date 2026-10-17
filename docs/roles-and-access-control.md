@@ -49,6 +49,8 @@ OIDC users are assigned a role through three mechanisms (in order of precedence)
 2. **Manual role assignment** — admins can set a user's role via CLI, API, or the Admin page.
 3. **Default role** — new users get the `default_role` from OIDC config on first login (default: `operator`).
 
+With `auto_create_users = false` in `[oidc]`, rustguac does not create accounts on login: a user must be added first via `rustguac add-user --email <email> --role <role>`, `POST /api/users` (`{"email": "...", "role": "...", "name": "..."}`), or the Admin page. Anyone else who authenticates with the identity provider gets a 403. The pre-assigned role is kept; `default_role` is not applied, but group-to-role mappings still are.
+
 ## Endpoint access control
 
 ### Session management

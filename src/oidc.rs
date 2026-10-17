@@ -508,8 +508,10 @@ pub async fn callback(
         _ => None,
     };
 
-    // Upsert user in DB (sets default_role only on first login INSERT, not on subsequent updates)
+    // Upsert user in DB (sets default_role only on first login INSERT, not on subsequent updates).
+    // With auto_create_users = false, only already-provisioned users get through.
     let default_role = oidc.config.default_role.clone();
+    let auto_create = oidc.config.auto_create_users;
     let db_clone = database.clone();
     let email_clone = email.clone();
     let name_clone = name.clone();
@@ -523,11 +525,16 @@ pub async fn callback(
             Some(&subject_clone),
             &default_role,
             &groups,
+            auto_create,
         )
     })
     .await
     {
-        Ok(Ok(user)) => user,
+        Ok(Ok(Some(user))) => user,
+        Ok(Ok(None)) => {
+            tracing::warn!(email = %email, "OIDC login rejected: no account and auto_create_users is disabled");
+            return Redirect::to("/?sso_error=no_account").into_response();
+        }
         Ok(Err(e)) => {
             tracing::error!("Failed to upsert user: {}", e);
             return (
@@ -562,11 +569,8 @@ pub async fn callback(
     };
 
     if user.disabled {
-        return (
-            StatusCode::FORBIDDEN,
-            axum::Json(json!({"error": "account is disabled"})),
-        )
-            .into_response();
+        tracing::warn!(email = %email, "OIDC login rejected: account is disabled");
+        return Redirect::to("/?sso_error=disabled").into_response();
     }
 
     // Create auth session

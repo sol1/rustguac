@@ -110,6 +110,7 @@ Enables OpenID Connect authentication. When configured, the web UI shows a login
 | `client_secret` | — | OIDC client secret (or use `OIDC_CLIENT_SECRET` env var) |
 | `redirect_uri` | — | Redirect URI: `https://your-host/auth/callback` (required) |
 | `default_role` | `operator` | Role assigned to new users on first login |
+| `auto_create_users` | `true` | Create an account on first OIDC login. When `false`, only users already in the database can log in; add them with `rustguac add-user`, `POST /api/users` or the Admin page |
 | `groups_claim` | `groups` | JWT claim name containing group memberships |
 | `extra_scopes` | `[]` | Additional OIDC scopes to request |
 | `ca_cert` | — | Path to CA certificate (PEM) for verifying the OIDC provider |

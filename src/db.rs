@@ -513,7 +513,10 @@ impl std::fmt::Display for AuthError {
 
 // ── User management ──
 
-/// Upsert a user from OIDC login. Creates on first login, updates last_login_at on subsequent.
+/// Record an OIDC login. Updates an existing user's profile and last_login_at.
+/// A user not yet in the database is created with `default_role` when
+/// `create_if_missing` is set; otherwise `Ok(None)` is returned and nothing is
+/// written (OIDC `auto_create_users = false`).
 pub fn upsert_user(
     db: &Db,
     email: &str,
@@ -521,18 +524,64 @@ pub fn upsert_user(
     oidc_subject: Option<&str>,
     default_role: &str,
     groups: &[String],
-) -> rusqlite::Result<User> {
+    create_if_missing: bool,
+) -> rusqlite::Result<Option<User>> {
     let groups_str = groups.join(",");
     let conn = db.lock().unwrap();
+    if create_if_missing {
+        conn.execute(
+            "INSERT INTO users (email, name, oidc_subject, role, oidc_groups)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(email) DO UPDATE SET
+                 name = excluded.name,
+                 oidc_subject = COALESCE(excluded.oidc_subject, users.oidc_subject),
+                 oidc_groups = excluded.oidc_groups,
+                 last_login_at = datetime('now')",
+            params![email, name, oidc_subject, default_role, groups_str],
+        )?;
+    } else {
+        let changed = conn.execute(
+            "UPDATE users SET
+                 name = ?2,
+                 oidc_subject = COALESCE(?3, oidc_subject),
+                 oidc_groups = ?4,
+                 last_login_at = datetime('now')
+             WHERE email = ?1",
+            params![email, name, oidc_subject, groups_str],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+    }
+    conn.query_row(
+        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups
+         FROM users WHERE email = ?1",
+        params![email],
+        |row| {
+            Ok(User {
+                id: row.get(0)?,
+                email: row.get(1)?,
+                name: row.get(2)?,
+                oidc_subject: row.get(3)?,
+                role: row.get(4)?,
+                disabled: row.get::<_, i32>(5)? != 0,
+                created_at: row.get(6)?,
+                last_login_at: row.get(7)?,
+                oidc_groups: row.get(8)?,
+            })
+        },
+    )
+    .map(Some)
+}
+
+/// Pre-provision a user so they can log in via OIDC when automatic account
+/// creation is disabled. The OIDC subject, name and groups are filled in on
+/// first login. Fails with a UNIQUE constraint error if the email exists.
+pub fn create_user(db: &Db, email: &str, name: &str, role: &str) -> rusqlite::Result<User> {
+    let conn = db.lock().unwrap();
     conn.execute(
-        "INSERT INTO users (email, name, oidc_subject, role, oidc_groups)
-         VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(email) DO UPDATE SET
-             name = excluded.name,
-             oidc_subject = COALESCE(excluded.oidc_subject, users.oidc_subject),
-             oidc_groups = excluded.oidc_groups,
-             last_login_at = datetime('now')",
-        params![email, name, oidc_subject, default_role, groups_str],
+        "INSERT INTO users (email, name, role) VALUES (?1, ?2, ?3)",
+        params![email, name, role],
     )?;
     conn.query_row(
         "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups
@@ -1921,5 +1970,73 @@ mod tests {
         assert!(validate_api_key(&db, &k, None).is_ok());
         let k = add_admin(&db, "none", None, None).unwrap();
         assert!(validate_api_key(&db, &k, None).is_ok());
+    }
+
+    #[test]
+    fn test_upsert_user_creates_when_allowed() {
+        let db = test_db();
+        let groups = vec!["ops".to_string()];
+        let user = upsert_user(
+            &db,
+            "a@example.com",
+            "A",
+            Some("sub-a"),
+            "operator",
+            &groups,
+            true,
+        )
+        .unwrap()
+        .expect("user created");
+        assert_eq!(user.role, "operator");
+        assert_eq!(user.oidc_subject.as_deref(), Some("sub-a"));
+    }
+
+    #[test]
+    fn test_upsert_user_without_create_rejects_unknown() {
+        let db = test_db();
+        let res = upsert_user(
+            &db,
+            "x@example.com",
+            "X",
+            Some("sub-x"),
+            "admin",
+            &[],
+            false,
+        )
+        .unwrap();
+        assert!(res.is_none());
+        assert!(get_user_by_email(&db, "x@example.com").is_err());
+    }
+
+    #[test]
+    fn test_upsert_user_without_create_logs_in_provisioned() {
+        let db = test_db();
+        create_user(&db, "p@example.com", "", "viewer").unwrap();
+        let groups = vec!["devs".to_string()];
+        let user = upsert_user(
+            &db,
+            "p@example.com",
+            "P",
+            Some("sub-p"),
+            "admin",
+            &groups,
+            false,
+        )
+        .unwrap()
+        .expect("provisioned user logs in");
+        // Pre-provisioned role is kept, default_role is not applied.
+        assert_eq!(user.role, "viewer");
+        assert_eq!(user.name, "P");
+        assert_eq!(user.oidc_subject.as_deref(), Some("sub-p"));
+        assert_eq!(user.oidc_groups, "devs");
+        assert!(user.last_login_at.is_some());
+    }
+
+    #[test]
+    fn test_create_user_duplicate_fails() {
+        let db = test_db();
+        create_user(&db, "d@example.com", "", "viewer").unwrap();
+        let err = create_user(&db, "d@example.com", "", "admin").unwrap_err();
+        assert!(err.to_string().contains("UNIQUE"));
     }
 }

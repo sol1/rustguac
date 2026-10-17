@@ -147,6 +147,12 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # # Default: "operator"
 # default_role = "operator"
 #
+# # Create an account automatically on first OIDC login (default: true).
+# # Set to false to let in only users an admin has added beforehand
+# # (`rustguac add-user --email ... --role ...`, POST /api/users, or the
+# # Admin page). The email must match what the identity provider sends.
+# auto_create_users = true
+#
 # # OIDC claim name containing group memberships (default: "groups").
 # groups_claim = "groups"
 #
