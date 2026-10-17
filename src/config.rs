@@ -76,7 +76,10 @@ pub struct VaultConfig {
     pub mount: String,
     #[serde(default = "default_vault_base_path")]
     pub base_path: String,
+    #[serde(default)]
     pub role_id: String,
+    /// Workload JWT login; when configured, never fall back to AppRole.
+    pub jwt_auth: Option<VaultJwtAuth>,
     pub namespace: Option<String>,
     /// Instance name for instance-scoped address book entries.
     /// Entries under `<base_path>/shared/` are visible to all instances.
@@ -113,6 +116,23 @@ impl std::fmt::Debug for VaultConfig {
                 &self.client_key.as_ref().map(|_| "[REDACTED]"),
             )
             .finish()
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct VaultJwtAuth {
+    pub mount: String,
+    pub role: String,
+    pub path: String,
+}
+
+impl VaultConfig {
+    pub fn secret_id_from_env(&self, name: &str) -> Result<String, std::env::VarError> {
+        if self.jwt_auth.is_some() {
+            Ok(String::new())
+        } else {
+            std::env::var(name)
+        }
     }
 }
 
@@ -1411,6 +1431,22 @@ mod tests {
         assert_eq!(config.base_path, "rustguac");
         assert!(!config.tls_skip_verify);
         assert!(config.ca_cert.is_none());
+    }
+
+    #[test]
+    fn workload_jwt_config_needs_no_approle_id() {
+        let config: VaultConfig = toml::from_str(
+            r#"
+            addr = "https://secrets.example.com"
+            [jwt_auth]
+            mount = "workload-jwt"
+            role = "rustguac"
+            path = "/var/run/secrets/vault/token"
+        "#,
+        )
+        .unwrap();
+        assert!(config.role_id.is_empty());
+        assert!(config.jwt_auth.is_some());
     }
 
     #[test]

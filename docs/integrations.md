@@ -396,11 +396,80 @@ chmod 644 /opt/rustguac/certs/ca.pem /opt/rustguac/certs/client.pem
 | `rustguac/shared/<folder>/<entry>` | Connection entry (shared across all instances) |
 | `rustguac/instance/<name>/<folder>/<entry>` | Instance-specific entry (requires `instance_name`) |
 
-### AppRole token management
+### Workload JWT authentication
+
+Vault and OpenBao can verify workload JWTs, including Kubernetes projected
+service-account tokens. This authenticates the rustguac server to the secret
+store; it does not replace OIDC authentication for browser users.
+
+Configure a JWT auth mount with the workload issuer and a role bound to the
+exact service account and a dedicated audience. For example, with the existing
+`rustguac` KV policy:
+
+```sh
+vault auth enable -path=workload-jwt jwt
+vault write auth/workload-jwt/config \
+  oidc_discovery_url="https://issuer.example.com" \
+  bound_issuer="https://issuer.example.com"
+vault write auth/workload-jwt/role/rustguac \
+  role_type=jwt user_claim=sub \
+  bound_subject="system:serviceaccount:remote-access:rustguac" \
+  bound_audiences=vault token_policies=rustguac \
+  token_ttl=5m token_max_ttl=5m token_explicit_max_ttl=5m
+```
+
+Use your cluster's actual issuer URL. Its OIDC discovery and signing-key endpoints
+must be reachable from the secret store. This does not require a TokenReview
+credential. However, JWT verification does not check Kubernetes revocation:
+deleted pods' or service accounts' JWTs remain valid until token expiry, and
+already issued Vault/OpenBao sessions have their own lifetime. Keep both short.
+
+Mount a projected token into the rustguac container (relevant pod spec excerpt):
+
+```yaml
+spec:
+  serviceAccountName: rustguac
+  automountServiceAccountToken: false
+  containers:
+    - name: rustguac
+      # image and other settings omitted
+      volumeMounts:
+        - name: vault-identity
+          mountPath: /var/run/secrets/vault
+          readOnly: true
+  volumes:
+    - name: vault-identity
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              audience: vault
+              expirationSeconds: 600
+```
+
+Configure rustguac without `role_id` or `VAULT_SECRET_ID`:
+
+```toml
+[vault]
+addr = "https://vault.example.com:8200"
+mount = "secret"
+base_path = "rustguac"
+
+[vault.jwt_auth]
+mount = "workload-jwt"
+role = "rustguac"
+path = "/var/run/secrets/vault/token"
+```
+
+JWT mode rereads the file on login and reauthentication, including after a 403.
+A missing, empty or rejected JWT does not trigger AppRole fallback. Use the same
+nested block under `vault_shared` or `vault_local` for additional backends.
+
+### Token management
 
 rustguac manages Vault tokens automatically:
 
-- Authenticates via AppRole (`role_id` + `secret_id`) on startup
+- Authenticates via AppRole (`role_id` + `secret_id`) or the configured workload JWT on startup
 - Renews tokens at 50% of their TTL
 - Falls back to full re-authentication on 403 Forbidden responses
 - Retries every 30 seconds if Vault is unavailable at startup (non-fatal)

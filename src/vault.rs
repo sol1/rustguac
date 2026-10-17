@@ -1,4 +1,4 @@
-//! HashiVault / OpenBao KV v2 client with AppRole authentication.
+//! HashiVault / OpenBao KV v2 client with AppRole or workload JWT authentication.
 //!
 //! Stores address book entries (connection credentials) in Vault.
 //! Path structure:
@@ -850,11 +850,26 @@ pub struct VaultClient {
     token: Arc<RwLock<String>>,
     role_id: String,
     secret_id: String,
+    jwt_auth: Option<crate::config::VaultJwtAuth>,
 }
 
 impl VaultClient {
-    /// Create a new Vault client and perform initial AppRole login.
+    /// Create a new Vault client and perform initial login.
     pub async fn new(config: &VaultConfig, secret_id: &str) -> Result<Self, VaultError> {
+        if let Some(ref jwt_auth) = config.jwt_auth {
+            if jwt_auth.mount.trim().is_empty()
+                || jwt_auth.role.trim().is_empty()
+                || jwt_auth.path.trim().is_empty()
+            {
+                return Err(VaultError::Auth(
+                    "JWT authentication requires mount, role and token path".into(),
+                ));
+            }
+        } else if config.role_id.trim().is_empty() {
+            return Err(VaultError::Auth(
+                "AppRole role_id is required when jwt_auth is not configured".into(),
+            ));
+        }
         if config.tls_skip_verify {
             tracing::warn!(
                 "Vault TLS certificate verification is DISABLED (tls_skip_verify = true)"
@@ -872,22 +887,35 @@ impl VaultClient {
             token: Arc::new(RwLock::new(String::new())),
             role_id: config.role_id.clone(),
             secret_id: secret_id.to_string(),
+            jwt_auth: config.jwt_auth.clone(),
         };
 
         // Perform initial login
-        let (token, _ttl) = client.approle_login().await?;
+        let (token, _ttl) = client.login().await?;
         *client.token.write().await = token;
 
         Ok(client)
     }
 
-    /// Authenticate via AppRole and return (token, ttl_seconds).
-    async fn approle_login(&self) -> Result<(String, u64), VaultError> {
-        let url = format!("{}/v1/auth/approle/login", self.addr);
-        let body = serde_json::json!({
-            "role_id": self.role_id,
-            "secret_id": self.secret_id,
-        });
+    /// Reopen projected JWTs at each login so kubelet rotation is respected.
+    async fn login(&self) -> Result<(String, u64), VaultError> {
+        let (url, body) = if let Some(ref jwt_auth) = self.jwt_auth {
+            let jwt = tokio::fs::read_to_string(&jwt_auth.path)
+                .await
+                .map_err(|_| VaultError::Auth("cannot read workload identity token".into()))?;
+            if jwt.trim().is_empty() {
+                return Err(VaultError::Auth("workload identity token is empty".into()));
+            }
+            (
+                format!("{}/v1/auth/{}/login", self.addr, jwt_auth.mount),
+                serde_json::json!({ "role": jwt_auth.role, "jwt": jwt.trim() }),
+            )
+        } else {
+            (
+                format!("{}/v1/auth/approle/login", self.addr),
+                serde_json::json!({ "role_id": self.role_id, "secret_id": self.secret_id }),
+            )
+        };
 
         let mut req = self.http.post(&url).json(&body);
         if let Some(ref ns) = self.namespace {
@@ -897,6 +925,15 @@ impl VaultClient {
         let resp = req.send().await?;
         if !resp.status().is_success() {
             let status = resp.status();
+            if self.jwt_auth.is_some() {
+                // An auth backend/proxy could reflect the submitted JWT. Never
+                // include its response body in errors that reach the logs.
+                return Err(VaultError::Auth(format!(
+                    "JWT login failed — HTTP {} from {}",
+                    status.as_u16(),
+                    url,
+                )));
+            }
             let text = resp.text().await.unwrap_or_default();
             // Truncate response body — HTML error pages from reverse proxies are useless noise
             let body_preview = if text.len() > 200 {
@@ -909,7 +946,7 @@ impl VaultClient {
                 text
             };
             return Err(VaultError::Auth(format!(
-                "AppRole login failed — HTTP {} from {} — response: {}",
+                "Vault login failed — HTTP {} from {} — response: {}",
                 status.as_u16(),
                 url,
                 body_preview
@@ -931,7 +968,7 @@ impl VaultClient {
         let client = Arc::clone(self);
         tokio::spawn(async move {
             // Initial TTL — re-login to get it
-            let mut ttl = match client.approle_login().await {
+            let mut ttl = match client.login().await {
                 Ok((_, ttl)) => ttl,
                 Err(_) => 3600,
             };
@@ -950,7 +987,7 @@ impl VaultClient {
                     Err(_) => {
                         // Renewal failed — try full re-login
                         tracing::warn!("Vault token renewal failed, attempting re-login");
-                        match client.approle_login().await {
+                        match client.login().await {
                             Ok((new_token, new_ttl)) => {
                                 *client.token.write().await = new_token;
                                 ttl = new_ttl;
@@ -1015,7 +1052,7 @@ impl VaultClient {
         if resp.status() == reqwest::StatusCode::FORBIDDEN {
             // Re-login and retry once
             tracing::debug!("Vault 403, attempting re-login and retry");
-            match self.approle_login().await {
+            match self.login().await {
                 Ok((new_token, _)) => {
                     *self.token.write().await = new_token.clone();
                     let resp = do_request(new_token).await?;
@@ -2087,12 +2124,205 @@ mod tests {
         assert_eq!(json["allowed_users"][0], "a@b.c");
     }
 
+    #[tokio::test]
+    async fn workload_jwt_login_rereads_rotation_and_never_falls_back() {
+        use axum::{routing::post, Json, Router};
+        let calls = Arc::new(tokio::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let recorded = calls.clone();
+        let app = Router::new().route("/v1/auth/workload-jwt/login", post(
+            move |Json(body): Json<serde_json::Value>| {
+                let recorded = recorded.clone();
+                async move {
+                    recorded.lock().await.push(body);
+                    Json(serde_json::json!({"auth":{"client_token":"synthetic-session","lease_duration":300}}))
+                }
+            }
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let path = std::env::temp_dir().join(format!("rustguac-jwt-{}", uuid::Uuid::new_v4()));
+        tokio::fs::write(&path, "synthetic-jwt-one\n")
+            .await
+            .unwrap();
+        let mut config = base_config();
+        config.addr = format!("http://{addr}");
+        config.jwt_auth = Some(crate::config::VaultJwtAuth {
+            mount: "workload-jwt".into(),
+            role: "rustguac".into(),
+            path: path.to_str().unwrap().into(),
+        });
+        assert_eq!(
+            config
+                .secret_id_from_env("RUSTGUAC_TEST_ABSENT_SECRET_ID")
+                .unwrap(),
+            ""
+        );
+        let client = VaultClient::new(&config, "").await.unwrap();
+        tokio::fs::write(&path, "synthetic-jwt-two\n")
+            .await
+            .unwrap();
+        client.login().await.unwrap();
+        assert_eq!(
+            *calls.lock().await,
+            vec![
+                serde_json::json!({"role":"rustguac","jwt":"synthetic-jwt-one"}),
+                serde_json::json!({"role":"rustguac","jwt":"synthetic-jwt-two"}),
+            ]
+        );
+        tokio::fs::write(&path, "\n").await.unwrap();
+        assert!(client.login().await.is_err());
+        tokio::fs::remove_file(path).await.unwrap();
+        assert!(client.login().await.is_err());
+        assert_eq!(calls.lock().await.len(), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn workload_jwt_denial_does_not_fall_back_or_expose_response_body() {
+        use axum::{http::StatusCode, routing::post, Json, Router};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let approle_calls = Arc::new(AtomicUsize::new(0));
+        let recorded = approle_calls.clone();
+        let app = Router::new()
+            .route("/v1/auth/workload-jwt/login", post(|| async {
+                (StatusCode::FORBIDDEN, "synthetic-jwt-do-not-log")
+            }))
+            .route("/v1/auth/approle/login", post(move || {
+                recorded.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Json(serde_json::json!({"auth":{"client_token":"legacy-session","lease_duration":300}}))
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let path = std::env::temp_dir().join(format!("rustguac-jwt-{}", uuid::Uuid::new_v4()));
+        tokio::fs::write(&path, "synthetic-jwt-do-not-log")
+            .await
+            .unwrap();
+        let mut config = base_config();
+        config.addr = format!("http://{addr}");
+        config.jwt_auth = Some(crate::config::VaultJwtAuth {
+            mount: "workload-jwt".into(),
+            role: "rustguac".into(),
+            path: path.to_str().unwrap().into(),
+        });
+        let error = match VaultClient::new(&config, "legacy-secret").await {
+            Err(error) => error,
+            Ok(_) => panic!("JWT denial must fail closed"),
+        };
+        assert!(!error.to_string().contains("synthetic-jwt-do-not-log"));
+        assert_eq!(approle_calls.load(Ordering::SeqCst), 0);
+        tokio::fs::remove_file(path).await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn workload_jwt_request_reauthenticates_with_rotated_file_after_forbidden() {
+        use axum::{
+            http::{HeaderMap, StatusCode},
+            routing::{get, post},
+            Json, Router,
+        };
+        let calls = Arc::new(tokio::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let recorded = calls.clone();
+        let app = Router::new()
+            .route(
+                "/v1/auth/workload-jwt/login",
+                post(move |Json(body): Json<serde_json::Value>| {
+                    let recorded = recorded.clone();
+                    async move {
+                        let token = if body["jwt"] == "jwt-two" {
+                            "session-two"
+                        } else {
+                            "session-one"
+                        };
+                        recorded.lock().await.push(body);
+                        Json(
+                            serde_json::json!({"auth":{"client_token":token,"lease_duration":300}}),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/v1/secret/data/test",
+                get(|headers: HeaderMap| async move {
+                    if headers
+                        .get("X-Vault-Token")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("session-two")
+                    {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::FORBIDDEN
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let path = std::env::temp_dir().join(format!("rustguac-jwt-{}", uuid::Uuid::new_v4()));
+        tokio::fs::write(&path, "jwt-one").await.unwrap();
+        let mut config = base_config();
+        config.addr = format!("http://{addr}");
+        config.jwt_auth = Some(crate::config::VaultJwtAuth {
+            mount: "workload-jwt".into(),
+            role: "rustguac".into(),
+            path: path.to_str().unwrap().into(),
+        });
+        let client = VaultClient::new(&config, "").await.unwrap();
+        tokio::fs::write(&path, "jwt-two").await.unwrap();
+        let response = client
+            .request(reqwest::Method::GET, "/v1/secret/data/test", None)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            *calls.lock().await,
+            vec![
+                serde_json::json!({"role":"rustguac","jwt":"jwt-one"}),
+                serde_json::json!({"role":"rustguac","jwt":"jwt-two"}),
+            ]
+        );
+        tokio::fs::remove_file(path).await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn workload_jwt_changes_preserve_approle_login_and_namespace_header() {
+        use axum::{http::HeaderMap, routing::post, Json, Router};
+        let calls = Arc::new(tokio::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let recorded = calls.clone();
+        let app = Router::new().route("/v1/auth/approle/login", post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+            let recorded = recorded.clone();
+            async move {
+                assert_eq!(headers.get("X-Vault-Namespace").unwrap(), "example-ns");
+                recorded.lock().await.push(body);
+                Json(serde_json::json!({"auth":{"client_token":"legacy-session","lease_duration":300}}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut config = base_config();
+        config.addr = format!("http://{addr}");
+        config.namespace = Some("example-ns".into());
+        VaultClient::new(&config, "legacy-secret").await.unwrap();
+        assert_eq!(
+            *calls.lock().await,
+            vec![serde_json::json!({"role_id":"test-role-id","secret_id":"legacy-secret"})]
+        );
+        server.abort();
+    }
+
     fn base_config() -> VaultConfig {
         VaultConfig {
             addr: "https://vault.example.com:8200".into(),
             mount: "secret".into(),
             base_path: "rustguac".into(),
             role_id: "test-role-id".into(),
+            jwt_auth: None,
             namespace: None,
             instance_name: None,
             tls_skip_verify: false,

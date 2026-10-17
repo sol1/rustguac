@@ -119,12 +119,14 @@ Enables OpenID Connect authentication. When configured, the web UI shows a login
 
 ## `[vault]` section
 
-Enables the Vault-backed connections. Requires `VAULT_SECRET_ID` environment variable.
+Enables the Vault-backed connections. Uses AppRole by default, requiring the
+`VAULT_SECRET_ID` environment variable. Configure `[vault.jwt_auth]` to use a
+workload JWT instead; JWT mode does not require an AppRole role ID or SecretID.
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `addr` | — | Vault server address (required) |
-| `role_id` | — | AppRole role ID (required) |
+| `role_id` | — | AppRole role ID (required unless `jwt_auth` is configured) |
 | `mount` | `secret` | KV v2 mount path |
 | `base_path` | `rustguac` | Base path under the mount |
 | `namespace` | — | Vault Enterprise / OpenBao namespace |
@@ -133,6 +135,31 @@ Enables the Vault-backed connections. Requires `VAULT_SECRET_ID` environment var
 | `ca_cert` | — | Path to custom CA certificate (PEM) for verifying the Vault server |
 | `client_cert` | — | Path to client certificate (PEM) for mTLS |
 | `client_key` | — | Path to client private key (PEM) for mTLS (required if `client_cert` is set) |
+
+### Workload JWT authentication
+
+```toml
+[vault]
+addr = "https://vault.example.com:8200"
+mount = "secret"
+base_path = "rustguac"
+
+[vault.jwt_auth]
+mount = "workload-jwt"
+role = "rustguac"
+path = "/var/run/secrets/vault/token"
+```
+
+All three `jwt_auth` fields are required. `mount` is the JWT auth mount, not the
+KV mount. The token file is reopened on every login and reauthentication, so
+projected Kubernetes token rotation is respected. JWT mode takes precedence over
+AppRole and never falls back to it when the file is missing, empty or rejected.
+Use this with Vault/OpenBao JWT auth configured to verify the token issuer,
+audience and exact workload identity. This is separate from users' OIDC login.
+
+The same nested block works as `[vault_shared.jwt_auth]` and
+`[vault_local.jwt_auth]`; only AppRole-mode backends need their SecretID env var.
+See [Integrations](integrations.md#workload-jwt-authentication) for Kubernetes setup.
 
 ### Multiple Vault backends (disaster recovery)
 
