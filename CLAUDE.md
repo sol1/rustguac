@@ -62,6 +62,15 @@ Vault KV v2 path structure:
 - `<folder>/.defaults` — default credentials per session type, lent to entries without their own; subfolders inherit them only while the subfolder has `inherit_from_parent: true` and no `allowed_groups`/`allowed_users` of its own
 - `<base_path>/users/<sanitized_email>` — per-user credential variables
 
+Entries (#296, `src/entry_protocols.rs`): either the old flat form (top-level
+`type`) or host fields + `protocols: [{type, name?, overrides...}]`, first = primary. A protocol inherits host fields it does not
+set (`""`/`[]` clears; `port` is never inherited). `pick_protocol` /
+`effective_of` resolve host+protocol to a flat single-type entry, which the
+connect path uses unchanged. A flat entry is read as one protocol (`split`; the
+host keeps `HOST_KEYS`), and `compact()` stores the flat form whenever that is
+lossless, so older instances keep reading it. Updates keep secrets per protocol,
+matched by name.
+
 #### Multiple Vault backends (DR)
 
 Optional `[vault_shared]` / `[vault_local]` blocks (same keys as `[vault]`) give
