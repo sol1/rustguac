@@ -38,6 +38,7 @@ One spec per change, named after the branch that introduced it:
 | `zero-click-fullscreen` | #257: same-tab iframe sized from the measured viewport |
 | `connections-adhoc` | #295: Connect to a host opens the entry editor in ad-hoc mode (no name, Connect for Save, entry-only options hidden for non-admins), offers the caller's credential variable names, posts to `/api/addressbook/adhoc/connect` and never `/api/sessions`; ephemeral keypair; missing variable named; admin Save as entry keeps `$var` references; works without Vault and from `#adhoc`; no button for operators |
 | `recordings-mp4` | #241: the mp4 button converts, shows progress and downloads; refused while live; hidden without server support |
+| `mobile-layout` | #306: at 390px no page scrolls sideways; the nav folds behind an accessible Menu button and keeps the role gate; the Connections folders fold above the entries with Connect on screen; list tables scroll in their own box; the entry editor fits; nothing of it above the breakpoint |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.
