@@ -2,6 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>rustguac - Connections</title>
     <link rel="stylesheet" href="/rustguac.css">
     <style>
@@ -635,6 +636,67 @@
         .folder-row-main { gap: 2px; }
         .folder-desc { font-size: 12px; }
         .tree-children { margin-left: var(--s-3) !important; }
+
+        /* Small screens (see the matching block in rustguac.css): the page
+           scrolls as one column instead of two clipped panes, the folder tree
+           folds behind a Folders button above the entries, and each entry
+           is a card with its Connect button on screen. */
+        .folders-toggle { display: none; }
+        @media (max-width: 760px) {
+            html, body { height: auto; }
+            body { display: block; overflow: visible; }
+            #main-content { display: block; }
+            .layout { flex-direction: column; gap: var(--s-3); }
+            .layout > .sidebar { width: 100%; min-width: 0; max-width: none; max-height: 60vh; box-sizing: border-box; }
+            .sidebar-pin .sidebar-header strong { display: none; }
+            .folders-toggle {
+                display: inline-flex; flex: 1; justify-content: space-between;
+                height: var(--ctl-md); background: transparent; color: var(--text);
+                border: 1px solid var(--border); font-size: var(--fz-sm);
+                text-transform: uppercase; letter-spacing: 0.14em;
+            }
+            .folders-toggle:hover { background: var(--input); border-color: var(--accent); color: var(--text); }
+            .folders-open .folders-toggle-chevron { transform: rotate(180deg); }
+            #btn-new-folder { height: var(--ctl-md); font-size: var(--fz-sm); }
+            .layout > .sidebar:not(.folders-open) #sidebar-tools,
+            .layout > .sidebar:not(.folders-open) .folder-list { display: none; }
+            .layout > .sidebar:not(.folders-open) .sidebar-pin { border-bottom: 0; }
+            #folder-filter { height: var(--ctl-md); font-size: var(--fz-sm); }
+            .main { padding: 0; overflow: visible; }
+            #entries-header { position: static; padding: var(--s-2) 0; box-shadow: none; background: transparent; }
+            .folder-actions strong { font-size: var(--fz-lg); }
+            .entries-toolbar .folder-actions-btns { flex: 1 1 100%; margin-left: 0; }
+            .session-card { width: 240px; }
+
+            /* Entries as cards: name and type on top, host and user under
+               them, then Connect and the admin actions. No column headers. */
+            .entries-table, .entries-table tbody { display: block; border: 0; }
+            .entries-table thead { display: none; }
+            .entries-table tr {
+                display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px var(--s-2);
+                align-items: center; padding: var(--s-3);
+                border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: var(--s-2);
+            }
+            .entries-table td { display: block; padding: 0; border: 0; white-space: normal; font-size: var(--fz-sm); }
+            .entries-table td:last-child { text-align: left; }
+            .entries-table td.sel-cell { grid-column: 1; grid-row: 1; width: auto; }
+            /* name, type, host, user: the cells after the checkbox, or from the start */
+            .entries-table tr > td:first-child:not(.sel-cell),
+            .entries-table td.sel-cell + td { grid-column: 2; grid-row: 1; font-weight: bold; }
+            .entries-table tr > td:first-child:not(.sel-cell) { grid-column: 1 / 3; }
+            .entries-table tr > td:first-child:not(.sel-cell) + td,
+            .entries-table td.sel-cell + td + td { grid-column: 3; grid-row: 1; }
+            .entries-table tr > td:first-child:not(.sel-cell) + td + td,
+            .entries-table td.sel-cell + td + td + td { grid-column: 1 / -1; color: var(--text-muted); }
+            .entries-table tr > td:first-child:not(.sel-cell) + td + td + td,
+            .entries-table td.sel-cell + td + td + td + td { grid-column: 1 / -1; color: var(--text-muted); }
+            .entries-table td.connect-cell { grid-column: 1 / -1; display: flex; gap: var(--s-1); margin-top: var(--s-2); }
+            .entries-table td.connect-cell .btn-connect:first-child { flex: 1; height: var(--ctl-md); }
+            .entries-table .btn-connect-win { width: var(--ctl-md); height: var(--ctl-md); }
+            .entries-table td.actions-cell { grid-column: 1 / -1; display: flex; justify-content: flex-end; }
+            .entries-table td:empty { display: none; }
+            #bulk-bar { flex-wrap: wrap; }
+        }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -703,6 +765,7 @@
                 <div class="sidebar-pin">
                     <div class="sidebar-header">
                         <strong>Folders</strong>
+                        <button type="button" class="folders-toggle" id="folders-toggle" aria-expanded="false" aria-controls="sidebar-tools folder-list">Folders <span class="folders-toggle-chevron" aria-hidden="true">&#9662;</span></button>
                         <button class="btn-add admin-only" id="btn-new-folder" style="display:none" title="Create new folder">+ folder</button>
                     </div>
                     <!-- Slot for sidebar tools (folder filter box etc.); stays pinned with the header -->
@@ -5983,6 +6046,7 @@
         }
     </script>
     <script src="/ui.js"></script>
+    <script src="/nav.js"></script>
     <script src="/search.js"></script>
     <script>
         // The global search (search.js) loads the full address-book index; the
@@ -5991,6 +6055,26 @@
         document.addEventListener('rg-search-index-ready', function() {
             try { if (typeof updateCredBanner === 'function') updateCredBanner(); } catch (e) {}
         });
+
+        // Small screens: the folder tree folds into a panel above the entries
+        // (see the small-screen styles). Picking a folder folds it again so
+        // its entries are what is on screen.
+        (function() {
+            var sidebar = document.querySelector('.layout > .sidebar');
+            var toggle = document.getElementById('folders-toggle');
+            if (!sidebar || !toggle) return;
+            function setOpen(open) {
+                sidebar.classList.toggle('folders-open', open);
+                toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            }
+            toggle.addEventListener('click', function() {
+                setOpen(!sidebar.classList.contains('folders-open'));
+            });
+            document.getElementById('folder-list').addEventListener('click', function(e) {
+                if (e.target.closest('.tree-chevron') || !e.target.closest('.folder-row')) return;
+                if (getComputedStyle(toggle).display !== 'none') setOpen(false);
+            });
+        })();
     </script>
 </body>
 </html>

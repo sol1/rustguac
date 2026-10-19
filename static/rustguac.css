@@ -1153,3 +1153,110 @@ html:not([data-role-level="4"]) .admin-only { display: none !important; }
     opacity: 0.35; transition: opacity 0.15s;
 }
 .rg-session-btn:hover { opacity: 1; background: var(--surface, #16213e); border-color: var(--primary, #e94560); color: var(--text, #e0e0e0); }
+
+/* ── Small screens (phones, up to 760px) ──────────────────────
+   Everything for small screens lives in this one block, so the desktop
+   layout above is untouched. The nav folds behind a Menu button (nav.js),
+   list tables scroll sideways inside their own box instead of widening the
+   page, and modals fill the width. Connections and Docs fold their two-pane
+   layouts in their own pages. */
+.nav-toggle { display: none; }
+@media (max-width: 760px) {
+    body { padding: var(--s-3); font-size: var(--fz-sm); }
+    h1 { font-size: var(--fz-xl); }
+    h2 { font-size: var(--fz-md); margin-top: var(--s-4); }
+
+    /* Header: logo and title, the Menu button on the right, search below. */
+    .brand-row { flex-wrap: wrap; gap: var(--s-2) var(--s-3); }
+    /* With the nav folded, the header's own rule separates it from the page. */
+    .brand-row:has(+ nav.nav-collapsible) { padding-bottom: var(--s-3); margin-bottom: var(--s-3); border-bottom: 1px solid var(--border); }
+    .brand-row #site-logo { height: 30px; }
+    .nav-toggle {
+        display: inline-flex; order: 1; margin-left: auto;
+        background: transparent; color: var(--text);
+        border: 1px solid var(--border); font-weight: normal;
+        font-size: var(--fz-sm); padding: 0 var(--s-3);
+    }
+    .nav-toggle:hover, .nav-toggle[aria-expanded="true"] { background: var(--surface); border-color: var(--accent); color: var(--accent); }
+    .nav-toggle-icon { font-size: var(--fz-lg); }
+    /* Relative only to anchor its icon; the desktop centring offsets are cleared. */
+    .global-search { order: 2; position: relative; left: auto; top: auto; flex: 1 1 100%; width: auto; margin: 0; }
+    /* 16px or larger, or iOS zooms the page on focus. */
+    .global-search input[type="search"] { height: var(--ctl-md); font-size: var(--fz-sm); padding-right: var(--s-3); }
+    .global-search-key { display: none; }
+
+    /* Nav: without nav.js the links wrap; with it they fold into a list. */
+    nav { flex-wrap: wrap; gap: var(--s-1) var(--s-4); margin: var(--s-3) 0 var(--s-4); font-size: var(--fz-sm); }
+    nav.nav-collapsible:not(.nav-open) { display: none; }
+    nav.nav-open { flex-direction: column; align-items: stretch; gap: 0; margin-top: calc(var(--s-3) * -1); padding-bottom: var(--s-2); }
+    /* Flex items are blockified, so the role gate's display:none still
+       hides a link and its display:inline does not stop the padding. */
+    nav.nav-open > a { padding: 11px var(--s-2); border-bottom: 1px solid var(--border); }
+    nav.nav-open a.active { border-left: 3px solid var(--primary); padding-left: calc(var(--s-2) - 3px); }
+    nav.nav-open a.active::after { display: none; }
+    nav.nav-open #user-menu-wrapper { margin: var(--s-2) 0 0; flex-wrap: wrap; justify-content: space-between; padding: 0 var(--s-2); }
+    nav.nav-open #logout-item { padding: 11px 0; font-size: var(--fz-sm); }
+    nav.nav-open #user-menu-btn { height: var(--ctl-md); font-size: var(--fz-sm); }
+    #user-menu { position: static; flex: 1 1 100%; min-width: 0; box-shadow: none; }
+    /* Without nav.js, Logout and Settings wrap with the links rather than
+       being pushed to the right edge. */
+    nav:not(.nav-collapsible) #user-menu-wrapper { margin-left: 0; }
+
+    /* Search, filters and the page action share full-width rows. */
+    .list-tools .list-search { flex: 1 1 100%; min-width: 0; max-width: none; height: var(--ctl-md); }
+    .list-tools .list-action { margin-left: 0; }
+
+    /* Wide list tables scroll inside their own box; cells stay on one line
+       so a row reads straight across instead of in tall, narrow columns. */
+    table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    th, td { padding: var(--s-2) var(--s-3); font-size: var(--fz-sm); white-space: nowrap; }
+    th { font-size: var(--fz-xs); letter-spacing: 0.08em; }
+    .modal table { display: table; }
+    .modal th, .modal td { white-space: normal; }
+
+    /* Buttons a thumb can hit: every action is at least 44px tall. */
+    .btn-connect, .btn-add, .btn-small, .pagination button { height: var(--ctl-md); }
+    .btn-connect { min-width: 0; }
+    .pagination { flex-wrap: wrap; }
+
+    /* Inline add forms (Admin): one field per row, the button beside the
+       last select. flex-basis beats the inline widths some fields carry. */
+    .add-form { display: flex; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-3); }
+    .add-form input { flex: 1 1 100%; min-width: 0; }
+    .add-form select { flex: 1 1 0; min-width: 0; }
+
+    .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-2); }
+    .summary-cards { gap: var(--s-2); }
+    .summary-card { min-width: calc(50% - var(--s-1)); box-sizing: border-box; }
+
+    /* Modals fill the width and keep their actions on screen. */
+    .modal-overlay { align-items: flex-start; padding: var(--s-3); box-sizing: border-box; }
+    .modal, .modal.adhoc-modal {
+        min-width: 0; width: 100%; max-width: none; box-sizing: border-box;
+        padding: var(--s-4) var(--s-3); max-height: calc(100vh - var(--s-3) * 2); max-height: calc(100dvh - var(--s-3) * 2);
+    }
+    .modal input, .modal select, .modal textarea { font-size: var(--fz-sm); }
+    .modal-actions { flex-wrap: wrap; }
+
+    /* Search results: one card per connection (name and type, host, folder,
+       then Connect), so Connect is always in reach; the user column is left
+       out. The panel starts under the header, which stays above the
+       overlay: page padding, the Menu-button row, a gap, the search box, a gap. */
+    #search-overlay { --rg-head: calc(var(--s-3) + var(--ctl-md) * 2 + var(--s-2) * 2); padding: var(--rg-head) var(--s-2) var(--s-2); }
+    #search-overlay-panel { max-height: calc(100vh - var(--rg-head) - var(--s-2)); max-height: calc(100dvh - var(--rg-head) - var(--s-2)); }
+    #search-overlay-head { padding: var(--s-3); }
+    #search-results { padding: 0 var(--s-3) var(--s-3); }
+    #search-results .search-results, #search-results .search-results tbody { display: block; }
+    #search-results .search-results colgroup, #search-results .search-results thead { display: none; }
+    #search-results .search-results tr {
+        display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--s-2);
+        padding: var(--s-2) 0; border-bottom: 1px solid var(--border);
+    }
+    #search-results .search-results td { display: block; padding: 0; border: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #search-results .search-results td:nth-child(1) { grid-column: 1; grid-row: 1; font-weight: bold; }
+    #search-results .search-results td:nth-child(2) { grid-column: 2; grid-row: 1; }
+    #search-results .search-results td.host-cell { grid-column: 1 / -1; font-size: var(--fz-xs); }
+    #search-results .search-results td:nth-child(4) { display: none; }
+    #search-results .search-results td.folder-cell { grid-column: 1 / -1; font-size: var(--fz-xs); }
+    #search-results .search-results td.actions-cell { grid-column: 1 / -1; text-align: left; margin-top: var(--s-1); }
+}

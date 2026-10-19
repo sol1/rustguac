@@ -36,6 +36,7 @@ One spec per change, named after the branch that introduced it:
 | `search-under-modals` | a page modal covers the search box |
 | `zero-click-fullscreen` | #257: same-tab iframe sized from the measured viewport |
 | `recordings-mp4` | #241: the mp4 button converts, shows progress and downloads; refused while live; hidden without server support |
+| `mobile-layout` | #306: at 390px no page scrolls sideways; the nav folds behind an accessible Menu button and keeps the role gate; the Connections folders fold above the entries with Connect on screen; list tables scroll in their own box; the entry editor fits; nothing of it above the breakpoint |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.
