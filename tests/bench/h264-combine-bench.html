@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<!--
+  AVC444 combine benchmark.
+
+  Drives the real static/guac/Yuv444.js through the same sequence the H.264
+  decoder does -- decode, read the planes back, upload them, convert, paint --
+  and times it two ways:
+
+    * end to end, with each optimisation switched on in turn, so their
+      combined effect is measured rather than argued about; and
+    * phase by phase, so the end-to-end number can be attributed. A ladder
+      alone cannot tell a change that did nothing from a change whose gain was
+      swallowed by a phase it does not touch.
+
+  What it does NOT model: guacd, the network, and the VideoDecoder's own decode
+  cost, which is identical for every configuration and would swamp the
+  difference. It times the work that the combine path adds on top.
+
+  Run it with tests/bench/run.mjs, or open it over http:// and read the tables.
+  It must be a secure context -- WebCodecs is not exposed to file:// pages.
+-->
+<meta charset="utf-8">
+<title>AVC444 combine benchmark</title>
+<style>
+  body { font: 13px/1.5 system-ui, sans-serif; margin: 24px; max-width: 1100px; }
+  table { border-collapse: collapse; margin: 12px 0 24px; }
+  th, td { border: 1px solid #ccc; padding: 4px 10px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  caption { text-align: left; font-weight: 600; padding-bottom: 6px; }
+  pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
+</style>
+<h1>AVC444 combine benchmark</h1>
+<div id="status">running…</div>
+<div id="out"></div>
+
+<script src="../../static/guac/Yuv444.js"></script>
+<script>
+"use strict";
+
+/* ==================== Test content ==================== */
+
+/**
+ * Draws a desktop-like picture: small high-contrast text, which is the content
+ * AVC444 exists for and the worst case for chroma detail. A flat gradient would
+ * encode to almost nothing and make every configuration look alike.
+ */
+function drawSynthetic(ctx, w, h, phase) {
+
+    ctx.fillStyle = '#f6f6f4';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.fillStyle = '#20304a';
+    ctx.fillRect(0, 0, w, Math.round(h * 0.04));
+
+    var line = Math.max(11, Math.round(h / 72));
+    ctx.font = line + 'px monospace';
+
+    var words = ['function', 'renderer', 'const', 'return', 'copyTo(', 'buffer',
+                 'uploadLuma', '0x3fa2', '=>', 'chroma', '444', 'view'];
+
+    for (var row = 0, y = line * 3; y < h; row++, y += line * 1.4) {
+        var x = 12;
+        while (x < w - 80) {
+            /* x advances by a fractional glyph width, so the index has to be
+             * floored: words[2.4] is undefined, and the .length of that throws
+             * inside the encode, which the fallback below would then report as
+             * "encoding unsupported". */
+            var word = words[Math.floor(row * 7 + x + phase) % words.length];
+            ctx.fillStyle = (row + x) % 3 === 0 ? '#0a5' : ((row % 5) ? '#222' : '#a30');
+            ctx.fillText(word, x, y);
+            x += word.length * line * 0.62 + line;
+        }
+    }
+
+    /* Something saturated and moving, so the chroma planes are not constant. */
+    ctx.fillStyle = 'hsl(' + (phase * 37 % 360) + ',85%,45%)';
+    ctx.fillRect((phase * 13) % Math.max(1, w - 200), h * 0.5, 180, 120);
+
+}
+
+/**
+ * An H.264 codec string whose level can actually carry the given picture.
+ * Getting this wrong is quiet: isConfigSupported() simply says no, and the
+ * benchmark falls back to frames it built itself, whose planes are already in
+ * system memory -- which is exactly the cost being measured.
+ */
+function codecFor(w, h) {
+    var mbs = Math.ceil(w / 16) * Math.ceil(h / 16);
+    if (mbs <= 8192) return 'avc1.42E028';   /* baseline, level 4.0  (1080p) */
+    if (mbs <= 22080) return 'avc1.42E033';  /* baseline, level 5.1  (4K)    */
+    return 'avc1.42E034';                    /* baseline, level 5.2         */
+}
+
+/**
+ * Produces real VideoDecoder output frames, so that copyTo() reads back from
+ * wherever the decoder actually put its planes. Reports whether that succeeded
+ * and whether either end was hardware accelerated: a software decoder leaves
+ * its planes in system memory, where copyTo() is a memcpy rather than a
+ * transfer across the bus, and understates the read-back this whole exercise
+ * is about.
+ */
+async function decodedFrames(w, h, count) {
+
+    var out = { frames: [], real: false, note: '',
+            hardwareOffered: false, usedHardware: false,
+            readBackGBs: 0 };
+
+    var config = {
+        codec: codecFor(w, h),
+        width: w,
+        height: h,
+        bitrate: 30000000,
+        framerate: 30,
+        avc: { format: 'annexb' },
+        latencyMode: 'realtime',
+        hardwareAcceleration: 'no-preference'
+    };
+
+    try {
+
+        var support = await VideoEncoder.isConfigSupported(config);
+        if (!support.supported)
+            throw new Error('encoder rejected ' + config.codec
+                    + ' at ' + w + 'x' + h);
+
+        var source = new OffscreenCanvas(w, h);
+        var ctx = source.getContext('2d');
+
+        var chunks = [];
+        var encodeError = null;
+        var encoder = new VideoEncoder({
+            output: function(chunk) { chunks.push(chunk); },
+            error: function(e) { encodeError = e; }
+        });
+        encoder.configure(config);
+
+        for (var i = 0; i < count; i++) {
+            drawSynthetic(ctx, w, h, i);
+            var frame = new VideoFrame(source, { timestamp: i * 33333 });
+            encoder.encode(frame, { keyFrame: i === 0 });
+            frame.close();
+        }
+
+        await encoder.flush();
+        encoder.close();
+
+        if (encodeError) throw encodeError;
+        if (!chunks.length) throw new Error('encoder produced nothing');
+
+        var frames = [];
+        var decodeError = null;
+        var decoder = new VideoDecoder({
+            output: function(frame) { frames.push(frame); },
+            error: function(e) { decodeError = e; }
+        });
+
+        /* Hardware decode is asked for explicitly rather than left to
+         * no-preference, because whether it is in use decides the answer to
+         * the read-back questions: a hardware decoder's planes live on the
+         * GPU, where copyTo() is a transfer across the bus, while a software
+         * decoder's are already in system memory and copyTo() is a memcpy.
+         *
+         * Chrome treats prefer-hardware as a requirement at configure() time
+         * and throws where no hardware decoder matches, so the fallback is not
+         * optional. */
+        var decoderConfig = {
+            codec: config.codec,
+            codedWidth: w,
+            codedHeight: h,
+            optimizeForLatency: true
+        };
+
+        try {
+            var offered = await VideoDecoder.isConfigSupported(
+                    Object.assign({ hardwareAcceleration: 'prefer-hardware' },
+                            decoderConfig));
+            out.hardwareOffered = !!offered.supported;
+        } catch (e) { out.hardwareOffered = false; }
+
+        try {
+            if (!out.hardwareOffered) throw new Error('none offered');
+            decoder.configure(Object.assign(
+                    { hardwareAcceleration: 'prefer-hardware' }, decoderConfig));
+            out.usedHardware = true;
+        } catch (e) {
+            decoder.configure(Object.assign(
+                    { hardwareAcceleration: 'no-preference' }, decoderConfig));
+            out.usedHardware = false;
+        }
+
+        for (var c = 0; c < chunks.length; c++)
+            decoder.decode(chunks[c]);
+
+        await decoder.flush();
+        decoder.close();
+
+        if (decodeError) throw decodeError;
+        if (!frames.length) throw new Error('decoder produced nothing');
+
+        out.frames = frames;
+        out.real = true;
+
+        /* Read-back throughput is the tell that settles it independently of
+         * what the browser claims: system-memory planes copy at memcpy speed,
+         * tens of GB/s, while a transfer off the GPU runs an order of
+         * magnitude below that. */
+        var probeOptions = copyOptions(frames[0]);
+        var probeBuffer = new Uint8Array(frames[0].allocationSize(probeOptions));
+        await frames[0].copyTo(probeBuffer, probeOptions);
+
+        var t0 = performance.now();
+        for (var q = 0; q < 20; q++)
+            await frames[q % frames.length].copyTo(probeBuffer, probeOptions);
+        var seconds = (performance.now() - t0) / 1000;
+
+        out.readBackGBs = +(probeBuffer.length * 20 / 1073741824 / seconds)
+                .toFixed(1);
+
+        return out;
+
+    } catch (e) {
+
+        out.note = 'fell back to synthetic frames: ' + e.message;
+        out.frames = synthetic(w, h, count);
+        return out;
+
+    }
+
+}
+
+/** Last resort: frames built from raw planes this page wrote. */
+function synthetic(w, h, count) {
+
+    var frames = [];
+    var chromaW = (w + 1) >> 1, chromaH = (h + 1) >> 1;
+    var size = w * h + 2 * chromaW * chromaH;
+
+    for (var i = 0; i < count; i++) {
+        var data = new Uint8Array(size);
+        for (var p = 0; p < size; p++)
+            data[p] = (p * 31 + i * 17) & 0xff;
+        frames.push(new VideoFrame(data, {
+            format: 'I420', codedWidth: w, codedHeight: h,
+            timestamp: i * 33333
+        }));
+    }
+
+    return frames;
+
+}
+
+/* ==================== Damage patterns ==================== */
+
+/**
+ * The regions a server marks valid. Real sessions sit at one of these extremes
+ * far more often than in between: a video player repaints everything, and a
+ * person typing repaints a caret and the line it is on.
+ */
+function damage(kind, w, h) {
+
+    if (kind === 'full')
+        return null;
+
+    if (kind === 'window')
+        return [{ x: (w >> 2), y: (h >> 2), width: (w >> 1), height: (h >> 1) }];
+
+    return [
+        { x: 240, y: (h >> 1), width: 12, height: 22 },
+        { x: 40, y: (h >> 1) - 4, width: Math.min(700, w - 80), height: 30 },
+        { x: 0, y: h - 28, width: w, height: 28 }
+    ];
+
+}
+
+function coverage(rects, w, h) {
+    if (!rects) return 1;
+    var total = 0;
+    for (var i = 0; i < rects.length; i++)
+        total += rects[i].width * rects[i].height;
+    return total / (w * h);
+}
+
+/* ==================== Shared helpers ==================== */
+
+/** Buffers for plane read-back, pooled as the decoder pools them. */
+var buffers = {};
+
+function planeBuffer(size) {
+    var pool = buffers[size] || (buffers[size] = []);
+    return pool.length ? pool.pop() : new Uint8Array(size);
+}
+
+function releasePlaneBuffer(buffer) {
+    var pool = buffers[buffer.length] || (buffers[buffer.length] = []);
+    if (pool.length < 8) pool.push(buffer);
+}
+
+function copyOptions(frame) {
+    return { rect: { x: 0, y: 0,
+            width: frame.codedWidth, height: frame.codedHeight } };
+}
+
+/** Hands the uploader what it needs, whichever plane layout the decoder used. */
+function planesOf(frame, buffer, layout) {
+
+    var interleaved = (frame.format || '').indexOf('NV12') === 0;
+
+    return {
+        y: new Uint8Array(buffer.buffer, buffer.byteOffset + layout[0].offset),
+        u: new Uint8Array(buffer.buffer, buffer.byteOffset + layout[1].offset),
+        v: interleaved ? null
+            : new Uint8Array(buffer.buffer, buffer.byteOffset + layout[2].offset),
+        strides: interleaved
+            ? [layout[0].stride, layout[1].stride]
+            : [layout[0].stride, layout[1].stride, layout[2].stride]
+    };
+
+}
+
+function paintRects(ctx, source, rects) {
+
+    if (!rects) {
+        ctx.drawImage(source, 0, 0);
+        return;
+    }
+
+    for (var i = 0; i < rects.length; i++) {
+        var r = rects[i];
+        ctx.drawImage(source, r.x, r.y, r.width, r.height,
+                r.x, r.y, r.width, r.height);
+    }
+
+}
+
+/**
+ * Forces everything queued against a canvas to have completed. Without this the
+ * loop measures how fast work can be submitted, which is not the question.
+ */
+async function flush(canvas) {
+    var probe = await createImageBitmap(canvas, 0, 0, 1, 1);
+    probe.close();
+}
+
+/**
+ * Blocks until the renderer's own GPU work has finished.
+ *
+ * Reading a pixel off the 2D canvas the picture was painted to is not enough:
+ * the conversion, the transfer and the blit are separate queues, and a 4K
+ * shader pass appearing to take fifteen microseconds is the tell that what was
+ * measured was the submission and not the work. getContext() on a canvas that
+ * already has a context hands back that same context, so this reaches the
+ * renderer's without the renderer having to expose it.
+ */
+function gpuFinish(renderer) {
+    try {
+        var gl = renderer.getCanvas().getContext('webgl2');
+        if (gl) gl.finish();
+    } catch (e) { /* context gone; the caller is already failing */ }
+}
+
+/* ==================== The path under test ==================== */
+
+/**
+ * One picture of an AVC444 stream, with each optimisation switchable.
+ *
+ *   defer   - upload a paired main view without rendering or painting it (1)
+ *   bitmap  - hand the drawing buffer over rather than copying it out (2)
+ *   scissor - convert only the damaged regions (3)
+ *   overlap - issue both views' copyTo() at once (4)
+ */
+function makeRunner(renderer, layerCtx, opts, w, h) {
+
+    var chain = Promise.resolve();
+    var canvases = [];
+
+    /* Stands in for the pooled 2D canvas the pre-bitmap path snapshotted into.
+     * The cost being modelled is the full-frame RGBA copy out of the WebGL
+     * canvas, which is what a whole-picture drawImage() does either way. */
+    function snapshotCopy(bitmap) {
+        var canvas = canvases.pop() || new OffscreenCanvas(w, h);
+        canvas.getContext('2d').drawImage(bitmap, 0, 0);
+        bitmap.close();
+        return canvas;
+    }
+
+    function release(snapshot) {
+        if (snapshot instanceof ImageBitmap) snapshot.close();
+        else if (canvases.length < 8) canvases.push(snapshot);
+    }
+
+    function view(frame, isAux, rects) {
+
+        var options = copyOptions(frame);
+        var buffer = planeBuffer(frame.allocationSize(options));
+
+        var copy = opts.overlap ? frame.copyTo(buffer, options) : null;
+        if (copy) copy.catch(function() {});
+
+        chain = chain.then(function() {
+            return copy || frame.copyTo(buffer, options);
+        }).then(function(layout) {
+
+            var planes = planesOf(frame, buffer, layout);
+
+            if (!isAux)
+                renderer.uploadLuma(planes.y, planes.u, planes.v, planes.strides,
+                        frame.displayWidth, frame.displayHeight,
+                        opts.bands ? rects : null);
+            else
+                renderer.uploadAux(planes.y, planes.u, planes.v, planes.strides,
+                        frame.codedWidth, frame.codedHeight, 2,
+                        opts.bands ? rects : null);
+
+            releasePlaneBuffer(buffer);
+
+            /* Item 1: a paired main view is uploaded and nothing else. */
+            if (!isAux && opts.defer)
+                return;
+
+            var rendered = renderer.render(isAux ? 2 : 0, 30,
+                    opts.scissor ? rects : null);
+            if (!rendered) throw new Error('renderer gave up mid-run');
+
+            var snapshot = opts.bitmap ? rendered : snapshotCopy(rendered);
+            paintRects(layerCtx, snapshot, rects);
+            release(snapshot);
+
+        });
+
+    }
+
+    return {
+        picture: function(main, aux, rects) {
+            view(main, false, rects);
+            /* Item 5: the 4:2:0 picture routed through the shader, so its
+             * colour range is ours rather than Chrome's. One view, one
+             * read-back, three plane uploads -- everything the combine does
+             * except the auxiliary half. */
+            if (!opts.mainOnly)
+                view(aux, true, rects);
+        },
+        done: function() { return chain; }
+    };
+
+}
+
+/* ==================== Timing ==================== */
+
+var CONFIGS = [
+    { name: 'baseline (all off)',  defer: 0, bitmap: 0, scissor: 0, overlap: 0 },
+    { name: '+ defer main view',   defer: 1, bitmap: 0, scissor: 0, overlap: 0 },
+    { name: '+ transfer bitmap',   defer: 1, bitmap: 1, scissor: 0, overlap: 0 },
+    { name: '+ overlap copies',    defer: 1, bitmap: 1, scissor: 0, overlap: 1 },
+    { name: '+ scissor to rects',  defer: 1, bitmap: 1, scissor: 1, overlap: 1 },
+    { name: '+ banded upload',     defer: 1, bitmap: 1, scissor: 1, overlap: 1,
+                                   bands: 1 },
+    { name: 'AVC420 (no combine)', avc420: 1 },
+    { name: 'AVC420 via shader',   defer: 0, bitmap: 1, scissor: 1, overlap: 1,
+                                   bands: 1, mainOnly: 1 }
+];
+
+/**
+ * How the 4:2:0 path paints: the decoded frame is snapshotted to a canvas once,
+ * and the damaged regions are blitted from that. Blitting the rects straight
+ * from the VideoFrame instead would convert the whole picture once per rect,
+ * which is not what the decoder does and would make the reference look far
+ * worse than it is.
+ */
+async function timeAvc420(frames, rects, w, h, pictures) {
+
+    var layer = new OffscreenCanvas(w, h);
+    var layerCtx = layer.getContext('2d');
+    var snapshot = new OffscreenCanvas(w, h);
+    var snapshotCtx = snapshot.getContext('2d');
+
+    var start = performance.now();
+
+    for (var i = 0; i < pictures; i++) {
+        snapshotCtx.drawImage(frames[i % frames.length], 0, 0);
+        paintRects(layerCtx, snapshot, rects);
+    }
+
+    await flush(layer);
+    return performance.now() - start;
+
+}
+
+async function timeConfig(config, frames, rects, w, h, pictures) {
+
+    if (config.avc420)
+        return timeAvc420(frames, rects, w, h, pictures);
+
+    var layer = new OffscreenCanvas(w, h);
+    var layerCtx = layer.getContext('2d');
+
+    var renderer = new Guacamole.Yuv444Renderer();
+    if (!renderer.supported) throw new Error('renderer unsupported');
+
+    var runner = makeRunner(renderer, layerCtx, config, w, h);
+
+    /* Warm-up: the shader compile, the texture allocations and the first
+     * buffer allocations happen once, and would otherwise land entirely in
+     * whichever configuration is measured first. */
+    for (var k = 0; k < 4; k++)
+        runner.picture(frames[k % frames.length],
+                frames[(k + 1) % frames.length], rects);
+    await runner.done();
+    gpuFinish(renderer);
+    await flush(layer);
+
+    var start = performance.now();
+
+    for (var p = 0; p < pictures; p++)
+        runner.picture(frames[p % frames.length],
+                frames[(p + 1) % frames.length], rects);
+
+    await runner.done();
+    gpuFinish(renderer);
+    await flush(layer);
+
+    var elapsed = performance.now() - start;
+    renderer.destroy();
+    return elapsed;
+
+}
+
+/** Median of several runs. One run of anything on a shared GPU is a rumour. */
+async function median(fn, reps) {
+
+    var samples = [];
+
+    for (var i = 0; i < reps; i++) {
+        samples.push(await fn());
+        await new Promise(function(r) { setTimeout(r, 5); });
+    }
+
+    samples.sort(function(a, b) { return a - b; });
+    return { median: samples[samples.length >> 1], best: samples[0] };
+
+}
+
+/* ==================== Phase attribution ==================== */
+
+/**
+ * Times each phase of one picture on its own, so the end-to-end ladder can be
+ * read. Every phase is measured over the same number of pictures and flushed
+ * the same way, so the numbers add up to roughly the whole.
+ */
+async function phases(frames, rects, w, h, pictures) {
+
+    var renderer = new Guacamole.Yuv444Renderer();
+    var layer = new OffscreenCanvas(w, h);
+    var layerCtx = layer.getContext('2d');
+    var spare = new OffscreenCanvas(w, h);
+    var spareCtx = spare.getContext('2d');
+
+    var main = frames[0], aux = frames[1];
+    var options = copyOptions(main);
+    var buffer = new Uint8Array(main.allocationSize(options));
+    var layout = await main.copyTo(buffer, options);
+    var planes = planesOf(main, buffer, layout);
+
+    /* Warm-up */
+    renderer.uploadLuma(planes.y, planes.u, planes.v, planes.strides,
+            main.displayWidth, main.displayHeight, null);
+    renderer.uploadAux(planes.y, planes.u, planes.v, planes.strides,
+            aux.codedWidth, aux.codedHeight, 2, null);
+    var warm = renderer.render(2, 30, null);
+    if (warm) warm.close();
+
+    var result = {};
+    var t;
+
+    /* copyTo, both views */
+    t = performance.now();
+    for (var i = 0; i < pictures; i++) {
+        await main.copyTo(buffer, options);
+        await aux.copyTo(buffer, copyOptions(aux));
+    }
+    result['copyTo x2 (read-back)'] = (performance.now() - t) / pictures;
+
+    /* Plane upload, both views */
+    t = performance.now();
+    for (var u = 0; u < pictures; u++) {
+        renderer.uploadLuma(planes.y, planes.u, planes.v, planes.strides,
+                main.displayWidth, main.displayHeight, null);
+        renderer.uploadAux(planes.y, planes.u, planes.v, planes.strides,
+                aux.codedWidth, aux.codedHeight, 2, null);
+    }
+    gpuFinish(renderer);
+    result['upload x2 (texSubImage)'] = (performance.now() - t) / pictures;
+
+    /* Conversion, whole picture and scissored, including the transfer that
+     * ends it -- they cannot be separated, since the transfer is what makes
+     * the draw observable. */
+    async function timeRender(clip) {
+        var start = performance.now();
+        for (var r = 0; r < pictures; r++) {
+            var bitmap = renderer.render(2, 30, clip);
+            paintRects(layerCtx, bitmap, clip);
+            bitmap.close();
+        }
+        gpuFinish(renderer);
+        await flush(layer);
+        return (performance.now() - start) / pictures;
+    }
+
+    result['render full + paint'] = await timeRender(null);
+    result['render scissored + paint'] = await timeRender(rects);
+
+    /* Uploading the main view as RGB straight from the VideoFrame, which is
+     * what skipping its read-back entirely would cost. Compared against the
+     * three plane uploads plus the copyTo it would replace. Whether this wins
+     * turns on where the decoder put the frame: a hardware decoder leaves it
+     * on the GPU, where this is a GPU-side conversion and the planes never
+     * cross the bus at all, while a software decoder's frame is in system
+     * memory and this uploads RGBA -- more bytes than the I420 it replaces. */
+    result['main view as RGB (no read-back)'] =
+            await timeRgbUpload(main, pictures);
+
+    /* The snapshot copy the bitmap transfer replaced. */
+    t = performance.now();
+    for (var s = 0; s < pictures; s++) {
+        var bmp = renderer.render(2, 30, null);
+        spareCtx.drawImage(bmp, 0, 0);
+        bmp.close();
+    }
+    gpuFinish(renderer);
+    await flush(spare);
+    result['render full + snapshot copy'] = (performance.now() - t) / pictures;
+
+    renderer.destroy();
+
+    for (var key in result)
+        result[key] = +result[key].toFixed(3);
+
+    return result;
+
+}
+
+/**
+ * Times uploading a decoded frame as RGB, the way a path that never read its
+ * planes back would have to.
+ */
+async function timeRgbUpload(frame, pictures) {
+
+    var gl = new OffscreenCanvas(1, 1).getContext('webgl2');
+    if (!gl) return -1;
+
+    var texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    try {
+
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE,
+                frame);
+        gl.finish();
+
+        var start = performance.now();
+        for (var i = 0; i < pictures; i++)
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE,
+                    frame);
+        gl.finish();
+        var elapsed = performance.now() - start;
+
+        gl.deleteTexture(texture);
+        return elapsed / pictures;
+
+    } catch (e) {
+        gl.deleteTexture(texture);
+        return -1;
+    }
+
+}
+
+/* ==================== Correctness ==================== */
+
+/**
+ * Scissoring may leave the rest of the picture unconverted, but it must not
+ * change a single pixel inside the regions the caller then draws.
+ */
+async function checkScissor(frames, w, h) {
+
+    var rects = damage('window', w, h);
+
+    async function renderOnce(useScissor) {
+
+        var renderer = new Guacamole.Yuv444Renderer();
+        var out = new OffscreenCanvas(w, h);
+        var ctx = out.getContext('2d');
+        var runner = makeRunner(renderer, ctx,
+                { defer: 1, bitmap: 1, scissor: useScissor, overlap: 1 }, w, h);
+
+        runner.picture(frames[0], frames[1], rects);
+        await runner.done();
+
+        var r = rects[0];
+        var data = ctx.getImageData(r.x, r.y, r.width, r.height).data;
+        renderer.destroy();
+        return data;
+
+    }
+
+    var full = await renderOnce(0);
+    var clipped = await renderOnce(1);
+
+    var worst = 0;
+    for (var i = 0; i < full.length; i++)
+        worst = Math.max(worst, Math.abs(full[i] - clipped[i]));
+
+    return { pixels: full.length >> 2, maxDelta: worst };
+
+}
+
+/**
+ * The combine has to actually be doing something. If the auxiliary view were
+ * ignored, the 4:4:4 render would match the 4:2:0 one and every timing above
+ * would be timing the wrong thing.
+ */
+async function checkCombining(frames, w, h) {
+
+    var renderer = new Guacamole.Yuv444Renderer();
+    var options = copyOptions(frames[0]);
+    var buffer = new Uint8Array(frames[0].allocationSize(options));
+
+    var layout = await frames[0].copyTo(buffer, options);
+    var mainPlanes = planesOf(frames[0], buffer, layout);
+    renderer.uploadLuma(mainPlanes.y, mainPlanes.u, mainPlanes.v,
+            mainPlanes.strides, frames[0].displayWidth, frames[0].displayHeight);
+
+    var auxBuffer = new Uint8Array(frames[1].allocationSize(copyOptions(frames[1])));
+    var auxLayout = await frames[1].copyTo(auxBuffer, copyOptions(frames[1]));
+    var auxPlanes = planesOf(frames[1], auxBuffer, auxLayout);
+    renderer.uploadAux(auxPlanes.y, auxPlanes.u, auxPlanes.v, auxPlanes.strides,
+            frames[1].codedWidth, frames[1].codedHeight, 2, null);
+
+    function sample(layout) {
+        var bitmap = renderer.render(layout, 30, null);
+        var canvas = new OffscreenCanvas(w, h);
+        canvas.getContext('2d').drawImage(bitmap, 0, 0);
+        bitmap.close();
+        return canvas.getContext('2d').getImageData(0, 0, Math.min(256, w),
+                Math.min(256, h)).data;
+    }
+
+    var yuv420 = sample(0);
+    var yuv444 = sample(2);
+
+    var differing = 0;
+    for (var i = 0; i < yuv420.length; i += 4)
+        if (yuv420[i] !== yuv444[i] || yuv420[i + 1] !== yuv444[i + 1]
+                || yuv420[i + 2] !== yuv444[i + 2])
+            differing++;
+
+    renderer.destroy();
+    return { sampled: yuv420.length >> 2, differing: differing };
+
+}
+
+/* ==================== Driver ==================== */
+
+async function main() {
+
+    var results = {
+        userAgent: navigator.userAgent,
+        webgl: null,
+        frames: {},
+        checks: {},
+        phases: {},
+        runs: []
+    };
+
+    try {
+        var probe = new OffscreenCanvas(1, 1).getContext('webgl2');
+        var info = probe.getExtension('WEBGL_debug_renderer_info');
+        results.webgl = info
+            ? probe.getParameter(info.UNMASKED_RENDERER_WEBGL)
+            : probe.getParameter(probe.RENDERER);
+    } catch (e) { results.webgl = 'unavailable: ' + e.message; }
+
+    if (!Guacamole.Yuv444Renderer.isSupported())
+        throw new Error('Yuv444Renderer.isSupported() is false in this browser');
+
+    var sizes = [[1920, 1080], [3840, 2160]];
+    var patterns = ['full', 'window', 'typing'];
+    var PICTURES = 40;
+    var REPS = 5;
+
+    var status = document.getElementById('status');
+
+    for (var s = 0; s < sizes.length; s++) {
+
+        var w = sizes[s][0], h = sizes[s][1];
+        var key = w + 'x' + h;
+
+        status.textContent = 'decoding ' + key + '…';
+        await new Promise(function(r) { setTimeout(r, 0); });
+
+        var produced = await decodedFrames(w, h, 8);
+        var frames = produced.frames;
+
+        results.frames[key] = {
+            real: produced.real,
+            format: frames[0].format,
+            hardwareOffered: produced.hardwareOffered,
+            usedHardware: produced.usedHardware,
+            readBackGBs: produced.readBackGBs,
+            note: produced.note
+        };
+
+        if (s === 0) {
+            results.checks.scissor = await checkScissor(frames, w, h);
+            results.checks.combining = await checkCombining(frames, w, h);
+        }
+
+        results.phases[key] = await phases(frames, damage('typing', w, h),
+                w, h, PICTURES);
+
+        for (var d = 0; d < patterns.length; d++) {
+
+            var rects = damage(patterns[d], w, h);
+
+            for (var c = 0; c < CONFIGS.length; c++) {
+
+                (function(config, rects, w, h, pattern) {
+                    status.textContent = w + 'x' + h + ' ' + pattern + ': '
+                            + config.name;
+                })(CONFIGS[c], rects, w, h, patterns[d]);
+
+                await new Promise(function(r) { setTimeout(r, 0); });
+
+                var config = CONFIGS[c];
+                var timing = await median(function() {
+                    return timeConfig(config, frames, rects, w, h, PICTURES);
+                }, REPS);
+
+                results.runs.push({
+                    size: key,
+                    damage: patterns[d],
+                    coverage: +(coverage(rects, w, h) * 100).toFixed(1),
+                    config: config.name,
+                    msPerPicture: +(timing.median / PICTURES).toFixed(3),
+                    bestMsPerPicture: +(timing.best / PICTURES).toFixed(3),
+                    fps: Math.round(PICTURES / timing.median * 1000)
+                });
+
+            }
+
+        }
+
+        for (var f = 0; f < frames.length; f++) frames[f].close();
+
+    }
+
+    return results;
+
+}
+
+window.__benchDone = false;
+window.__benchResults = null;
+
+main().then(function(results) {
+    window.__benchResults = results;
+    window.__benchDone = true;
+    document.getElementById('status').textContent = 'done';
+    render(results);
+}).catch(function(e) {
+    window.__benchResults = { error: e.message, stack: e.stack };
+    window.__benchDone = true;
+    document.getElementById('status').textContent = 'failed: ' + e.message;
+});
+
+function render(results) {
+
+    var html = '<pre>' + results.webgl + '\n'
+            + JSON.stringify(results.frames, null, 2) + '</pre>';
+
+    Object.keys(results.phases).forEach(function(size) {
+        html += '<table><caption>' + size + ' — per phase, ms per picture'
+                + '</caption>';
+        var phase = results.phases[size];
+        Object.keys(phase).forEach(function(name) {
+            html += '<tr><td>' + name + '</td><td>' + phase[name] + '</td></tr>';
+        });
+        html += '</table>';
+    });
+
+    var groups = {};
+    results.runs.forEach(function(run) {
+        var key = run.size + ' / ' + run.damage + ' ('
+                + run.coverage + '% of screen)';
+        (groups[key] = groups[key] || []).push(run);
+    });
+
+    Object.keys(groups).forEach(function(key) {
+        html += '<table><caption>' + key + '</caption><tr><th>configuration</th>'
+                + '<th>ms / picture</th><th>pictures / s</th></tr>';
+        groups[key].forEach(function(run) {
+            html += '<tr><td>' + run.config + '</td><td>' + run.msPerPicture
+                    + '</td><td>' + run.fps + '</td></tr>';
+        });
+        html += '</table>';
+    });
+
+    document.getElementById('out').innerHTML = html;
+
+}
+</script>

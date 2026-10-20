@@ -332,6 +332,15 @@ pub async fn delete_session(
     }
 }
 
+/// Ceiling on the devicePixelRatio a native-resolution entry will size its
+/// framebuffer by.
+///
+/// The factor squares into pixels the host has to encode and the browser has to
+/// decode, so an unbounded value from the page is a way to ask for a
+/// framebuffer neither can sustain. 3.0 covers every display in use; beyond
+/// that the resample is the lesser problem.
+const MAX_NATIVE_FACTOR: f64 = 3.0;
+
 /// PUT /api/sessions/:id/thumbnail — Upload a session thumbnail (JPEG).
 /// Called by the client periodically to update the session preview.
 /// Only the session owner (or an admin) can upload.
@@ -3781,6 +3790,16 @@ pub struct ConnectRequest {
     pub screen_height: Option<u32>,
     #[serde(default)]
     pub dpi: Option<u32>,
+    /// DPI scaling percentage to request from an RDP server, paired with a
+    /// framebuffer sized in physical pixels.
+    #[serde(default)]
+    pub desktop_scale: Option<u32>,
+    /// The browser's devicePixelRatio. Reported rather than acted on: whether
+    /// the framebuffer is actually sized in physical pixels is the entry's
+    /// `native_resolution` setting to decide, since it is only safe where the
+    /// target scales its UI to match.
+    #[serde(default)]
+    pub device_pixel_ratio: Option<f64>,
     #[serde(default)]
     pub banner: Option<String>,
     /// Override or supply credentials at connect time (never stored).
@@ -3945,6 +3964,11 @@ pub struct EntryDisplay {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub dpi: Option<u32>,
+    /// DPI scaling percentage to request from an RDP server.
+    pub desktop_scale: Option<u32>,
+    /// The factor the framebuffer was scaled by for Native Resolution, so
+    /// the client can fit it back into its CSS-pixel area.
+    pub display_scale: Option<f64>,
 }
 
 /// The saved entry a session comes from, for its recording and reports.
@@ -3970,6 +3994,7 @@ pub fn session_request_from_entry(
 ) -> Result<CreateSessionRequest, String> {
     let session_type = entry_session_type(&entry.session_type)
         .ok_or_else(|| format!("unknown session type: {}", entry.session_type))?;
+    let from_saved_entry = attribution.is_some();
     let (address_book_entry, address_book_folder, entry_display_name) = match attribution {
         Some(r) => (Some(r.key), Some(r.folder), entry.display_name),
         None => (None, None, None),
@@ -4000,6 +4025,8 @@ pub fn session_request_from_entry(
         width: display.width,
         height: display.height,
         dpi: display.dpi,
+        desktop_scale: display.desktop_scale,
+        display_scale: display.display_scale,
         banner: entry.banner,
         enable_drive: entry.enable_drive,
         remote_app: entry.remote_app,
@@ -4055,6 +4082,9 @@ pub fn session_request_from_entry(
         wol_broadcast_addr: entry.wol_broadcast_addr,
         wol_udp_port: entry.wol_udp_port,
         wol_wait_time: entry.wol_wait_time,
+        // Always set from a saved entry, never from an ad-hoc one: see
+        // CreateSessionRequest.
+        h264_chroma444: from_saved_entry.then(|| entry.h264_chroma444.unwrap_or(false)),
     })
 }
 
@@ -4071,16 +4101,78 @@ fn entry_connect_request(
     ab_entry.password = req.password.or(ab_entry.password);
     ab_entry.domain = req.domain.or(ab_entry.domain);
     ab_entry.banner = req.banner.or(ab_entry.banner);
+
+    // Physical-pixel framebuffer, when this entry asks for one. The browser
+    // reports its devicePixelRatio and sends CSS-pixel dimensions; scaling them
+    // here keeps the policy with the entry rather than in the page.
+    //
+    // **The framebuffer factor and the desktop scale are separate numbers.**
+    // The framebuffer takes the browser's true devicePixelRatio, because
+    // anything else leaves the client resampling: it fits whatever framebuffer
+    // arrives into the available CSS area, so one framebuffer pixel lands on
+    // one physical pixel only when the two agree. The RDP desktop scale is
+    // snapped to 140 or 180 separately, since MS-RDPBCGR permits only
+    // 100/140/180 -- see guac_rdp_normalize_desktop_scale in patches/013.
+    //
+    // Tying them together, as this used to, meant a 2.0 display was given a
+    // 1.8 framebuffer and the client stretched it by 1.111 -- measured in the
+    // field as a uniformly soft picture with almost no single-pixel edges
+    // anywhere, 0.01% against a native render's 0.82%. The cost of separating
+    // them is that a desktop scaled 180% inside a framebuffer scaled 200% draws
+    // its UI about 10% smaller than nominal. That is the better trade: 10%
+    // smaller is legible and adjustable on the host, while a 1.111 resample is
+    // neither.
+    let native_factor = if ab_entry.native_resolution.unwrap_or(false) {
+        match req.device_pixel_ratio {
+            // Guard against a nonsense or hostile ratio sizing a framebuffer
+            // the server then has to encode.
+            Some(dpr) if dpr.is_finite() && dpr > 1.0 => dpr.min(MAX_NATIVE_FACTOR),
+            _ => 1.0,
+        }
+    } else {
+        1.0
+    };
+
+    // Scaled before initial_session_size, so its mod-16 rounding lands on
+    // the device-pixel size the session is actually created at; rounding the
+    // CSS size and scaling it afterwards would leave the grid again.
+    let scale = |(w, h): (Option<u32>, Option<u32>)| {
+        if native_factor > 1.0 {
+            (
+                w.map(|w| ((w as f64 * native_factor).round() as u32) & !0x7),
+                h.map(|h| (h as f64 * native_factor).round() as u32),
+            )
+        } else {
+            (w, h)
+        }
+    };
     let (width, height) = initial_session_size(
         &ab_entry.session_type,
         ab_entry.fullscreen_on_connect.unwrap_or(false),
-        (req.width, req.height),
-        (req.screen_width, req.screen_height),
+        scale((req.width, req.height)),
+        scale((req.screen_width, req.screen_height)),
     );
+
+    let desktop_scale = if native_factor > 1.0 {
+        // The exact percentage, not the nearest legal one. guacd snaps it
+        // for the connection-time core data, where FreeRDP's monitor
+        // synthesis transposes the pair and only equal values survive, but
+        // sends it verbatim in the display-control layout that follows --
+        // MS-RDPEDISP allows desktopScaleFactor anywhere in 100-500 and
+        // restricts only deviceScaleFactor. Since the client fits the
+        // display shortly after connecting, that layout is what the session
+        // ends up scaled by, so a 2.0 display gets 200% rather than the 180%
+        // that leaves its UI 10% small.
+        Some((native_factor * 100.0).round() as u32)
+    } else {
+        req.desktop_scale
+    };
     let display = EntryDisplay {
         width,
         height,
         dpi: req.dpi,
+        desktop_scale,
+        display_scale: (native_factor > 1.0).then_some(native_factor),
     };
     let attribution = EntryRef {
         key: entry_key.to_string(),
@@ -4335,6 +4427,8 @@ fn adhoc_session_request(
         width,
         height,
         dpi: req.dpi,
+        desktop_scale: None,
+        display_scale: None,
     };
     let mut create_req = session_request_from_entry(entry, display, None)?;
     create_req.generate_keypair = req.generate_keypair.filter(|&g| g);
@@ -7125,6 +7219,7 @@ pub struct QuickConnectQuery {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub dpi: Option<u32>,
+    pub desktop_scale: Option<u32>,
     // Address book mode
     pub scope: Option<String>,
     pub folder: Option<String>,
@@ -7366,6 +7461,8 @@ pub async fn quick_connect(
         width: query.width,
         height: query.height,
         dpi: query.dpi,
+        desktop_scale: query.desktop_scale,
+        display_scale: None,
         banner: None,
         enable_drive: None,
         remote_app: None,
@@ -7391,6 +7488,7 @@ pub async fn quick_connect(
         enable_full_window_drag: None,
         force_lossless: None,
         enable_h264: None,
+        h264_chroma444: None,
         container_image: None,
         container_cpu_limit: None,
         container_memory_limit: None,
@@ -7443,6 +7541,8 @@ fn quick_connect_entry_request(
         width: query.width,
         height: query.height,
         dpi: query.dpi,
+        desktop_scale: query.desktop_scale,
+        display_scale: None,
     };
     let attribution = EntryRef {
         key: format!("{}/{}/{}", scope, folder, entry),
@@ -7642,6 +7742,8 @@ mod tests {
             width: initial_width,
             height: initial_height,
             dpi: req.dpi,
+            desktop_scale: req.desktop_scale,
+            display_scale: None,
             banner: req.banner.or(ab_entry.banner),
             enable_drive: ab_entry.enable_drive,
             remote_app: ab_entry.remote_app,
@@ -7697,6 +7799,8 @@ mod tests {
             wol_broadcast_addr: ab_entry.wol_broadcast_addr,
             wol_udp_port: ab_entry.wol_udp_port,
             wol_wait_time: ab_entry.wol_wait_time,
+            // From an entry, so always set: see CreateSessionRequest.
+            h264_chroma444: Some(ab_entry.h264_chroma444.unwrap_or(false)),
         };
         create_req
     }
@@ -7738,6 +7842,8 @@ mod tests {
             width: query.width,
             height: query.height,
             dpi: query.dpi,
+            desktop_scale: query.desktop_scale,
+            display_scale: None,
             banner: ab_entry.banner,
             enable_drive: ab_entry.enable_drive,
             remote_app: ab_entry.remote_app,
@@ -7793,6 +7899,8 @@ mod tests {
             wol_broadcast_addr: ab_entry.wol_broadcast_addr,
             wol_udp_port: ab_entry.wol_udp_port,
             wol_wait_time: ab_entry.wol_wait_time,
+            // From an entry, so always set: see CreateSessionRequest.
+            h264_chroma444: Some(ab_entry.h264_chroma444.unwrap_or(false)),
         };
         create_req
     }
@@ -7935,12 +8043,33 @@ mod tests {
             width: Some(1024),
             height: Some(768),
             dpi: Some(96),
+            desktop_scale: None,
+            display_scale: None,
         };
         let req = session_request_from_entry(full_entry("ssh"), display, None).unwrap();
         assert_eq!(req.address_book_entry, None);
         assert_eq!(req.address_book_folder, None);
         assert_eq!(req.entry_display_name, None);
         assert_eq!(req.hostname.as_deref(), Some("host.example.test"));
+        // No admin vouched for an ad-hoc target, so the auxiliary-view drop
+        // waits for its full sample; a saved entry always says which colour.
+        assert_eq!(req.h264_chroma444, None);
+        let attributed = session_request_from_entry(
+            full_entry("rdp"),
+            EntryDisplay {
+                width: None,
+                height: None,
+                dpi: None,
+                desktop_scale: None,
+                display_scale: None,
+            },
+            Some(EntryRef {
+                key: "shared/f/e".into(),
+                folder: "f".into(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(attributed.h264_chroma444, Some(false));
         assert!(session_request_from_entry(
             AddressBookEntry {
                 session_type: "telnet".into(),
@@ -7949,7 +8078,9 @@ mod tests {
             EntryDisplay {
                 width: None,
                 height: None,
-                dpi: None
+                dpi: None,
+                desktop_scale: None,
+                display_scale: None,
             },
             None,
         )
