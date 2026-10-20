@@ -674,6 +674,7 @@
             var clipboardPanel = null;
             var clipboardTextarea = null;
             var clipboardStatusEl = null;
+            var lockKeyboardCheckbox = null;
 
             function setClipboardStatus(msg) {
                 if (!clipboardStatusEl) return;
@@ -691,11 +692,16 @@
                 clipboardPanel.style.cssText = 'display:none;position:fixed;top:0;left:0;bottom:0;width:380px;background:var(--bg);border-right:2px solid var(--primary);z-index:3000;font-family:monospace;color:var(--text);flex-direction:column;';
 
                 clipboardPanel.innerHTML =
-                    '<div style="display:flex;align-items:center;gap:0.6em;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
-                        '<h3 style="margin:0;flex:1;color:var(--primary);font-size:1.1em;">Session</h3>' +
-                        '<button id="cp-home" style="background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.9em;padding:0.35em 0.8em;border-radius:3px;cursor:pointer;" title="Return to the Connections page">&#127968; Home</button>' +
-                        '<button id="cp-fullscreen" style="background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.9em;padding:0.35em 0.8em;border-radius:3px;cursor:pointer;" title="Enter fullscreen">&#9974; Fullscreen</button>' +
-                        '<button id="cp-close" style="background:none;border:none;color:var(--text-dim);font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
+                    '<div style="padding:0.65em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
+                        '<div style="display:flex;align-items:center;gap:0.6em;margin-bottom:0.65em;">' +
+                            '<h3 style="margin:0;flex:1;color:var(--primary);font-size:1.1em;">Session</h3>' +
+                            '<button id="cp-close" style="background:none;border:none;color:var(--text-dim);font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
+                        '</div>' +
+                        '<div style="display:flex;align-items:stretch;gap:0.45em;">' +
+                            '<button id="cp-home" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:0.35em;background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.85em;padding:0.5em 0.35em;border-radius:3px;cursor:pointer;" title="Return to the Connections page">&#127968; Home</button>' +
+                            '<button id="cp-fullscreen" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:0.35em;background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.85em;padding:0.5em 0.35em;border-radius:3px;cursor:pointer;" title="Enter fullscreen">&#9974; Fullscreen</button>' +
+                            '<label style="flex:1.25;min-width:0;display:flex;align-items:center;justify-content:center;gap:0.4em;white-space:nowrap;background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.8em;padding:0.5em 0.35em;border-radius:3px;cursor:pointer;" title="Lock keyboard while in fullscreen"><input id="cp-lock-keyboard" type="checkbox" style="margin:0;accent-color:var(--accent);"> Lock keyboard</label>' +
+                        '</div>' +
                     '</div>' +
                     '<div style="flex:1;display:flex;flex-direction:column;padding:1em;gap:0.8em;overflow-y:auto;min-height:0;">' +
                         '<div style="color:var(--text-muted);font-size:0.95em;">Shared clipboard. Paste text below and click Send, or copy text received from the remote session.</div>' +
@@ -712,6 +718,14 @@
                 document.body.appendChild(clipboardPanel);
                 clipboardTextarea = document.getElementById('cp-text');
                 clipboardStatusEl = document.getElementById('cp-status');
+                lockKeyboardCheckbox = document.getElementById('cp-lock-keyboard');
+                if (!navigator.keyboard || !navigator.keyboard.lock) {
+                    lockKeyboardCheckbox.disabled = true;
+                    lockKeyboardCheckbox.title = 'Keyboard Lock is not supported by this browser.';
+                }
+                lockKeyboardCheckbox.addEventListener('change', function() {
+                    rgRequestKeyboardLock(lockKeyboardCheckbox.checked);
+                });
 
                 document.getElementById('cp-close').addEventListener('click', function() {
                     toggleClipboardPanel();
@@ -1611,11 +1625,44 @@
             // (e.g. no user activation on load): the caller decides whether to
             // wait for a gesture or give up and show the windowed session.
             var fsKeyboardLocked = false;
+            function rgRequestKeyboardLock(lockAll) {
+                if (!navigator.keyboard || !navigator.keyboard.lock) {
+                    if (lockKeyboardCheckbox) lockKeyboardCheckbox.checked = false;
+                    setClipboardStatus('Keyboard Lock is not supported by this browser.');
+                    return;
+                }
+                if (!rgFullscreenEl()) {
+                    setClipboardStatus(lockAll
+                        ? 'Keyboard lock will apply when fullscreen is entered.'
+                        : 'Keyboard lock applies only in fullscreen.');
+                    return;
+                }
+                var request;
+                try {
+                    request = lockAll
+                        ? navigator.keyboard.lock()
+                        : navigator.keyboard.lock(['Escape']);
+                } catch (e) {
+                    if (lockAll && lockKeyboardCheckbox) lockKeyboardCheckbox.checked = false;
+                    setClipboardStatus('Could not lock the keyboard.');
+                    if (!lockAll) rgShowEscNoticeOnce();
+                    return;
+                }
+                request.then(function() {
+                    if (lockKeyboardCheckbox) {
+                        setClipboardStatus(lockAll ? 'Keyboard locked.' : 'Additional keyboard lock disabled.');
+                    }
+                }).catch(function() {
+                    if (lockAll && lockKeyboardCheckbox) lockKeyboardCheckbox.checked = false;
+                    setClipboardStatus('Could not lock the keyboard.');
+                    if (!lockAll) rgShowEscNoticeOnce();
+                });
+            }
             function rgOnFullscreenEntered() {
                 if (fsKeyboardLocked) return;
                 fsKeyboardLocked = true;
                 if (navigator.keyboard && navigator.keyboard.lock) {
-                    navigator.keyboard.lock(['Escape']).catch(rgShowEscNoticeOnce);
+                    rgRequestKeyboardLock(!!(lockKeyboardCheckbox && lockKeyboardCheckbox.checked));
                 } else {
                     rgShowEscNoticeOnce();
                 }
@@ -1774,7 +1821,7 @@
             function rgOnFullscreenChange() {
                 var inFs = !!rgFullscreenEl();
                 var bar = document.getElementById('fs-bar');
-                if (inFs) { fsEverEntered = true; rgDisarmFullscreenGesture(); rgOnFullscreenEntered(); rgReleaseAllInput(); rgMaybeReveal(); } else { rgHideConnectCover(); }
+                if (inFs) { fsEverEntered = true; rgDisarmFullscreenGesture(); rgOnFullscreenEntered(); rgReleaseAllInput(); rgMaybeReveal(); } else { fsKeyboardLocked = false; rgHideConnectCover(); }
                 if (bar) {
                     if (inFs) {
                         bar.classList.add('visible');
