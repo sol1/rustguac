@@ -644,6 +644,7 @@
         #entry-modal:not(.adhoc-restricted) .adhoc-restricted-only { display: none !important; }
         /* A non-admin's ad-hoc request can't turn on a drive the site has off. */
         #entry-modal.adhoc.adhoc-restricted.drive-off #em-drive-section { display: none !important; }
+        #entry-modal.print-off #em-printing-section { display: none !important; }
         .var-pick { margin-top: 0.3em; font-size: 0.85em; width: auto; max-width: 100%; }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
@@ -818,7 +819,7 @@
     </div>
 
     <!-- Entry create/edit modal -->
-    <div class="modal-overlay" id="entry-modal">
+    <div class="modal-overlay print-off" id="entry-modal">
         <div class="modal">
             <h3 id="entry-modal-title">New Entry</h3>
             <p class="modal-hint adhoc-only" id="em-adhoc-hint">A one-off connection to any host. Nothing is saved. Credential fields accept your own <a href="/docs.html#credential-variables">credential variables</a>, such as <code>$my_ssh_key</code>.</p>
@@ -1178,6 +1179,15 @@
                     <div id="em-drive-warning" style="display:none;color:var(--primary);font-size:0.8em;margin-top:0.3em">Server has no [drive] section in config — file transfer will not work. See <a href="/docs.html" style="color:var(--accent)">Docs</a> for setup instructions.</div>
                 </label>
             </div>
+            <div id="em-printing-section" style="display:none;margin-top:0.8em;">
+                <label>
+                    <input type="checkbox" id="em-enable-printing" style="display:inline;width:auto;margin-right:0.4em"> Enable printer redirection
+                    <div style="color:#888;font-size:0.75em;margin-top:0.2em;">Print jobs are delivered as PDF downloads or through the browser's local print dialog, depending on the administrator's <code>rdp.printing_method</code> setting. An administrator must enable <code>rdp.allow_printing</code>; the guacd host needs Ghostscript.</div>
+                </label>
+                <label>Printer name
+                    <input type="text" id="em-printer-name" placeholder="rustguac" maxlength="64">
+                </label>
+            </div>
             <div id="em-recording-section" style="display:none;margin-top:0.8em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-recording-toggle">
                     <span id="em-recording-arrow">&#9654;</span> Recording Settings
@@ -1509,6 +1519,7 @@
             if(d.site_title){document.title=d.site_title+' - Connections';document.querySelector('h1').textContent=d.site_title;}
             _driveConfigured = !!d.drive_configured;
             document.getElementById('entry-modal').classList.toggle('drive-off', !d.drive_enabled);
+            document.getElementById('entry-modal').classList.toggle('print-off', !d.rdp_printing_allowed);
             initTheme(d.theme);
         });
         var apiKey = sessionStorage.getItem('rustguac_api_key');
@@ -4016,6 +4027,7 @@
             else if (val === 'vdi') document.getElementById('em-vdi-fields').style.display = '';
             // Show drive option for SSH and RDP only
             document.getElementById('em-drive-section').style.display = (val === 'ssh' || val === 'rdp') ? '' : 'none';
+            document.getElementById('em-printing-section').style.display = val === 'rdp' ? '' : 'none';
             // Show RemoteApp for RDP only
             document.getElementById('em-remoteapp-section').style.display = val === 'rdp' ? '' : 'none';
             // Show Video Performance for RDP only
@@ -4527,6 +4539,8 @@
             document.getElementById('em-fullscreen-on-connect').checked = false;
             document.getElementById('em-autohide-side-tabs').checked = false;
             document.getElementById('em-enable-drive').checked = false;
+            document.getElementById('em-enable-printing').checked = false;
+            document.getElementById('em-printer-name').value = '';
             document.getElementById('em-drive-warning').style.display = 'none';
             document.getElementById('em-remote-app').value = '';
             document.getElementById('em-remote-app-dir').value = '';
@@ -4708,6 +4722,8 @@
                 }
                 if (type === 'ssh' || type === 'rdp') {
                     document.getElementById('em-enable-drive').checked = !!entryData.enable_drive;
+                    document.getElementById('em-enable-printing').checked = !!entryData.enable_printing;
+                    document.getElementById('em-printer-name').value = entryData.printer_name || '';
                     document.getElementById('em-drive-warning').style.display = (entryData.enable_drive && !_driveConfigured) ? '' : 'none';
                 }
                 // Populate RemoteApp fields (RDP)
@@ -4844,6 +4860,10 @@
                 var rmon = parseInt(document.getElementById('em-rdp-monitors').value);
                 if (rmon > 1) entry.max_monitors = rmon;
                 if (document.getElementById('em-rdp-prompt-creds').checked) entry.prompt_credentials = true;
+                if (document.getElementById('em-enable-printing').checked) {
+                    entry.enable_printing = true;
+                    entry.printer_name = document.getElementById('em-printer-name').value.trim() || 'rustguac';
+                }
             } else if (type === 'vnc') {
                 var h = document.getElementById('em-vnc-hostname').value.trim();
                 if (h) entry.hostname = h;

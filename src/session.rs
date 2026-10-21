@@ -79,6 +79,10 @@ pub struct CreateSessionRequest {
     pub banner: Option<String>,
     /// Override drive/file transfer setting for this session.
     pub enable_drive: Option<bool>,
+    /// Enable RDP printer redirection. Print jobs are delivered as PDFs to the browser.
+    pub enable_printing: Option<bool>,
+    /// Display name advertised for the redirected RDP printer.
+    pub printer_name: Option<String>,
     // RDP RemoteApp (RAIL)
     pub remote_app: Option<String>,
     pub remote_app_dir: Option<String>,
@@ -416,6 +420,12 @@ pub struct SessionInfo {
     /// client.html from the /api/sessions/:id fetch; omitted when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub autohide_side_tabs: bool,
+    /// Whether the browser should expose the session's file transfer drive.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub file_manager_enabled: bool,
+    /// Browser delivery method for enabled RDP printer redirection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub printing_method: Option<crate::config::RdpPrintingMethod>,
 }
 
 /// Internal session state including the guacd connection.
@@ -488,6 +498,12 @@ pub struct Session {
     /// Surfaced in `SessionInfo` so client.html can auto-hide the
     /// clipboard/files side tabs.
     pub autohide_side_tabs: bool,
+    /// Whether the browser should expose the session's file transfer drive.
+    pub file_manager_enabled: bool,
+    /// Whether this session has RDP printer redirection enabled.
+    pub printing_enabled: bool,
+    /// Browser delivery method, set only when printer redirection is enabled.
+    pub printing_method: Option<crate::config::RdpPrintingMethod>,
 }
 
 /// A short-lived viewer token issued by an admin to shadow an active session.
@@ -575,6 +591,8 @@ mod auth_pkg_tests {
         Config {
             rdp: Some(crate::config::RdpConfig {
                 default_auth_pkg: default_auth_pkg.map(|s| s.to_string()),
+                allow_printing: false,
+                printing_method: crate::config::RdpPrintingMethod::default(),
             }),
             ..Config::default()
         }
@@ -854,6 +872,8 @@ impl Session {
             thumbnail_url: Some(format!("/api/sessions/{}/thumbnail", self.id)),
             fullscreen_on_connect: self.fullscreen_on_connect,
             autohide_side_tabs: self.autohide_side_tabs,
+            file_manager_enabled: self.file_manager_enabled,
+            printing_method: self.printing_method,
         }
     }
 }
@@ -1072,6 +1092,8 @@ impl SessionManager {
         // Tunnels the Proxmox branch establishes in-branch (PVE API + SPICE
         // proxy hops); merged into the session's tunnel list after the match.
         let mut proxmox_tunnels: Vec<tunnel::SshTunnel> = Vec::new();
+        let mut printing_enabled = false;
+        let mut printing_method = None;
 
         let (
             mut conn_params,
@@ -1243,6 +1265,25 @@ impl SessionManager {
 
                 let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
+                let printing_requested = req.enable_printing.unwrap_or(false);
+                let printing_allowed = self
+                    .config
+                    .rdp
+                    .as_ref()
+                    .is_some_and(|rdp| rdp.allow_printing);
+                printing_enabled = printing_requested && printing_allowed;
+                if printing_enabled {
+                    printing_method = Some(
+                        self.config
+                            .rdp
+                            .as_ref()
+                            .map(|rdp| rdp.printing_method)
+                            .unwrap_or_default(),
+                    );
+                }
+                if printing_requested && !printing_allowed {
+                    tracing::info!(%session_id, "Ignoring RDP printer redirection request because rdp.allow_printing is disabled");
+                }
                 tracing::info!(
                     %session_id,
                     drive_enabled,
@@ -1252,12 +1293,18 @@ impl SessionManager {
                     "Drive configuration"
                 );
 
-                // Create per-session drive directory for RDP
+                // Printer redirection is a separate RDP device and does not
+                // need a redirected drive or a server-side directory.
                 let session_drive_path = if drive_enabled {
                     match drive::create_session_dir(&drive_cfg, session_id) {
                         Ok(path) => Some(path),
                         Err(e) => {
                             tracing::warn!(session_id = %session_id, "Failed to create drive dir: {}", e);
+                            if printing_enabled {
+                                return Err(SessionError::VdiError(format!(
+                                    "failed to prepare RDP printer drive: {e}"
+                                )));
+                            }
                             None
                         }
                     }
@@ -1268,6 +1315,10 @@ impl SessionManager {
                 let rdp_ignore_cert = req.ignore_cert.unwrap_or(false);
                 let rdp_security = req.security.clone();
                 let rdp_enable_drive = session_drive_path.is_some();
+                let rdp_drive_path = session_drive_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string());
+                let rdp_drive_name = drive_cfg.drive_name.clone();
                 tracing::info!(
                     %session_id,
                     ignore_cert = rdp_ignore_cert,
@@ -1291,10 +1342,15 @@ impl SessionManager {
                     dpi,
                     ignore_cert: rdp_ignore_cert,
                     enable_drive: rdp_enable_drive,
-                    drive_path: session_drive_path
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().to_string()),
-                    drive_name: drive_cfg.drive_name.clone(),
+                    enable_printing: printing_enabled,
+                    create_drive_path: session_drive_path.is_some(),
+                    drive_path: rdp_drive_path,
+                    drive_name: rdp_drive_name,
+                    printer_name: req
+                        .printer_name
+                        .clone()
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| "rustguac".to_string()),
                     disable_download: !drive_cfg.allow_download,
                     disable_upload: !drive_cfg.allow_upload,
                     auth_pkg: resolve_rdp_auth_pkg(req.auth_pkg.as_deref(), &self.config),
@@ -1819,8 +1875,11 @@ impl SessionManager {
                     dpi,
                     ignore_cert: true,
                     enable_drive: false,
+                    enable_printing: false,
+                    create_drive_path: false,
                     drive_path: None,
                     drive_name: String::new(),
+                    printer_name: "rustguac".to_string(),
                     disable_download: true,
                     disable_upload: true,
                     auth_pkg: None,
@@ -2049,6 +2108,9 @@ impl SessionManager {
                     if let Some(mut bs) = browser_session {
                         self.browser_manager.kill(&mut bs).await;
                     }
+                    if let Some(path) = session_drive_path.as_ref() {
+                        drive::cleanup_session_dir(path.clone(), session_id, 0).await;
+                    }
                     tracing::error!(session_id = %session_id, error = %e, "Failed to connect to guacd");
                     return Err(SessionError::GuacdConnection(e.to_string()));
                 }
@@ -2108,6 +2170,20 @@ impl SessionManager {
             .allow_sharing
             .unwrap_or(req.address_book_entry.is_none());
 
+        let drive_cfg = drive::drive_config_or_default(&self.config.drive);
+        let file_manager_enabled = match &req.session_type {
+            SessionType::Ssh => {
+                drive::is_drive_enabled(&self.config.drive, req.enable_drive)
+                    && (drive_cfg.allow_download || drive_cfg.allow_upload)
+            }
+            SessionType::Rdp => {
+                drive::is_drive_enabled(&self.config.drive, req.enable_drive)
+                    && session_drive_path.is_some()
+                    && (drive_cfg.allow_download || drive_cfg.allow_upload)
+            }
+            _ => true,
+        };
+
         let session = Session {
             id: session_id,
             session_type: req.session_type,
@@ -2143,6 +2219,9 @@ impl SessionManager {
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
             reuse_fingerprint,
             autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
+            file_manager_enabled,
+            printing_enabled,
+            printing_method,
         };
 
         let info = session.info();
@@ -2251,6 +2330,21 @@ impl SessionManager {
         let session = sessions.get(&id)?;
         let session = session.lock().await;
         Some(session.info())
+    }
+
+    /// Return the session properties used to select client-page CSP policy:
+    /// fullscreen framing setting, whether it came from an address-book
+    /// entry, and whether print-dialog frame access is required.
+    pub async fn get_session_client_csp_flags(&self, id: Uuid) -> Option<(bool, bool, bool)> {
+        let sessions = self.sessions.read().await;
+        let session = sessions.get(&id)?;
+        let session = session.lock().await;
+        Some((
+            session.fullscreen_on_connect,
+            session.address_book_entry.is_some(),
+            session.printing_enabled
+                && session.printing_method == Some(crate::config::RdpPrintingMethod::TriggerPrint),
+        ))
     }
 
     /// Take the guacd stream from a session (for the owner/first WebSocket connection).
@@ -3495,6 +3589,9 @@ mod tests {
             fullscreen_on_connect: false,
             reuse_fingerprint: String::new(),
             autohide_side_tabs: false,
+            file_manager_enabled: true,
+            printing_enabled: false,
+            printing_method: None,
         }
     }
 
@@ -3623,6 +3720,15 @@ mod tests {
         assert_eq!(
             info.share_url_readonly.as_deref(),
             Some(format!("/client/{}?token=rw-ro", session.id).as_str())
+        );
+        assert_eq!(info.client_url, format!("/client/{}", session.id));
+
+        session.file_manager_enabled = false;
+        let info = session.info();
+        assert_eq!(info.client_url, format!("/client/{}", session.id));
+        assert_eq!(
+            info.share_url.as_deref(),
+            Some(format!("/client/{}?token=rw", session.id).as_str())
         );
 
         session.share_allowed = false;

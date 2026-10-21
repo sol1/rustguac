@@ -298,3 +298,5 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 
 # [rdp]
 # default_auth_pkg = "ntlm"
+# allow_printing = false                # administrator policy for RDP printer redirection
+# printing_method = "download"          # or "trigger_print" to open the browser's local print dialog

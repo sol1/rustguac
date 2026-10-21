@@ -270,6 +270,52 @@ pub async fn get_session(
     }
 }
 
+#[derive(Deserialize)]
+pub struct PrintJobLogRequest {
+    /// The print job's filename only. PDF contents are never sent to this API.
+    filename: String,
+    /// Share token for a browser joined through a session share link.
+    token: Option<String>,
+}
+
+/// POST /api/sessions/:id/print-job — Record that a print job reached the browser.
+pub async fn log_print_job(
+    State(manager): State<AppState>,
+    Path(id): Path<Uuid>,
+    identity: Option<Extension<AuthIdentity>>,
+    Json(body): Json<PrintJobLogRequest>,
+) -> impl IntoResponse {
+    let Some(info) = manager.get_session(id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let is_admin = identity
+        .as_ref()
+        .is_some_and(|Extension(identity)| identity.has_role("admin"));
+    let is_owner = identity
+        .as_ref()
+        .is_some_and(|Extension(identity)| info.created_by == identity.display_name());
+    let is_shared_viewer = match body.token.as_deref() {
+        Some(token) => manager.validate_share_token(id, token).await.is_valid(),
+        None => false,
+    };
+    if !is_admin && !is_owner && !is_shared_viewer {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if body.filename.is_empty()
+        || body.filename.len() > 255
+        || body.filename.chars().any(char::is_control)
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    tracing::info!(
+        session_id = %id,
+        user = %info.created_by,
+        filename = %body.filename,
+        "RDP print job delivered to browser"
+    );
+    StatusCode::NO_CONTENT.into_response()
+}
+
 /// DELETE /api/sessions/:id — Terminate a session.
 /// Admins can delete any session. Operators can only delete their own sessions.
 pub async fn delete_session(
@@ -834,6 +880,7 @@ pub async fn auth_status(
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
     Extension(drive_configured): Extension<DriveConfigured>,
+    Extension(rdp_printing_allowed): Extension<RdpPrintingAllowed>,
 ) -> impl IntoResponse {
     // Live provider availability: true once metadata has been discovered and
     // cached. If OIDC is enabled but not yet ready (provider was down at
@@ -859,6 +906,7 @@ pub async fn auth_status(
         // Lets the entry editor hide file transfer from ad-hoc users below
         // admin when it is off site-wide: their request couldn't turn it on.
         "drive_enabled": drive_configured.enabled,
+        "rdp_printing_allowed": rdp_printing_allowed.0,
     });
     resp["theme"] = json!({
         "admin_preset": theme.admin_preset,
@@ -909,6 +957,10 @@ pub struct DriveConfigured {
     pub configured: bool,
     pub enabled: bool,
 }
+
+/// Whether `[rdp] allow_printing` is enabled site-wide.
+#[derive(Clone)]
+pub struct RdpPrintingAllowed(pub bool);
 
 /// Default scope ("local" | "shared") for a new per-user credential variable
 /// (from `[user_credentials_default_scope]`). Only meaningful when more than
@@ -1973,7 +2025,12 @@ pub async fn get_session_banner(
     }
 
     match manager.get_session(id).await {
-        Some(info) => Json(json!({ "banner": info.banner })).into_response(),
+        Some(info) => Json(json!({
+            "banner": info.banner,
+            "file_manager_enabled": info.file_manager_enabled,
+            "printing_method": info.printing_method,
+        }))
+        .into_response(),
         None => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "session not found"})),
@@ -4022,6 +4079,8 @@ pub fn session_request_from_entry(
         dpi: display.dpi,
         banner: entry.banner,
         enable_drive: entry.enable_drive,
+        enable_printing: entry.enable_printing,
+        printer_name: entry.printer_name,
         remote_app: entry.remote_app,
         remote_app_dir: entry.remote_app_dir,
         remote_app_args: entry.remote_app_args,
@@ -7392,6 +7451,8 @@ pub async fn quick_connect(
         dpi: query.dpi,
         banner: None,
         enable_drive: None,
+        enable_printing: None,
+        printer_name: None,
         remote_app: None,
         remote_app_dir: None,
         remote_app_args: None,
@@ -7669,6 +7730,8 @@ mod tests {
             dpi: req.dpi,
             banner: req.banner.or(ab_entry.banner),
             enable_drive: ab_entry.enable_drive,
+            enable_printing: ab_entry.enable_printing,
+            printer_name: ab_entry.printer_name,
             remote_app: ab_entry.remote_app,
             remote_app_dir: ab_entry.remote_app_dir,
             remote_app_args: ab_entry.remote_app_args,
@@ -7765,6 +7828,8 @@ mod tests {
             dpi: query.dpi,
             banner: ab_entry.banner,
             enable_drive: ab_entry.enable_drive,
+            enable_printing: ab_entry.enable_printing,
+            printer_name: ab_entry.printer_name,
             remote_app: ab_entry.remote_app,
             remote_app_dir: ab_entry.remote_app_dir,
             remote_app_args: ab_entry.remote_app_args,
@@ -7834,7 +7899,8 @@ mod tests {
             "username": "alice", "password": "pw", "private_key": "KEY",
             "url": "https://app.example.test", "domain": "CORP",
             "security": "nla", "server_layout": "en-gb-qwerty", "ignore_cert": true,
-            "display_name": "Host One", "enable_drive": true, "auth_pkg": "kerberos",
+            "display_name": "Host One", "enable_drive": true,
+            "enable_printing": true, "printer_name": "Office printer", "auth_pkg": "kerberos",
             "kdc_url": "https://kdc.example.test", "prompt_credentials": false,
             "color_depth": 16
             }),

@@ -31,6 +31,7 @@ Depends: ${shlibs:Depends}, ${misc:Depends},
  tigervnc-standalone-server,
  chromium,
  x11-utils,
+ ghostscript,
  cryptsetup-bin
 Recommends: haproxy
 Description: Lightweight Rust replacement for Apache Guacamole webapp

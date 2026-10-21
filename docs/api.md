@@ -222,6 +222,8 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `vnc_resize` | boolean | VNC | Ask the VNC server to resize its screen to the browser window (default `false`: the screen is scaled to fit). Only for servers with their own virtual screen (TigerVNC, Xvnc); a physical console such as UltraVNC, RealVNC or x11vnc can't resize, and the session stalls if asked. |
 | `vnc_network` | string | VNC | Network preset for the link between the VNC server and rustguac: `auto` (default), `lan`, `wan` or `slow`. See [VNC network presets](overview.md#vnc-network-presets). |
 | `enable_drive` | boolean | RDP, SSH | Enable file transfer / drive redirection |
+| `enable_printing` | boolean | RDP | Request printer redirection. The administrator must enable `rdp.allow_printing`; otherwise the request is ignored. Print PDFs are downloaded by default; setting `rdp.printing_method = "trigger_print"` opens the browser's local print dialog without displaying the PDF. This uses a separate RDP device and does not require drive file transfer. |
+| `printer_name` | string | RDP | Name shown for the redirected printer (used only when `enable_printing` is true) |
 | `disable_copy` | boolean | All | Disable clipboard copy (server → client) |
 | `disable_paste` | boolean | All | Disable clipboard paste (client → server) |
 | `autofill` | string | Web | JSON array of autofill credentials (see below) |

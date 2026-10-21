@@ -901,6 +901,10 @@ allow_download = true
 allow_upload = true
 cleanup_on_close = true
 retention_secs = 0
+
+[rdp]
+allow_printing = false
+printing_method = "download" # or "trigger_print" to open the browser's local print dialog
 ```
 
 #### Cleanup behaviour
