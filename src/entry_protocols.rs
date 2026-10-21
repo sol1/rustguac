@@ -89,6 +89,10 @@ pub struct ProtocolEntry {
     /// updates and sessions refer to a protocol by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Write-only, in an update: the name this protocol had before, so its
+    /// stored secrets follow it to the new name. Never stored or returned.
+    #[serde(default, skip_serializing)]
+    pub renamed_from: Option<String>,
     /// Every other field, as stored: any entry field, overriding the host's.
     #[serde(flatten)]
     pub settings: Map<String, Value>,
@@ -274,10 +278,10 @@ impl AddressBookEntry {
                     PROTOCOL_TYPES.join(", ")
                 ));
             }
-            if let Some(n) = p.name.as_deref() {
-                if !valid_protocol_name(n) {
+            for (field, n) in [("name", &p.name), ("renamed_from", &p.renamed_from)] {
+                if n.as_deref().is_some_and(|n| !valid_protocol_name(n)) {
                     return err(format!(
-                        "protocols[{i}]: name must be 1-64 letters, digits, '-', '_' or '.'"
+                        "protocols[{i}]: {field} must be 1-64 letters, digits, '-', '_' or '.'"
                     ));
                 }
             }

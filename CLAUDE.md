@@ -69,7 +69,7 @@ set (`""`/`[]` clears; `port` is never inherited). `pick_protocol` /
 connect path uses unchanged. A flat entry is read as one protocol (`split`; the
 host keeps `HOST_KEYS`), and `compact()` stores the flat form whenever that is
 lossless, so older instances keep reading it. Updates keep secrets per protocol,
-matched by name.
+matched by name (or `renamed_from`).
 
 #### Multiple Vault backends (DR)
 

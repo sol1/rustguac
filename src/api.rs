@@ -5459,7 +5459,8 @@ impl EntryStore for VaultBackends {
 /// Both sides are taken as a host and its protocols (#296), so an old flat
 /// body and an old flat stored entry each count as one protocol. The host's
 /// secrets are kept as above, and each protocol's are kept from the stored
-/// protocol of the same name; when both sides have exactly one protocol the
+/// protocol of the same name, or of the name in its `renamed_from` when it
+/// is being renamed; when both sides have exactly one protocol the
 /// two are paired whatever their names, so an old flat body that changes
 /// an entry's type keeps its secrets as it always did. The request's list
 /// of protocols is the entry's list. The result is written in the old flat
@@ -5470,9 +5471,13 @@ fn merge_entry_update(data: AddressBookEntry, existing: AddressBookEntry) -> Add
     let mut host = merge_host_update(data_host, existing_host);
     let pair_singles = data_protocols.len() == 1 && existing_protocols.len() == 1;
     for p in &mut data_protocols {
+        let was = match p.renamed_from.take().filter(|n| !n.is_empty()) {
+            Some(n) => n,
+            None => p.name().to_string(),
+        };
         let old = existing_protocols
             .iter()
-            .find(|o| o.name() == p.name())
+            .find(|o| o.name() == was)
             .or(if pair_singles {
                 existing_protocols.first()
             } else {
@@ -11452,6 +11457,48 @@ mod tests {
             merged.effective(None).unwrap().hostname.as_deref(),
             Some("10.0.0.11")
         );
+    }
+
+    #[test]
+    fn renaming_a_protocol_keeps_its_secrets_with_renamed_from() {
+        let existing = entry(json!({
+            "hostname": "h",
+            "protocols": [
+                {"type": "rdp", "password": "rdp-pw"},
+                {"type": "ssh", "name": "ssh-2222", "port": 2222, "private_key": "KEY"}
+            ]
+        }));
+        let body = |renamed_from: serde_json::Value| {
+            let mut ssh = json!({"type": "ssh", "name": "ssh-alt", "port": 2222});
+            if !renamed_from.is_null() {
+                ssh["renamed_from"] = renamed_from;
+            }
+            super::prepare_entry_body(entry(json!({
+                "hostname": "h", "protocols": [{"type": "rdp"}, ssh]
+            })))
+            .unwrap()
+        };
+        // Renamed with renamed_from: the key follows it.
+        let merged = merge_entry_update(body(json!("ssh-2222")), existing.clone());
+        let ps = merged.protocols.as_ref().unwrap();
+        assert_eq!(ps[1].name(), "ssh-alt");
+        assert_eq!(ps[1].settings["private_key"], json!("KEY"));
+        assert_eq!(ps[0].settings["password"], json!("rdp-pw"));
+        // It is never stored.
+        let stored = serde_json::to_string(&merged).unwrap();
+        assert!(!stored.contains("renamed_from"), "{stored}");
+        // Without it, the new name matches nothing stored: no secret.
+        let merged = merge_entry_update(body(serde_json::Value::Null), existing);
+        assert!(merged.protocols.as_ref().unwrap()[1]
+            .settings
+            .get("private_key")
+            .is_none());
+        // A malformed one is refused like a malformed name.
+        assert!(super::prepare_entry_body(entry(json!({
+            "hostname": "h",
+            "protocols": [{"type": "ssh", "name": "a", "renamed_from": "has space"}, {"type": "rdp"}]
+        })))
+        .is_err());
     }
 
     #[test]
