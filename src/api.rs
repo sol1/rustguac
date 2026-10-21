@@ -4705,6 +4705,10 @@ fn adhoc_session_request(
     is_admin: bool,
     config: &crate::config::Config,
 ) -> Result<CreateSessionRequest, String> {
+    // One host, one protocol: there is no primary to pick from a list.
+    if entry.protocols.is_some() {
+        return Err("an ad-hoc connection is one protocol: set type, not protocols".into());
+    }
     let (width, height) = initial_session_size(
         &entry.session_type,
         entry.fullscreen_on_connect.unwrap_or(false),
@@ -9591,6 +9595,18 @@ mod tests {
             "{:?}",
             jump.err()
         );
+    }
+
+    #[test]
+    fn adhoc_refuses_a_protocols_list() {
+        let mgr = adhoc_test_manager();
+        let body = adhoc_body(json!({ "entry": { "type": "ssh" } }));
+        let multi: AddressBookEntry = serde_json::from_value(json!({
+            "hostname": "h", "protocols": [{"type": "ssh"}, {"type": "rdp"}]
+        }))
+        .unwrap();
+        let err = adhoc_session_request(multi, &body, true, mgr.config()).unwrap_err();
+        assert!(err.contains("one protocol"), "{err}");
     }
 
     #[test]

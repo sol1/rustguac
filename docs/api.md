@@ -612,7 +612,7 @@ Connect to a host that is not a saved entry (an ad-hoc connection), described wi
 }
 ```
 
-- `entry` takes the same fields as [creating an entry](#post-apiaddressbookfoldersscopefolderentries-admin), in the same form. Its name, display name and folder are not used. Legacy single jump host fields are accepted, as on entries.
+- `entry` takes the same fields as [creating an entry](#post-apiaddressbookfoldersscopefolderentries-admin), in the same form, with a single `type`: a `protocols` list is refused with `400`. Its name, display name and folder are not used. Legacy single jump host fields are accepted, as on entries.
 - `generate_keypair` (SSH): generate an ephemeral Ed25519 keypair, as with `POST /api/sessions`.
 - `width`, `height`, `screen_width`, `screen_height`, `dpi`, `keyboard_layout`: as for the entry connect endpoint above.
 - [Credential variables](credential-variables.md) (`$name` in `username`, `password`, `domain`, `private_key`) are resolved from the **caller's own** My Credentials, server side; values are never returned. A variable the caller has not set returns `412` with `{"error": "missing credential variables", "missing_variables": ["name"]}`. An API key has no credential variables, so a request from one that uses them returns `400`. Without Vault, references are not resolved.
