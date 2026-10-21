@@ -198,8 +198,8 @@ Their role, group mappings, tokens and credentials are kept. This is CLI-only on
 | `POST /api/addressbook/folders` | admin | Create folders |
 | `PUT /api/addressbook/folders/:scope/:folder` | admin | Update folder config |
 | `DELETE /api/addressbook/folders/:scope/:folder` | admin | Delete folders |
-| `POST .../entries` | admin | Create entries |
-| `PUT .../entries/:entry` | admin | Update entries |
+| `POST .../entries` | admin | Create entries. Setting `allowed_groups` / `allowed_users` needs `folders.manage_access` |
+| `PUT .../entries/:entry` | admin | Update entries. Changing `allowed_groups` / `allowed_users` needs `folders.manage_access` |
 | `DELETE .../entries/:entry` | admin | Delete entries |
 
 ### Recordings
@@ -296,6 +296,62 @@ A folder per user, for example a personal VM:
 { "allowed_groups": [], "allowed_users": ["jsmith@example.com"] }
 ```
 Only jsmith (and admins) can see it. Create it with `POST /api/addressbook/folders`, add the VM as an entry, and jsmith finds it in Connections on their first login.
+
+## Entry and protocol access
+
+Within a folder, an entry can narrow who sees and uses it, and each of its [protocols](api.md#multi-protocol-entries) can too, with the same `allowed_groups` / `allowed_users` lists as a folder `.config`, matched the same way. The folder stays the boundary: these rules only narrow it, never let anyone in who cannot open the folder. Admins, and anyone with `connections.edit`, bypass them, as they bypass folder access.
+
+- A protocol with a rule of its own (either list set, even empty) uses it. An empty rule opens that protocol to everyone who can open the folder.
+- A protocol without one follows the host's rule.
+- With no rule on the host either, everyone who can open the folder may use it, as before.
+- An entry is shown when at least one of its protocols is, and lists only those protocols.
+
+With a host rule and a protocol rule each allowing or denying a user, and the entry's other protocols following the host:
+
+| Host | Protocol | Host visible | Protocol visible |
+|------|----------|--------------|------------------|
+| Allow | Allow | yes | yes |
+| Allow | Deny | yes | no |
+| Deny | Allow | yes | yes |
+| Deny | Deny | no | no |
+
+(An entry whose only protocol is denied has nothing left to show and is hidden.)
+
+```json
+{
+  "hostname": "10.0.0.10",
+  "allowed_groups": ["sysadmins"],
+  "protocols": [
+    { "type": "rdp" },
+    { "type": "ssh", "allowed_groups": ["netops"] },
+    { "type": "web", "allowed_groups": [], "allowed_users": [] }
+  ]
+}
+```
+
+`sysadmins` see RDP and the web UI, `netops` see SSH and the web UI, and everyone else who can open the folder sees only the web UI.
+
+The rules are checked on the server wherever an entry leaves it: the folder listings, `GET /api/addressbook`, the search index, the credential variable list, the connect endpoint and `/api/connect`. A protocol a user may not use is answered as if it did not exist. The address-book change feed names only folders, and active sessions, thumbnails and recordings are visible only to the user who opened them (and admins), so none of them shows a protocol to anyone who could not open it. The rules of an entry or protocol are shown only to those with `connections.edit`, the same people who see a folder's allowed users.
+
+### Changing entry and protocol rules
+
+As with a folder, changing who can use an entry needs `folders.manage_access`:
+
+- Without it, an entry can still be created and edited. A body that leaves the rules out, or sends them as they are stored (in any order, users in any case), is saved and the rules stay as they are. One that would change them is refused with `403` and nothing is written: setting a rule on a new entry, changing or clearing the host's rule, or setting, changing or removing a protocol's own rule. Removing a protocol is allowed, since that takes access away from no one who keeps it. A rule in a `PUT ...?move=true` body is refused before anything moves.
+- In the editor, the rules are shown but cannot be changed, and saving leaves them as they are.
+
+An update (`PUT .../entries/:entry`) keeps the rules it leaves out, as it keeps secrets and `external_id`, so a sync body without them (such as the NetBox webhook's) never clears them:
+
+| In the body | On the host | On a protocol |
+|-------------|-------------|---------------|
+| field left out | kept as stored | kept as stored (from the protocol of the same name, or its `renamed_from`) |
+| a list | replaces that list | replaces that list |
+| `[]` (both lists) | clears the rule: everyone who can open the folder | an empty rule of its own: the protocol is open to everyone who can open the folder |
+| `null` | kept as stored | drops the protocol's own rule, so it follows the host's again |
+
+`POST .../entries` replaces the entry as a whole, so its rules are what the body says.
+
+Older rustguac versions do not know these rules. An entry that has any is stored in a form they cannot read, so they leave it out rather than show it to everyone (see [Migration](migration.md#multi-protocol-entries)).
 
 ## Group-to-role mappings
 

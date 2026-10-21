@@ -544,6 +544,14 @@ pub struct AddressBookEntry {
     /// entry in the single-protocol form, which has a top-level `type`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocols: Option<Vec<crate::entry_protocols::ProtocolEntry>>,
+    /// Who may use this entry, within the folder's audience: OIDC groups,
+    /// as in a folder `.config`. Unset or empty: everyone who can open the
+    /// folder. A protocol's own rule replaces it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_groups: Option<Vec<String>>,
+    /// Login emails allowed to use this entry, alongside `allowed_groups`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_users: Option<Vec<String>>,
 }
 
 impl AddressBookEntry {
@@ -777,16 +785,23 @@ pub struct EntryInfo {
     /// `AddressBookEntry::external_id`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
-    /// Name of the protocol the fields above describe: the primary.
+    /// Name of the protocol the fields above describe: the first one the
+    /// caller may use, the primary unless it is closed to them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<String>,
-    /// Every protocol, in order, each described as the fields above
-    /// describe the first (#296). Empty inside a protocol.
+    /// Every protocol the caller may use, in order, each described as the
+    /// fields above describe the first (#296). Empty inside a protocol.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub protocols: Vec<EntryInfo>,
-    /// Admins only: the fields set at this level, as stored, for the editor:
-    /// the host's own on the entry, a protocol's overrides on a protocol.
-    /// Secrets appear only as `has_<field>` flags.
+    /// Connection editors only: the access rule set at this level (the host's on the
+    /// entry, the protocol's own on a protocol).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_groups: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_users: Option<Vec<String>>,
+    /// Connection editors only: the fields set at this level, as stored, for
+    /// the editor: the host's own on the entry, a protocol's overrides on a
+    /// protocol. Secrets appear only as `has_<field>` flags.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settings: Option<serde_json::Value>,
 }
@@ -911,31 +926,38 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             external_id: e.external_id.clone(),
             protocol: None,
             protocols: Vec::new(),
+            allowed_groups: None,
+            allowed_users: None,
             settings: None,
         }
     }
 }
 
 impl EntryInfo {
-    /// An entry as a list shows it: the primary's fields, and every
-    /// protocol under `protocols`. `None` when no protocol forms a valid
-    /// entry. An admin also gets each level's own fields for the editor
-    /// (secrets as flags only).
+    /// What `who` may see of an entry: the fields of the first protocol they
+    /// may use, and every protocol they may use under `protocols`. `None`
+    /// when they may use none, so the entry is not shown at all. `who` is
+    /// `None` for a connection editor (`connections.edit`), who sees every
+    /// protocol, the access rules and each level's own fields (secrets as
+    /// flags only).
     pub fn for_viewer(
         name: &str,
         e: &AddressBookEntry,
         defaults: Option<&FolderDefaults>,
-        admin: bool,
+        who: Option<FolderSubject<'_>>,
     ) -> Option<EntryInfo> {
         use crate::entry_protocols::{editor_settings, host_settings};
+        let editor = who.is_none();
         let mut protocols: Vec<EntryInfo> = e
-            .visible_protocols()
+            .visible_protocols(who)
             .into_iter()
             .map(|(p, eff)| {
                 let mut info = EntryInfo::from((name, &eff));
                 info.apply_inherited(&eff, defaults);
                 info.protocol = Some(p.name().to_string());
-                if admin {
+                if editor {
+                    info.allowed_groups = p.allowed_groups.clone();
+                    info.allowed_users = p.allowed_users.clone();
                     info.settings = Some(editor_settings(&p.settings));
                 }
                 info
@@ -945,9 +967,13 @@ impl EntryInfo {
             return None;
         }
         let mut top = protocols[0].clone();
+        top.allowed_groups = None;
+        top.allowed_users = None;
         top.settings = None;
-        if admin {
+        if editor {
             let (host, _) = e.split();
+            top.allowed_groups = host.allowed_groups.clone();
+            top.allowed_users = host.allowed_users.clone();
             top.settings = Some(editor_settings(&host_settings(&host)));
         }
         for p in &mut protocols {
