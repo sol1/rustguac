@@ -4001,6 +4001,12 @@ pub fn session_request_from_entry(
         generate_keypair: None,
         url: entry.url,
         domain: entry.domain,
+        gateway_hostname: entry.gateway_hostname,
+        gateway_port: entry.gateway_port,
+        gateway_username: entry.gateway_username,
+        gateway_password: entry.gateway_password,
+        gateway_domain: entry.gateway_domain,
+        load_balance_info: entry.load_balance_info,
         security: entry.security,
         server_layout: entry
             .server_layout
@@ -5048,6 +5054,7 @@ fn merge_entry_update(data: AddressBookEntry, existing: AddressBookEntry) -> Add
 
     AddressBookEntry {
         password: data.password.or(existing.password),
+        gateway_password: data.gateway_password.or(existing.gateway_password),
         private_key: data.private_key.or(existing.private_key),
         container_password: data.container_password.or(existing.container_password),
         proxmox_token_secret: data.proxmox_token_secret.or(existing.proxmox_token_secret),
@@ -7374,6 +7381,12 @@ pub async fn quick_connect(
         generate_keypair: None,
         url: query.url,
         domain: None,
+        gateway_hostname: None,
+        gateway_port: None,
+        gateway_username: None,
+        gateway_password: None,
+        gateway_domain: None,
+        load_balance_info: None,
         security: None,
         server_layout: None,
         ignore_cert: None,
@@ -7651,6 +7664,12 @@ mod tests {
             generate_keypair: None,
             url: ab_entry.url,
             domain: req.domain.or(ab_entry.domain),
+            gateway_hostname: ab_entry.gateway_hostname,
+            gateway_port: ab_entry.gateway_port,
+            gateway_username: ab_entry.gateway_username,
+            gateway_password: ab_entry.gateway_password,
+            gateway_domain: ab_entry.gateway_domain,
+            load_balance_info: ab_entry.load_balance_info,
             security: ab_entry.security,
             server_layout: ab_entry.server_layout,
             ignore_cert: ab_entry.ignore_cert,
@@ -7747,6 +7766,12 @@ mod tests {
             generate_keypair: None,
             url: ab_entry.url,
             domain: ab_entry.domain,
+            gateway_hostname: ab_entry.gateway_hostname,
+            gateway_port: ab_entry.gateway_port,
+            gateway_username: ab_entry.gateway_username,
+            gateway_password: ab_entry.gateway_password,
+            gateway_domain: ab_entry.gateway_domain,
+            load_balance_info: ab_entry.load_balance_info,
             security: ab_entry.security,
             server_layout: ab_entry.server_layout,
             ignore_cert: ab_entry.ignore_cert,
@@ -7833,6 +7858,9 @@ mod tests {
             "hostname": "host.example.test", "port": 2222,
             "username": "alice", "password": "pw", "private_key": "KEY",
             "url": "https://app.example.test", "domain": "CORP",
+            "gateway_hostname": "gateway.example.test", "gateway_port": 4443,
+            "gateway_username": "gateway-user", "gateway_password": "gateway-pw",
+            "gateway_domain": "GATEWAY", "load_balance_info": "tsv://collection",
             "security": "nla", "server_layout": "en-gb-qwerty", "ignore_cert": true,
             "display_name": "Host One", "enable_drive": true, "auth_pkg": "kerberos",
             "kdc_url": "https://kdc.example.test", "prompt_credentials": false,
@@ -7886,6 +7914,8 @@ mod tests {
                         "screen_height": 1080, "dpi": 144 }),
                 json!({ "width": 800, "height": 600, "username": "bob",
                         "password": "typed", "domain": "OTHER", "banner": "hi" }),
+                json!({ "gateway_username": "attacker", "gateway_password": "override",
+                        "gateway_domain": "OTHER", "load_balance_info": "tsv://other" }),
             ] {
                 let req = || serde_json::from_value::<ConnectRequest>(prompt.clone()).unwrap();
                 let new = entry_connect_request(
@@ -8935,6 +8965,19 @@ mod tests {
             UpsertError::Rejected(status, msg) => (status, msg),
             other => panic!("expected a rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn entry_update_keeps_gateway_password_when_editor_omits_it() {
+        let existing = entry(json!({
+            "type": "rdp", "hostname": "desktop", "gateway_password": "saved-secret"
+        }));
+        let update = entry(json!({
+            "type": "rdp", "hostname": "desktop-new", "gateway_hostname": "gateway"
+        }));
+
+        let merged = merge_entry_update(update, existing);
+        assert_eq!(merged.gateway_password.as_deref(), Some("saved-secret"));
     }
 
     #[tokio::test]

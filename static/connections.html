@@ -892,6 +892,32 @@
                 <label>Domain
                     <input type="text" id="em-rdp-domain">
                 </label>
+                <div id="em-rdp-gateway-section" style="margin-top:0.6em;padding-top:0.6em;border-top:1px solid var(--border)">
+                <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-rdp-gateway-toggle">
+                    <span id="em-rdp-gateway-arrow">&#9654;</span> RD Gateway
+                </label>
+                <div id="em-rdp-gateway-fields" style="display:none">
+                <div class="field-hint" style="margin-bottom:0.5em">Optional gateway used to reach the RDP server.</div>
+                <label>Gateway hostname
+                    <input type="text" id="em-rdp-gateway-hostname" placeholder="gateway.example.com">
+                </label>
+                <label>Gateway port
+                    <input type="number" id="em-rdp-gateway-port" placeholder="443">
+                </label>
+                <label>Gateway username
+                    <input type="text" id="em-rdp-gateway-username" autocomplete="off">
+                </label>
+                <label>Gateway password
+                    <div class="pw-wrap"><input type="password" id="em-rdp-gateway-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
+                </label>
+                <label>Gateway domain
+                    <input type="text" id="em-rdp-gateway-domain">
+                </label>
+                <label>Load balance info
+                    <input type="text" id="em-rdp-load-balance-info" placeholder="tsv://MS Terminal Services Plugin.1.CollectionName">
+                </label>
+                </div>
+                </div>
                 <label>Security
                     <select id="em-rdp-security">
                         <option value="">Default</option>
@@ -4058,6 +4084,19 @@
             }
         });
 
+        // Toggle RD Gateway fields
+        document.getElementById('em-rdp-gateway-toggle').addEventListener('click', function() {
+            var fields = document.getElementById('em-rdp-gateway-fields');
+            var arrow = document.getElementById('em-rdp-gateway-arrow');
+            if (fields.style.display === 'none') {
+                fields.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                fields.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
+        });
+
         // Toggle RemoteApp fields visibility
         document.getElementById('em-remoteapp-toggle').addEventListener('click', function() {
             var fields = document.getElementById('em-remoteapp-fields');
@@ -4453,6 +4492,15 @@
             document.getElementById('em-rdp-username').value = '';
             document.getElementById('em-rdp-password').value = '';
             document.getElementById('em-rdp-domain').value = '';
+            document.getElementById('em-rdp-gateway-hostname').value = '';
+            document.getElementById('em-rdp-gateway-port').value = '';
+            document.getElementById('em-rdp-gateway-username').value = '';
+            document.getElementById('em-rdp-gateway-password').value = '';
+            document.getElementById('em-rdp-gateway-password').placeholder = '';
+            document.getElementById('em-rdp-gateway-domain').value = '';
+            document.getElementById('em-rdp-load-balance-info').value = '';
+            document.getElementById('em-rdp-gateway-fields').style.display = 'none';
+            document.getElementById('em-rdp-gateway-arrow').innerHTML = '&#9654;';
             document.getElementById('em-rdp-security').value = '';
             document.getElementById('em-rdp-layout').value = '';
             document.getElementById('em-rdp-ignore-cert').checked = false;
@@ -4614,6 +4662,18 @@
                     document.getElementById('em-rdp-port').value = entryData.port || '3389';
                     document.getElementById('em-rdp-username').value = entryData.username || '';
                     document.getElementById('em-rdp-domain').value = entryData.domain || '';
+                    document.getElementById('em-rdp-gateway-hostname').value = entryData.gateway_hostname || '';
+                    document.getElementById('em-rdp-gateway-port').value = entryData.gateway_port || '';
+                    document.getElementById('em-rdp-gateway-username').value = entryData.gateway_username || '';
+                    document.getElementById('em-rdp-gateway-domain').value = entryData.gateway_domain || '';
+                    document.getElementById('em-rdp-load-balance-info').value = entryData.load_balance_info || '';
+                    if (entryData.gateway_hostname || entryData.load_balance_info) {
+                        document.getElementById('em-rdp-gateway-fields').style.display = '';
+                        document.getElementById('em-rdp-gateway-arrow').innerHTML = '&#9660;';
+                    }
+                    var gatewayPw = document.getElementById('em-rdp-gateway-password');
+                    gatewayPw.value = '';
+                    gatewayPw.placeholder = entryData.has_gateway_password ? '(leave blank to keep existing)' : '';
                     if (entryData.security) {
                         document.getElementById('em-rdp-security').value = entryData.security;
                     }
@@ -4832,6 +4892,18 @@
                 if (pw) entry.password = pw;
                 var dom = document.getElementById('em-rdp-domain').value.trim();
                 if (dom) entry.domain = dom;
+                var gh = document.getElementById('em-rdp-gateway-hostname').value.trim();
+                if (gh) entry.gateway_hostname = gh;
+                var gp = parseInt(document.getElementById('em-rdp-gateway-port').value);
+                if (gp) entry.gateway_port = gp;
+                var gu = document.getElementById('em-rdp-gateway-username').value.trim();
+                if (gu) entry.gateway_username = gu;
+                var gpass = document.getElementById('em-rdp-gateway-password').value;
+                if (gpass) entry.gateway_password = gpass;
+                var gd = document.getElementById('em-rdp-gateway-domain').value.trim();
+                if (gd) entry.gateway_domain = gd;
+                var loadBalanceInfo = document.getElementById('em-rdp-load-balance-info').value.trim();
+                if (loadBalanceInfo) entry.load_balance_info = loadBalanceInfo;
                 var sec = document.getElementById('em-rdp-security').value;
                 if (sec) entry.security = sec;
                 var layout = document.getElementById('em-rdp-layout').value;

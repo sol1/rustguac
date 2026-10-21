@@ -127,6 +127,18 @@ pub async fn cmd_import_guacamole(
             domain: param_map
                 .get("domain")
                 .map(|s| apply_credential_maps(s, &cred_maps)),
+            gateway_hostname: param_map.get("gateway-hostname").map(|s| s.to_string()),
+            gateway_port: param_map.get("gateway-port").and_then(|s| s.parse().ok()),
+            gateway_username: param_map
+                .get("gateway-username")
+                .map(|s| apply_credential_maps(s, &cred_maps)),
+            gateway_password: param_map
+                .get("gateway-password")
+                .map(|s| apply_credential_maps(s, &cred_maps)),
+            gateway_domain: param_map
+                .get("gateway-domain")
+                .map(|s| apply_credential_maps(s, &cred_maps)),
+            load_balance_info: param_map.get("load-balance-info").map(|s| s.to_string()),
             security: param_map.get("security").map(|s| s.to_string()),
             server_layout: param_map.get("server-layout").map(|s| s.to_string()),
             ignore_cert: param_map
@@ -203,13 +215,22 @@ pub async fn cmd_import_guacamole(
         };
 
         if !cred_maps.is_empty()
-            && ["username", "password", "private-key", "domain"]
-                .iter()
-                .any(|k| {
-                    param_map.get(k).is_some_and(|v| {
-                        cred_maps.iter().any(|(from, _)| v.contains(from.as_str()))
-                    })
-                })
+            && [
+                "username",
+                "password",
+                "private-key",
+                "domain",
+                "gateway-username",
+                "gateway-password",
+                "gateway-domain",
+                "load-balance-info",
+            ]
+            .iter()
+            .any(|k| {
+                param_map
+                    .get(k)
+                    .is_some_and(|v| cred_maps.iter().any(|(from, _)| v.contains(from.as_str())))
+            })
         {
             mapped += 1;
         }
