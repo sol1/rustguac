@@ -1,5 +1,5 @@
 // #296: an entry can offer several protocols. The list shows one row per
-// host with a badge per protocol (two lines at most, the rest behind +N),
+// host with a badge for every protocol (wrapping, none hidden),
 // Connect opens the primary and its split-button menu lists every protocol;
 // the editor has a Host box and a tab per protocol, and an entry saved in
 // the old single-protocol shape comes back as one protocol.
@@ -152,31 +152,22 @@ test('the protocol menu works from the keyboard and closes on an outside click',
 });
 
 for (const [label, viewport] of [['wide', { width: 1710, height: 1112 }], ['1180px', { width: 1180, height: 820 }], ['phone', { width: 390, height: 844 }]]) {
-    test(`eight protocols stay within two lines of the Type column (${label})`, async ({ page }) => {
+    test(`eight protocols all show in the Type column (${label})`, async ({ page }) => {
         await page.setViewportSize(viewport);
         await installApi(page, { folders: folders() });
         await openAcme(page);
         const r = row(page, 'allinone');
         const cell = r.locator('.type-cell');
         const box = cell.locator('.proto-badges');
-        // The primary first and marked, a +N chip naming the rest.
+        // The primary first and marked, then every other protocol: none is
+        // hidden behind a chip, the cell wraps onto more lines instead.
         await expect(box.locator('.type-badge').first()).toHaveText('SSH');
         await expect(box.locator('.type-badge').first()).toHaveClass(/proto-primary/);
-        // Whatever does not fit in two lines is behind a +N chip naming it.
-        const more = box.locator('.proto-more');
-        const shown = await box.locator('.type-badge:visible').count();
-        if (shown < 8) {
-            await expect(more).toBeVisible();
-            await expect(more).toHaveText(`+${8 - shown}`);
-            await expect(more).toHaveAttribute('title', /^Also: /);
-        } else {
-            await expect(more).toBeHidden();
-        }
-        if (label !== 'wide') expect(shown, 'a narrow column shows the first few and +N').toBeLessThan(8);
-        // At most two lines: every visible badge and the chip sit in the box.
+        await expect(box.locator('.type-badge:visible')).toHaveCount(8);
+        await expect(box.locator('.type-badge').nth(1)).toHaveText('ssh-2222');
+        // Every badge sits inside the box, and the box inside the cell.
         const b = await box.boundingBox();
-        expect(b.height, "two lines of 20px badges and a 3px gap").toBeLessThanOrEqual(43.5);
-        const kids = await box.evaluate(el => Array.from(el.children).filter(c => !c.hidden)
+        const kids = await box.evaluate(el => Array.from(el.children)
             .map(c => { const k = c.getBoundingClientRect(); return [k.top, k.bottom, k.right]; }));
         const p = await box.evaluate(el => { const k = el.getBoundingClientRect(); return [k.top, k.bottom, k.right]; });
         for (const [t, bot, right] of kids) {
@@ -184,15 +175,14 @@ for (const [label, viewport] of [['wide', { width: 1710, height: 1112 }], ['1180
             expect(bot).toBeLessThanOrEqual(p[1] + 0.5);
             expect(right).toBeLessThanOrEqual(p[2] + 0.5);
         }
+        // More than one line of badges: the row grows rather than hiding any.
+        const tops = new Set(kids.map(([t]) => Math.round(t)));
+        expect(tops.size, 'eight badges wrap').toBeGreaterThan(1);
         // Nothing spills into the Host column.
         const typeRight = (await cell.boundingBox());
         const host = await cell.locator('xpath=following-sibling::td[1]').boundingBox();
         expect(b.x + b.width).toBeLessThanOrEqual(host.x + 0.5);
         expect(typeRight.x + typeRight.width).toBeLessThanOrEqual(host.x + 0.5);
-        // The badges never make the row taller than a single-protocol row
-        // (at narrow widths the name and host wrap anyway).
-        const plain = await row(page, 'web01').boundingBox();
-        expect((await r.boundingBox()).height).toBeLessThanOrEqual(Math.max(64, plain.height) + 1);
         // The menu lists all eight, inside the viewport.
         await r.locator('[data-proto-toggle]').click();
         const menu = r.locator('.proto-menu-list');

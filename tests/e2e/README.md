@@ -38,7 +38,7 @@ One spec per change, named after the branch that introduced it:
 | `zero-click-fullscreen` | #257: same-tab iframe sized from the measured viewport |
 | `connections-adhoc` | #295: Connect to a host opens the entry editor in ad-hoc mode (no name, Connect for Save, entry-only options hidden for non-admins), offers the caller's credential variable names, posts to `/api/addressbook/adhoc/connect` and never `/api/sessions`; ephemeral keypair; missing variable named; admin Save as entry keeps `$var` references; works without Vault and from `#adhoc`; no button for operators |
 | `recordings-mp4` | #241: the mp4 button converts, shows progress and downloads; refused while live; hidden without server support |
-| `multi-protocol-entries` | #296: one row per host with a badge per protocol, Connect for the primary and a menu for the rest; Host box and protocol tabs; an old single-protocol entry saves as one protocol |
+| `multi-protocol-entries` | #296: one row per host with a badge for every protocol (wrapping, none hidden), Connect for the primary and a menu for the rest; Host box and protocol tabs; an old single-protocol entry saves as one protocol |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.
