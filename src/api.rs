@@ -987,6 +987,9 @@ pub async fn list_recordings(
                 if let Some(ref t) = sidecar.session_type {
                     rec["session_type"] = json!(t);
                 }
+                if let Some(ref p) = sidecar.protocol {
+                    rec["protocol"] = json!(p);
+                }
             }
             if let Some(ref conv) = mp4 {
                 rec["mp4"] = mp4_state_json(&conv.state(&name))["state"].clone();
@@ -2631,6 +2634,16 @@ pub async fn get_docs() -> impl IntoResponse {
     Json(json!(sections))
 }
 
+/// Who is asking, for the entry and protocol access rules (#296): `None`
+/// for an admin, who may use every protocol.
+fn entry_viewer(id: &AuthIdentity) -> Option<crate::vault::FolderSubject<'_>> {
+    if id.has_role("admin") {
+        None
+    } else {
+        Some(id.folder_subject())
+    }
+}
+
 /// Helper: check if the identity has group access to a folder, honouring
 /// `inherit_from_parent` on the folder's config (a subfolder may inherit
 /// access from any ancestor whose `allowed_groups` matches the caller's
@@ -3594,8 +3607,15 @@ pub async fn ab_list_all(
         let mut entries = Vec::new();
         for name in &entry_names {
             if let Ok(entry) = vault.get_entry(&folder.scope, &folder.name, name).await {
-                let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
-                info.apply_inherited(&entry, defaults.as_ref());
+                // Only the protocols the caller may use; none hides the entry.
+                let Some(info) = crate::vault::EntryInfo::for_viewer(
+                    name,
+                    &entry,
+                    defaults.as_ref(),
+                    entry_viewer(id),
+                ) else {
+                    continue;
+                };
                 entries.push(info);
             }
         }
@@ -3700,8 +3720,15 @@ pub async fn ab_search_index(
             .filter(|s| !s.is_empty());
         for name in &names {
             if let Ok(entry) = vault.get_entry(&scope, &path, name).await {
-                let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
-                info.apply_inherited(&entry, defaults.as_ref());
+                // Only the protocols the caller may use; none hides the entry.
+                let Some(info) = crate::vault::EntryInfo::for_viewer(
+                    name,
+                    &entry,
+                    defaults.as_ref(),
+                    entry_viewer(id),
+                ) else {
+                    continue;
+                };
                 emitted.push(json!({
                     "scope": scope,
                     "folder_path": path,
@@ -3757,8 +3784,15 @@ pub async fn ab_list_entries(
     let mut entries = Vec::new();
     for name in &entry_names {
         if let Ok(entry) = vault.get_entry(&scope, &folder, name).await {
-            let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
-            info.apply_inherited(&entry, defaults.as_ref());
+            // Only the protocols the caller may use; none hides the entry.
+            let Some(info) = crate::vault::EntryInfo::for_viewer(
+                name,
+                &entry,
+                defaults.as_ref(),
+                entry_viewer(id),
+            ) else {
+                continue;
+            };
             entries.push(info);
         }
     }
@@ -3794,6 +3828,10 @@ pub struct ConnectRequest {
     pub password: Option<String>,
     #[serde(default)]
     pub domain: Option<String>,
+    /// Which of the entry's protocols to connect with, by name (#296).
+    /// Default: the primary, or the first one the caller may use.
+    #[serde(default)]
+    pub protocol: Option<String>,
 }
 
 /// POST /api/ssh/probe-host-key — Probe an SSH server to retrieve its host key.
@@ -4029,6 +4067,7 @@ pub fn session_request_from_entry(
         record_typescript: entry.record_typescript,
         address_book_entry,
         address_book_folder,
+        address_book_protocol: None,
         entry_display_name,
         max_recordings: entry.max_recordings,
         login_script: entry.login_script,
@@ -4162,6 +4201,24 @@ pub async fn ab_connect_entry(
         }
     };
 
+    // The protocol to connect with, resolved to a plain single-type entry.
+    // One the caller may not use is reported as missing, like one that does
+    // not exist, so it does not show.
+    let Some((protocol_name, ab_entry)) =
+        ab_entry.pick_protocol(req.protocol.as_deref(), entry_viewer(&id))
+    else {
+        let msg = if req
+            .protocol
+            .as_deref()
+            .is_some_and(|p| !p.trim().is_empty())
+        {
+            "protocol not found"
+        } else {
+            "entry not found"
+        };
+        return (StatusCode::NOT_FOUND, Json(json!({"error": msg}))).into_response();
+    };
+
     let ab_entry = lend_folder_defaults(vault.as_ref(), &scope, &folder, &entry, ab_entry).await;
 
     // Resolve credential variable references ($domain_user, $domain_password, etc.)
@@ -4201,7 +4258,10 @@ pub async fn ab_connect_entry(
 
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
     let create_req = match entry_connect_request(ab_entry, req, &ab_entry_key, &folder) {
-        Ok(r) => r,
+        Ok(mut r) => {
+            r.address_book_protocol = Some(protocol_name.clone());
+            r
+        }
         Err(msg) => {
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
         }
@@ -4216,6 +4276,7 @@ pub async fn ab_connect_entry(
         client_ip = %client_ip_addr,
         folder = %folder,
         entry = %entry,
+        protocol = %protocol_name,
         scope = %scope,
         "Address book connect requested"
     );
@@ -4346,6 +4407,10 @@ fn adhoc_session_request(
     is_admin: bool,
     config: &crate::config::Config,
 ) -> Result<CreateSessionRequest, String> {
+    // One host, one protocol: there is no primary to pick from a list.
+    if entry.protocols.is_some() {
+        return Err("an ad-hoc connection is one protocol: set type, not protocols".into());
+    }
     let (width, height) = initial_session_size(
         &entry.session_type,
         entry.fullscreen_on_connect.unwrap_or(false),
@@ -4834,6 +4899,73 @@ pub async fn ab_delete_folder(
     }
 }
 
+/// Check an entry body from the API and tidy it for storage: either form
+/// (a top-level `type`, or `protocols`), access rules tidied like a
+/// folder's, written in the old flat form when that loses nothing.
+fn prepare_entry_body(mut e: AddressBookEntry) -> Result<AddressBookEntry, String> {
+    e.check_shape().map_err(|e| e.to_string())?;
+    fn tidy(
+        groups: &mut Option<Vec<String>>,
+        users: &mut Option<Vec<String>>,
+    ) -> Result<(), String> {
+        if let Some(g) = groups.as_mut() {
+            let mut out: Vec<String> = Vec::new();
+            for x in g.drain(..) {
+                let x = x.trim().to_string();
+                if !x.is_empty() && !out.contains(&x) {
+                    out.push(x);
+                }
+            }
+            *g = out;
+        }
+        if let Some(u) = users.take() {
+            *users = Some(normalize_allowed_users(u)?);
+        }
+        Ok(())
+    }
+    tidy(&mut e.allowed_groups, &mut e.allowed_users)?;
+    // An empty host rule means no rule: store it as absent.
+    if e.allowed_groups.as_ref().is_some_and(Vec::is_empty)
+        && e.allowed_users.as_ref().is_none_or(Vec::is_empty)
+    {
+        e.allowed_groups = None;
+    }
+    if e.allowed_users.as_ref().is_some_and(Vec::is_empty) && e.allowed_groups.is_none() {
+        e.allowed_users = None;
+    }
+    // A flat body with an access rule goes to the list form, which older
+    // instances cannot read: in the flat form they would read the entry and
+    // ignore the rule, showing it to the whole folder.
+    if !e.has_protocol_list() && (e.allowed_groups.is_some() || e.allowed_users.is_some()) {
+        let (mut host, protocols) = e.split();
+        host.protocols = Some(protocols);
+        e = host;
+    }
+    if let Some(protocols) = e.protocols.as_mut() {
+        for p in protocols.iter_mut() {
+            tidy(&mut p.allowed_groups, &mut p.allowed_users)?;
+            if p.name.as_deref() == Some(p.session_type.as_str()) {
+                p.name = None;
+            }
+        }
+    }
+    Ok(e.compact())
+}
+
+/// Audit details of an entry write: headline only, the protocol types.
+/// `moved_from` is `Some` for an update (`Some(None)`: not moved).
+fn entry_audit_details(e: &AddressBookEntry, moved_from: Option<Option<&MovedFrom>>) -> String {
+    let types = e.protocol_types();
+    let mut d = json!({ "type": types.first().cloned().unwrap_or_default() });
+    if types.len() > 1 {
+        d["protocols"] = json!(types);
+    }
+    if let Some(from) = moved_from {
+        d["moved_from"] = json!(from);
+    }
+    d.to_string()
+}
+
 #[derive(Deserialize)]
 pub struct CreateEntryRequest {
     pub name: String,
@@ -4864,14 +4996,14 @@ pub async fn ab_create_entry(
         }
     };
 
-    let session_type = req.entry.session_type.clone();
-    match vault
-        .put_entry(&scope, &folder, &req.name, &req.entry)
-        .await
-    {
+    let entry = match prepare_entry_body(req.entry) {
+        Ok(e) => e,
+        Err(msg) => return ab_error(StatusCode::BAD_REQUEST, msg),
+    };
+    let details = entry_audit_details(&entry, None);
+    match vault.put_entry(&scope, &folder, &req.name, &entry).await {
         Ok(()) => {
             let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-            let details = json!({ "type": session_type }).to_string();
             log_ab_event(
                 &database,
                 &admin_email,
@@ -5014,7 +5146,45 @@ impl EntryStore for VaultBackends {
 /// webhook (which has none) can send them back. Jump host credentials are
 /// kept per hop by index; `external_id` is kept the same way so an edit
 /// from the form does not cut a synced entry loose from its source.
+///
+/// Both sides are taken as a host and its protocols (#296), so an old flat
+/// body and an old flat stored entry each count as one protocol. The host's
+/// secrets are kept as above, and each protocol's are kept from the stored
+/// protocol of the same name, or of the name in its `renamed_from` when it
+/// is being renamed; when both sides have exactly one protocol the
+/// two are paired whatever their names, so an old flat body that changes
+/// an entry's type keeps its secrets as it always did. The request's list
+/// of protocols is the entry's list. The result is written in the old flat
+/// form whenever that loses nothing (`AddressBookEntry::compact`).
 fn merge_entry_update(data: AddressBookEntry, existing: AddressBookEntry) -> AddressBookEntry {
+    let (data_host, mut data_protocols) = data.split();
+    let (existing_host, existing_protocols) = existing.split();
+    let mut host = merge_host_update(data_host, existing_host);
+    let pair_singles = data_protocols.len() == 1 && existing_protocols.len() == 1;
+    for p in &mut data_protocols {
+        let was = match p.renamed_from.take().filter(|n| !n.is_empty()) {
+            Some(n) => n,
+            None => p.name().to_string(),
+        };
+        let old = existing_protocols
+            .iter()
+            .find(|o| o.name() == was)
+            .or(if pair_singles {
+                existing_protocols.first()
+            } else {
+                None
+            });
+        if let Some(old) = old {
+            crate::entry_protocols::keep_secrets(&mut p.settings, &old.settings);
+        }
+    }
+    host.protocols = Some(data_protocols);
+    host.session_type = String::new();
+    host.compact()
+}
+
+/// `merge_entry_update` for the host's own fields.
+fn merge_host_update(data: AddressBookEntry, existing: AddressBookEntry) -> AddressBookEntry {
     let merged_jump_hosts = if let Some(ref new_hops) = data.jump_hosts {
         let old_hops = existing.jump_hosts.as_deref().unwrap_or(&[]);
         let merged: Vec<_> = new_hops
@@ -5270,6 +5440,10 @@ pub async fn ab_update_entry(
         }
     };
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+    let data = match prepare_entry_body(data) {
+        Ok(e) => e,
+        Err(msg) => return ab_error(StatusCode::BAD_REQUEST, msg),
+    };
     let external_id = data.external_id.clone();
 
     let result = upsert_entry(vault.as_ref(), &scope, &folder, &entry, data, query.move_).await;
@@ -5315,11 +5489,7 @@ pub async fn ab_update_entry(
 
     let response = match result {
         Ok(outcome) => {
-            let details = json!({
-                "type": outcome.entry.session_type,
-                "moved_from": outcome.moved_from,
-            })
-            .to_string();
+            let details = entry_audit_details(&outcome.entry, Some(outcome.moved_from.as_ref()));
             log_ab_event(
                 &database,
                 &admin_email,
@@ -6752,7 +6922,15 @@ impl FolderSource for VaultFolderSource<'_> {
             .unwrap_or_default();
         for entry_name in &entries {
             if let Ok(entry) = self.vault.get_entry(scope, path, entry_name).await {
-                out.extend(crate::vault::entry_credential_variables(&entry));
+                // Every protocol the caller may use (#296), each resolved
+                // against the host it inherits from.
+                for (_, eff) in entry.visible_protocols(entry_viewer(self.id)) {
+                    for var in crate::vault::entry_credential_variables(&eff) {
+                        if !out.contains(&var) {
+                            out.push(var);
+                        }
+                    }
+                }
             }
         }
         out
@@ -7246,6 +7424,21 @@ pub async fn quick_connect(
             }
         };
 
+        // In entry mode `protocol` picks one of the entry's protocols by
+        // name (or type); without it the primary is used, as links made
+        // before multi-protocol entries expect.
+        let requested = query.protocol.as_deref().filter(|p| !p.trim().is_empty());
+        let Some((protocol_name, ab_entry)) = ab_entry.pick_protocol(requested, entry_viewer(&id))
+        else {
+            return quick_connect_error(
+                StatusCode::NOT_FOUND,
+                &match requested {
+                    Some(p) => format!("Entry '{}' has no protocol '{}'.", entry, p),
+                    None => format!("Entry '{}' not found in {}/{}.", entry, scope, folder),
+                },
+            );
+        };
+
         // Same folder defaults as the Connections connect endpoint, so an
         // entry that works from the page works from a link too.
         let ab_entry = lend_folder_defaults(vault.as_ref(), scope, folder, entry, ab_entry).await;
@@ -7295,6 +7488,7 @@ pub async fn quick_connect(
                 scope,
                 folder,
                 entry,
+                &protocol_name,
                 &ab_entry.session_type,
                 ab_entry.username.as_deref(),
                 ab_entry.domain.as_deref(),
@@ -7314,7 +7508,10 @@ pub async fn quick_connect(
         }
 
         let create_req = match quick_connect_entry_request(ab_entry, &query, scope, folder, entry) {
-            Ok(r) => r,
+            Ok(mut r) => {
+                r.address_book_protocol = Some(protocol_name.clone());
+                r
+            }
             Err(msg) => return quick_connect_error(StatusCode::BAD_REQUEST, &msg),
         };
 
@@ -7324,6 +7521,7 @@ pub async fn quick_connect(
             scope = %scope,
             folder = %folder,
             entry = %entry,
+            protocol = %protocol_name,
             "Quick connect (address book)"
         );
 
@@ -7399,6 +7597,7 @@ pub async fn quick_connect(
         record_typescript: None,
         address_book_entry: None,
         address_book_folder: None,
+        address_book_protocol: None,
         entry_display_name: None,
         max_recordings: None,
         login_script: None,
@@ -7477,10 +7676,12 @@ fn quick_connect_entry_request(
 }
 
 /// Return an inline HTML credential form for quick-connect when prompting is needed.
+#[allow(clippy::too_many_arguments)]
 fn quick_connect_credential_form(
     scope: &str,
     folder: &str,
     entry: &str,
+    protocol: &str,
     session_type: &str,
     username: Option<&str>,
     domain: Option<&str>,
@@ -7521,7 +7722,7 @@ button:disabled{{opacity:.6;cursor:wait}}
 <h2>{title}</h2>
 <div class="sub">{session_type_upper} connection</div>
 <form id="cred-form" autocomplete="on"
-  data-scope="{scope}" data-folder="{folder}" data-entry="{entry}">
+  data-scope="{scope}" data-folder="{folder}" data-entry="{entry}" data-protocol="{protocol}">
 <label for="username">Username</label>
 <input id="username" name="username" type="text" value="{user_val}" autocomplete="username" autofocus>
 <label for="password">Password</label>
@@ -7551,6 +7752,7 @@ document.getElementById('cred-form').addEventListener('submit', async function(e
     username: document.getElementById('username').value || undefined,
     password: document.getElementById('password').value || undefined,
     domain: document.getElementById('domain').value || undefined,
+    protocol: form.dataset.protocol || undefined,
     width: window.innerWidth,
     height: window.innerHeight,
     dpi: Math.round(window.devicePixelRatio * 96) || 96,
@@ -7587,6 +7789,7 @@ document.getElementById('cred-form').addEventListener('submit', async function(e
         scope = html_escape(scope),
         folder = html_escape(folder),
         entry = html_escape(entry),
+        protocol = html_escape(protocol),
         user_val = user_val,
         domain_val = domain_val,
     );
@@ -7676,6 +7879,7 @@ mod tests {
             record_typescript: ab_entry.record_typescript,
             address_book_entry: Some(ab_entry_key.clone()),
             address_book_folder: Some(folder.to_string()),
+            address_book_protocol: None,
             entry_display_name: ab_entry.display_name.clone(),
             max_recordings: ab_entry.max_recordings,
             login_script: ab_entry.login_script,
@@ -7772,6 +7976,7 @@ mod tests {
             record_typescript: ab_entry.record_typescript,
             address_book_entry: Some(ab_entry_key),
             address_book_folder: Some(folder.to_string()),
+            address_book_protocol: None,
             entry_display_name: ab_entry.display_name.clone(),
             max_recordings: ab_entry.max_recordings,
             login_script: ab_entry.login_script,
@@ -8298,6 +8503,18 @@ mod tests {
             "{:?}",
             jump.err()
         );
+    }
+
+    #[test]
+    fn adhoc_refuses_a_protocols_list() {
+        let mgr = adhoc_test_manager();
+        let body = adhoc_body(json!({ "entry": { "type": "ssh" } }));
+        let multi: AddressBookEntry = serde_json::from_value(json!({
+            "hostname": "h", "protocols": [{"type": "ssh"}, {"type": "rdp"}]
+        }))
+        .unwrap();
+        let err = adhoc_session_request(multi, &body, true, mgr.config()).unwrap_err();
+        assert!(err.contains("one protocol"), "{err}");
     }
 
     #[test]
@@ -9996,5 +10213,319 @@ mod tests {
             .map(|i| format!("u{i}@example.com"))
             .collect();
         assert!(super::normalize_allowed_users(many).is_err());
+    }
+
+    // ── Multi-protocol entries (#296): the old flat body still works. ──
+
+    /// Exactly what the NetBox webhook template in docs/netbox.md (before
+    /// #296) renders for a device with no custom fields set.
+    fn netbox_flat_body() -> serde_json::Value {
+        json!({
+            "type": "ssh",
+            "hostname": "10.0.0.9",
+            "port": 22,
+            "display_name": "fw01 (DC1)",
+            "prompt_credentials": true,
+            "external_id": "netbox:device:1"
+        })
+    }
+
+    #[tokio::test]
+    async fn old_netbox_body_upserts_moves_keeps_secrets_and_connects_as_before() {
+        let store = FakeStore::with(&[("tenant-a", "fw01", fw01_stored())]);
+        let body = super::prepare_entry_body(entry(netbox_flat_body())).unwrap();
+        assert!(
+            body.protocols.is_none(),
+            "an old body stays in the old form"
+        );
+        let out = upsert_entry(&store, "shared", "tenant-b", "fw01", body, true)
+            .await
+            .unwrap();
+        assert_eq!(out.moved_from, Some(from("tenant-a", "fw01")));
+        assert_eq!(store.keys(), ["tenant-b/fw01"]);
+        let stored = store.stored("tenant-b", "fw01").unwrap();
+        // Stored exactly as before #296: flat, no protocols list.
+        let v = serde_json::to_value(&stored).unwrap();
+        assert_eq!(v["type"], json!("ssh"));
+        assert!(v.get("protocols").is_none());
+        assert_eq!(stored.hostname.as_deref(), Some("10.0.0.9"));
+        assert_eq!(stored.prompt_credentials, Some(true));
+        assert_eq!(stored.password.as_deref(), Some("$tenant_a_password"));
+        assert_eq!(stored.private_key.as_deref(), Some("-----BEGIN KEY-----"));
+        assert_eq!(stored.external_id.as_deref(), Some("netbox:device:1"));
+        // The body has no username or jump hosts, so, as before, they go.
+        assert_eq!(stored.username, None);
+        // And it connects as the flat entry always did.
+        let (name, eff) = stored.pick_protocol(None, None).unwrap();
+        assert_eq!(name, "ssh");
+        assert_eq!(
+            serde_json::to_value(&eff).unwrap(),
+            serde_json::to_value(&stored).unwrap()
+        );
+        // The steady state: a second sync is an update in place.
+        let again = upsert_entry(
+            &store,
+            "shared",
+            "tenant-b",
+            "fw01",
+            super::prepare_entry_body(entry(netbox_flat_body())).unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(again.moved_from, None);
+        assert_eq!(
+            store
+                .stored("tenant-b", "fw01")
+                .unwrap()
+                .password
+                .as_deref(),
+            Some("$tenant_a_password")
+        );
+    }
+
+    #[test]
+    fn new_netbox_template_without_the_new_fields_stores_what_it_did() {
+        // The multi-protocol template in docs/netbox.md, rendered for a
+        // device whose remote_protocols / remote_ports are unset.
+        let e = super::prepare_entry_body(entry(json!({
+            "hostname": "10.0.0.9",
+            "display_name": "fw01 (DC1)",
+            "prompt_credentials": true,
+            "external_id": "netbox:device:1",
+            "protocols": [{"type": "ssh"}]
+        })))
+        .unwrap();
+        let v = serde_json::to_value(&e).unwrap();
+        assert!(v.get("protocols").is_none(), "old form: {v}");
+        assert_eq!(v["type"], json!("ssh"));
+        assert_eq!(v["prompt_credentials"], json!(true));
+        // The old template stored port 22; this one leaves it to the
+        // session default, which is 22.
+        assert_eq!(e.port, None);
+        // And with extra protocols it lists them, primary first.
+        let e = super::prepare_entry_body(entry(json!({
+            "hostname": "10.0.0.9", "display_name": "fw01 (DC1)", "prompt_credentials": true,
+            "external_id": "netbox:device:1",
+            "protocols": [{"type": "rdp"}, {"type": "ssh", "port": 2222},
+                          {"type": "web", "url": "https://10.0.0.9:8443/"}]
+        })))
+        .unwrap();
+        assert_eq!(e.protocol_types(), ["rdp", "ssh", "web"]);
+        let (_, ssh) = e.pick_protocol(Some("ssh"), None).unwrap();
+        assert_eq!((ssh.port, ssh.prompt_credentials), (Some(2222), Some(true)));
+    }
+
+    #[test]
+    fn an_old_body_that_changes_the_type_keeps_the_secrets_as_it_did() {
+        let merged = merge_entry_update(
+            entry(json!({"type": "rdp", "hostname": "h", "port": 3389})),
+            entry(json!({"type": "ssh", "hostname": "h", "password": "pw"})),
+        );
+        assert_eq!(merged.session_type, "rdp");
+        assert_eq!(merged.password.as_deref(), Some("pw"));
+        assert!(merged.protocols.is_none());
+    }
+
+    #[test]
+    fn multi_protocol_update_keeps_each_protocols_secrets_by_name() {
+        let existing = entry(json!({
+            "hostname": "10.0.0.10", "password": "host-pw", "external_id": "netbox:device:4",
+            "protocols": [
+                {"type": "rdp", "password": "rdp-pw"},
+                {"type": "ssh", "name": "ssh-2222", "port": 2222, "private_key": "KEY"}
+            ]
+        }));
+        // The editor sends no secrets, and has reordered the protocols and
+        // added one.
+        let data = super::prepare_entry_body(entry(json!({
+            "hostname": "10.0.0.11",
+            "protocols": [
+                {"type": "ssh", "name": "ssh-2222", "port": 2222, "username": "admin"},
+                {"type": "rdp"},
+                {"type": "vnc"}
+            ]
+        })))
+        .unwrap();
+        let merged = merge_entry_update(data, existing);
+        assert_eq!(merged.password.as_deref(), Some("host-pw"));
+        assert_eq!(merged.external_id.as_deref(), Some("netbox:device:4"));
+        let ps = merged.protocols.as_ref().unwrap();
+        assert_eq!(ps[0].name(), "ssh-2222");
+        assert_eq!(ps[0].settings["private_key"], json!("KEY"));
+        assert_eq!(ps[1].settings["password"], json!("rdp-pw"));
+        assert!(ps[2].settings.get("password").is_none());
+        // Effective credentials: own, then the host's.
+        assert_eq!(
+            merged.effective(Some("vnc")).unwrap().password.as_deref(),
+            Some("host-pw")
+        );
+        assert_eq!(
+            merged.effective(None).unwrap().hostname.as_deref(),
+            Some("10.0.0.11")
+        );
+    }
+
+    #[test]
+    fn renaming_a_protocol_keeps_its_secrets_with_renamed_from() {
+        let existing = entry(json!({
+            "hostname": "h",
+            "protocols": [
+                {"type": "rdp", "password": "rdp-pw"},
+                {"type": "ssh", "name": "ssh-2222", "port": 2222, "private_key": "KEY"}
+            ]
+        }));
+        let body = |renamed_from: serde_json::Value| {
+            let mut ssh = json!({"type": "ssh", "name": "ssh-alt", "port": 2222});
+            if !renamed_from.is_null() {
+                ssh["renamed_from"] = renamed_from;
+            }
+            super::prepare_entry_body(entry(json!({
+                "hostname": "h", "protocols": [{"type": "rdp"}, ssh]
+            })))
+            .unwrap()
+        };
+        // Renamed with renamed_from: the key follows it.
+        let merged = merge_entry_update(body(json!("ssh-2222")), existing.clone());
+        let ps = merged.protocols.as_ref().unwrap();
+        assert_eq!(ps[1].name(), "ssh-alt");
+        assert_eq!(ps[1].settings["private_key"], json!("KEY"));
+        assert_eq!(ps[0].settings["password"], json!("rdp-pw"));
+        // It is never stored.
+        let stored = serde_json::to_string(&merged).unwrap();
+        assert!(!stored.contains("renamed_from"), "{stored}");
+        // Without it, the new name matches nothing stored: no secret.
+        let merged = merge_entry_update(body(serde_json::Value::Null), existing);
+        assert!(merged.protocols.as_ref().unwrap()[1]
+            .settings
+            .get("private_key")
+            .is_none());
+        // A malformed one is refused like a malformed name.
+        assert!(super::prepare_entry_body(entry(json!({
+            "hostname": "h",
+            "protocols": [{"type": "ssh", "name": "a", "renamed_from": "has space"}, {"type": "rdp"}]
+        })))
+        .is_err());
+    }
+
+    #[test]
+    fn a_new_single_protocol_body_is_stored_in_the_old_form() {
+        let e = super::prepare_entry_body(entry(json!({
+            "hostname": "h", "display_name": "d",
+            "protocols": [{"type": "ssh", "name": "ssh", "port": 22, "username": "u"}]
+        })))
+        .unwrap();
+        assert!(e.protocols.is_none());
+        assert_eq!(e.session_type, "ssh");
+        // With an access rule it cannot be: an older instance would ignore it.
+        let e = super::prepare_entry_body(entry(json!({
+            "hostname": "h", "allowed_groups": [" ops ", "ops", ""],
+            "protocols": [{"type": "ssh"}]
+        })))
+        .unwrap();
+        assert!(e.protocols.is_some());
+        assert_eq!(e.allowed_groups.as_deref(), Some(&["ops".to_string()][..]));
+        // So must a flat body with one, as the NetBox webhook or a script
+        // would send it: an older instance reading the flat form would
+        // ignore the rule.
+        let e = super::prepare_entry_body(entry(json!({
+            "type": "ssh", "hostname": "h", "port": 22, "password": "pw",
+            "allowed_users": ["alice@example.com"]
+        })))
+        .unwrap();
+        assert!(e.protocols.is_some(), "stored in the list form");
+        assert!(e.session_type.is_empty());
+        assert_eq!(
+            e.allowed_users.as_deref(),
+            Some(&["alice@example.com".to_string()][..])
+        );
+        let (name, eff) = e.pick_protocol(None, None).unwrap();
+        assert_eq!((name.as_str(), eff.port), ("ssh", Some(22)));
+        assert_eq!(eff.password.as_deref(), Some("pw"));
+        // Without a rule, a flat body stays flat.
+        let e = super::prepare_entry_body(entry(json!({"type": "ssh", "hostname": "h"}))).unwrap();
+        assert!(e.protocols.is_none());
+        assert!(super::prepare_entry_body(entry(json!({"hostname": "h"}))).is_err());
+        assert!(super::prepare_entry_body(entry(json!({
+            "protocols": [{"type": "ssh", "allowed_users": ["has space@x"]}]
+        })))
+        .is_err());
+    }
+
+    #[test]
+    fn listing_shows_only_the_protocols_a_user_may_use_and_no_secrets() {
+        let e = entry(json!({
+            "hostname": "10.0.0.10", "username": "Administrator", "password": "host-pw",
+            "allowed_groups": ["ops"],
+            "protocols": [
+                {"type": "rdp", "password": "rdp-pw"},
+                {"type": "ssh", "username": "admin", "allowed_groups": ["netops"]}
+            ]
+        }));
+        let ops = vec!["ops".to_string()];
+        let netops = vec!["netops".to_string()];
+        let none: Vec<String> = vec![];
+        let as_user = |groups: &[String]| {
+            crate::vault::EntryInfo::for_viewer(
+                "srv",
+                &e,
+                None,
+                Some(crate::vault::FolderSubject {
+                    email: Some("u@example.com"),
+                    groups,
+                }),
+            )
+        };
+        let info = as_user(&ops).unwrap();
+        assert_eq!(info.session_type, "rdp");
+        assert_eq!(info.protocol.as_deref(), Some("rdp"));
+        assert_eq!(info.protocols.len(), 1);
+        let text = serde_json::to_string(&info).unwrap();
+        assert!(!text.contains("pw"), "{text}");
+        assert!(!text.contains("allowed_groups"), "rules are for admins");
+        assert!(!text.contains("settings"));
+        // netops reaches only SSH, so that is what the entry shows as.
+        let info = as_user(&netops).unwrap();
+        assert_eq!(info.session_type, "ssh");
+        assert_eq!(info.username.as_deref(), Some("admin"));
+        assert_eq!(info.protocols.len(), 1);
+        assert!(as_user(&none).is_none(), "no protocol: no entry");
+        // An admin sees both, the rules, and each level's own fields.
+        let admin = crate::vault::EntryInfo::for_viewer("srv", &e, None, None).unwrap();
+        assert_eq!(admin.protocols.len(), 2);
+        let text = serde_json::to_string(&admin).unwrap();
+        assert!(!text.contains("pw\""), "{text}");
+        assert_eq!(admin.allowed_groups.as_deref(), Some(&ops[..]));
+        assert_eq!(
+            admin.protocols[1].allowed_groups.as_deref(),
+            Some(&netops[..])
+        );
+        assert_eq!(
+            admin.settings.as_ref().unwrap()["has_password"],
+            json!(true)
+        );
+        assert_eq!(
+            admin.protocols[0].settings.as_ref().unwrap()["has_password"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn a_flat_entry_lists_as_before_plus_its_one_protocol() {
+        let e = fw01_stored();
+        let before = serde_json::to_value(crate::vault::EntryInfo::from(("fw01", &e))).unwrap();
+        let who = crate::vault::FolderSubject {
+            email: Some("u@example.com"),
+            groups: &[],
+        };
+        let now = serde_json::to_value(
+            crate::vault::EntryInfo::for_viewer("fw01", &e, None, Some(who)).unwrap(),
+        )
+        .unwrap();
+        for (k, v) in before.as_object().unwrap() {
+            assert_eq!(&now[k], v, "{k} unchanged");
+        }
+        assert_eq!(now["protocol"], json!("ssh"));
+        assert_eq!(now["protocols"].as_array().unwrap().len(), 1);
     }
 }

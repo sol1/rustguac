@@ -4,6 +4,7 @@ mod browser;
 mod config;
 mod db;
 mod drive;
+mod entry_protocols;
 mod guacd;
 mod import;
 mod migrate;

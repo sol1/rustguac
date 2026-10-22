@@ -24,7 +24,7 @@ Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Cr
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `protocol` | string | `ssh`, `rdp`, `vnc`, or `web` (default: ssh) |
+| `protocol` | string | Ad-hoc mode: `ssh`, `rdp`, `vnc`, or `web` (default: ssh). Connections mode: which of the entry's [protocols](#multi-protocol-entries) to open, by name (falling back to type); default the primary |
 | `hostname` | string | Target hostname or IP |
 | `port` | integer | Target port (uses protocol default if omitted) |
 | `username` | string | Username (optional) |
@@ -37,6 +37,8 @@ Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Cr
 | `dpi` | integer | Display DPI |
 
 When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the connections (credentials from Vault). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode — if the target requires authentication, the user will see guacd's login prompt.
+
+In connections mode, `&protocol=ssh` opens the entry's SSH protocol; links without it open the primary, so links made before multi-protocol entries keep working. A protocol the user may not use is answered like one that does not exist (`404`).
 
 If the connections entry has `prompt_credentials: true` or has no stored password/key, the endpoint returns an inline credential form instead of creating the session immediately. The user enters credentials, which are POSTed to the connect endpoint and used for that session only (never stored). An entry without its own secret that is covered by [folder default credentials](credential-variables.md#folder-default-credentials) connects with those, exactly as it does from the Connections page.
 
@@ -525,6 +527,15 @@ List visible folders. Filtered by OIDC group membership (admins see all).
 
 List entries in a folder. Scope is `shared` or `instance`. Requires folder group access.
 
+Each entry lists only the protocols the caller may use (see [Entry and protocol access](roles-and-access-control.md#entry-and-protocol-access)), and an entry with none is left out; `GET /api/addressbook` and `GET /api/addressbook/search-index` do the same. The top-level fields (`session_type`, `hostname`, `port`, `username`, `has_credentials`, ...) describe the first of them, which is the primary unless it is closed to the caller, so clients that know nothing of protocols see what they always did. In addition:
+
+| Field | Description |
+|-------|-------------|
+| `protocol` | Name of the protocol the top-level fields describe |
+| `protocols` | Every protocol the caller may use, in order, each with the same fields as the entry (its effective values: host fields with the protocol's on top) and its `protocol` name |
+| `allowed_groups`, `allowed_users` | Admins only: the access rule on the host (top level) or on the protocol (in `protocols`) |
+| `settings` | Admins only: the fields set at that level as stored, for the editor (the host's own at the top level, the protocol's overrides in `protocols`). Secrets appear only as `has_password`, `has_private_key`, ... flags |
+
 ### `POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect`
 
 Create a session from an connections entry. Reads credentials (including jump host credentials) from Vault server-side and creates a session. Requires **operator** role and folder group access.
@@ -533,6 +544,7 @@ Optional body to override or supply credentials at connect time:
 
 ```json
 {
+  "protocol": "ssh",
   "username": "jdoe@CORP.EXAMPLE.COM",
   "password": "user-password",
   "domain": "CORP.EXAMPLE.COM",
@@ -545,6 +557,8 @@ Optional body to override or supply credentials at connect time:
 ```
 
 `keyboard_layout` is the connecting user's own keyboard (**Settings > My keyboard layout** in the UI). It applies to RDP entries with no `server_layout` of their own, and to VDI desktops. A name guacd doesn't know is ignored.
+
+`protocol` picks one of the entry's protocols by name (or by type, when no protocol has that name); without it the primary is used, or the first protocol the caller may use. A protocol the caller may not use answers `404` like a missing one. The session records the protocol's name as `address_book_protocol`, and so does its recording (`protocol`).
 
 Prompted credentials are used for the current session only and are never stored. Jump host credentials always come from the Vault entry and cannot be overridden at connect time.
 
@@ -571,7 +585,7 @@ Connect to a host that is not a saved entry (an ad-hoc connection), described wi
 }
 ```
 
-- `entry` takes the same fields as [creating an entry](#post-apiaddressbookfoldersscopefolderentries-admin), in the same form. Its name, display name and folder are not used. Legacy single jump host fields are accepted, as on entries.
+- `entry` takes the same fields as [creating an entry](#post-apiaddressbookfoldersscopefolderentries-admin), in the same form, with a single `type`: a `protocols` list is refused with `400`. Its name, display name and folder are not used. Legacy single jump host fields are accepted, as on entries.
 - `generate_keypair` (SSH): generate an ephemeral Ed25519 keypair, as with `POST /api/sessions`.
 - `width`, `height`, `screen_width`, `screen_height`, `dpi`, `keyboard_layout`: as for the entry connect endpoint above.
 - [Credential variables](credential-variables.md) (`$name` in `username`, `password`, `domain`, `private_key`) are resolved from the **caller's own** My Credentials, server side; values are never returned. A variable the caller has not set returns `412` with `{"error": "missing credential variables", "missing_variables": ["name"]}`. An API key has no credential variables, so a request from one that uses them returns `400`. Without Vault, references are not resolved.
@@ -667,11 +681,42 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `jump_hosts` | array | All | Multi-hop SSH tunnel chain (same format as session creation) |
 | `external_id` | string | All | Stable id of the record the entry is synced from (the [NetBox webhook](netbox.md#create-webhook-device-createdupdated) sends `netbox:device:<id>`). What `PUT ...?move=true` matches on; never used to connect. Preserved on update when omitted. |
 
+| `protocols` | array | All | The ways to connect to the host, primary first, in place of `type` (see [Multi-protocol entries](#multi-protocol-entries)) |
+| `allowed_groups`, `allowed_users` | array | All | Narrow who can see and use the entry within the folder (see [Entry and protocol access](roles-and-access-control.md#entry-and-protocol-access)) |
+
 For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed under [`POST /api/sessions`](#post-apisessions) apply here too. The `proxmox_token_secret` is write-only: it is never returned by the read endpoints (a `has_proxmox_token_secret` boolean indicates whether one is stored), and it is preserved on update when omitted. See [SPICE and Proxmox VE Sessions](spice-and-proxmox.md) for the editor fields and how the token is stored.
+
+#### Multi-protocol entries
+
+An entry can list several protocols for one host instead of a single `type`. The top-level fields are the host's defaults; each protocol has a `type`, an optional `name` and any entry field, which overrides the host's. An empty value (`""` or `[]`) clears the inherited one. The first protocol is the primary.
+
+```json
+{
+  "name": "server01",
+  "hostname": "10.0.0.10",
+  "display_name": "server01.example.com",
+  "username": "Administrator",
+  "protocols": [
+    { "type": "rdp", "port": 3389 },
+    { "type": "ssh", "port": 22, "username": "admin", "allowed_groups": ["netops"] },
+    { "type": "ssh", "name": "ssh-2222", "port": 2222 },
+    { "type": "web", "url": "https://10.0.0.10/", "hostname": "" }
+  ]
+}
+```
+
+- `name` defaults to the type and must be unique in the entry (letters, digits, `-`, `_`, `.`). The connect endpoints, access rules, updates and sessions refer to a protocol by it.
+- An update keeps each protocol's stored secrets by matching names, so renaming a protocol would leave it without them. To rename one, send its old name as `renamed_from` alongside the new `name` (`{"type": "ssh", "name": "ssh-mgmt", "renamed_from": "ssh-2222"}`) and its secrets move with it. `renamed_from` is used for that update only and is never stored.
+- `port` is set per protocol and never inherited: a protocol without one connects on its type's standard port (SSH 22, RDP 3389, VNC 5900). A top-level `port` next to `protocols` is refused.
+- Credentials resolve in this order: the protocol's own, the host's, the folder's [default credentials](credential-variables.md#folder-default-credentials) for the protocol's type, then `$variable` references are filled in.
+- The single-protocol form (a top-level `type`) is still accepted everywhere and is the same as a one-item `protocols` list. A body with both `type` and `protocols` is refused with `400`, as is an unknown protocol type or two protocols with the same name.
+- An entry that loses nothing by it is stored in the single-protocol form, so instances that predate this keep reading it. An entry with more than one protocol, a protocol name, an access rule, or a host default the single form would put on the protocol (for example a host `username`) is stored with `protocols`; see [Migration](migration.md#multi-protocol-entries) before you create one.
 
 ### `PUT /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 
 Update a connection entry, or create it if there is none of that name in the folder. Uses read-modify-write: reads existing entry from Vault, merges incoming fields on top. Credentials (`password`, `private_key`, `container_password`, `proxmox_token_secret`) that are omitted from the request are preserved from the existing entry, and so is `external_id`. Jump host credentials are merged per-hop by index. If the existing entry cannot be read for any reason other than not existing, the response is `502` and nothing is written, so a request without secrets never replaces an entry that has them.
+
+With [protocols](#multi-protocol-entries), the request's list is the entry's list of protocols, and secrets are kept per protocol: each protocol keeps the ones it omits from the stored protocol of the same name, and the host keeps its own. When the request and the stored entry each have one protocol, the two are matched whatever their names, so an old single-protocol body that changes an entry's `type` keeps its secrets as before. A single-protocol body (such as the original NetBox webhook) sent for an entry that has several protocols replaces them with that one.
 
 **`?move=true`** is for sync sources such as the [NetBox webhook](netbox.md#create-webhook-device-createdupdated), where the folder or the name is computed from the device and can change. It needs `external_id` in the body and matches the device on that, never on its name:
 

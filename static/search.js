@@ -137,7 +137,11 @@
                 : e.session_type === 'vdi' ? (e.container_image || '')
                 : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
                 : (e.hostname || '');
-            var haystack = [e.name, e.display_name || '', host, e.username || '', e.proxmox_token_id || '', e.url || '', e.domain || '', e.session_type, r.folder_path].join(' ').toLowerCase();
+            // Every protocol's type and name, so "ssh" finds an RDP host that
+            // also offers SSH (#296).
+            var protos = (e.protocols && e.protocols.length) ? e.protocols : [e];
+            var protoWords = protos.map(function (p) { return p.session_type + ' ' + (p.protocol || ''); }).join(' ');
+            var haystack = [e.name, e.display_name || '', host, e.username || '', e.proxmox_token_id || '', e.url || '', e.domain || '', e.session_type, protoWords, r.folder_path].join(' ').toLowerCase();
             return { scope: r.scope, folderPath: r.folder_path, folderName: r.folder_display_name || null, entry: e, label: label, host: host, haystack: haystack };
         });
     }
@@ -306,7 +310,7 @@
             var fName = r.folderName || r.folderPath;
             html += '<tr>' +
                 '<td title="' + attr(r.label) + '">' + entryNameHtml(r.label, tokens) + '</td>' +
-                '<td><span class="type-badge ' + typeCls + '">' + esc(typeLabel) + '</span></td>' +
+                '<td><span class="type-badge ' + typeCls + '">' + esc(typeLabel) + '</span>' + extraProtos(r, e) + '</td>' +
                 '<td class="host-cell" title="' + attr(r.host || '') + '">' + highlight(r.host || '', tokens) + '</td>' +
                 '<td>' + userCol + '</td>' +
                 '<td class="folder-cell" title="' + attr(r.scope + '/' + r.folderPath) + '"><span class="fname"><span class="folder-scope">' + scopeIcon + '</span>' + highlight(fName, tokens) + '</span>' +
@@ -321,6 +325,23 @@
         content.innerHTML = html;
         content.scrollTop = 0;
     }
+
+    // The protocols after the primary, each a small button that connects
+    // with it (#296).
+    function extraProtos(r, e) {
+        var ps = (e.protocols && e.protocols.length) ? e.protocols : [e];
+        return ps.slice(1).map(function (p) {
+            var nm = p.protocol || p.session_type;
+            return ' <button class="type-badge type-' + attr(p.session_type) + '" style="cursor:pointer;border:0;opacity:0.8" title="Connect with ' + attr(nm) + '" data-sc-connect="' + attr(e.name) + '" data-scope="' + attr(r.scope) + '" data-folder="' + attr(r.folderPath) + '" data-protocol="' + attr(nm) + '">' + esc(p.session_type.toUpperCase()) + '</button>';
+        }).join('');
+    }
+    // An entry's info for one protocol (none: the entry, i.e. its primary).
+    function protoInfo(e, name) {
+        if (!e || !name || !e.protocols) return e;
+        for (var i = 0; i < e.protocols.length; i++) if (e.protocols[i].protocol === name) return e.protocols[i];
+        return e;
+    }
+    function btnProtocol(btn) { return (btn && btn.getAttribute && btn.getAttribute('data-protocol')) || null; }
 
     // "Open in a new window" (⧉): open a sized popup synchronously (inside the
     // click, so it is not blocked) on the splash page /launch.html, which
@@ -366,6 +387,7 @@
         if (btn) { btn.classList.add('loading'); btn.disabled = true; }
         var reset = function () { if (btn) { btn.classList.remove('loading'); btn.disabled = false; } };
         var body = { width: window.innerWidth, height: window.innerHeight, dpi: Math.round((window.devicePixelRatio || 1) * 96) };
+        if (btnProtocol(btn)) body.protocol = btnProtocol(btn);
         // screen_* only for the tab path (the server prefers it for a
         // fullscreen bitmap entry); a popup is sized by its measurement alone.
         if (!newWindow && window.screen && screen.width) { body.screen_width = screen.width; body.screen_height = screen.height; }
@@ -386,7 +408,8 @@
                 if (!data) return;
                 var _row = null, _si = searchIndex || [];
                 for (var _k = 0; _k < _si.length; _k++) { var _r = _si[_k]; if (_r.scope === scope && _r.folderPath === folder && _r.entry.name === name) { _row = _r; break; } }
-                var _fs = _row && _row.entry && _row.entry.fullscreen_on_connect;
+                var _pi = _row && protoInfo(_row.entry, btnProtocol(btn));
+                var _fs = _pi && _pi.fullscreen_on_connect;
                 // A new window is explicitly windowed: fs=0 tells the client
                 // not to fullscreen-on-connect even if the entry asks for it.
                 var url = data.client_url + '?name=' + encodeURIComponent(name) + (newWindow ? '&fs=0' : (_fs ? '&fs=1' : ''));
@@ -503,6 +526,7 @@
             // fullscreen bitmap session, and the physical screen overshoots
             // the viewport on a notched Mac (that was the RDP resize).
             var body = { dpi: Math.round((window.devicePixelRatio || 1) * 96), width: window.innerWidth, height: window.innerHeight };
+            if (btnProtocol(btn)) body.protocol = btnProtocol(btn);
             fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect',
                 { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(body) })
                 .then(function (res) {
@@ -556,7 +580,7 @@
                 var sc = conn.getAttribute('data-scope'), fo = conn.getAttribute('data-folder'), nm = conn.getAttribute('data-sc-connect');
                 var row = null, si = searchIndex || [];
                 for (var k = 0; k < si.length; k++) { if (si[k].scope === sc && si[k].folderPath === fo && si[k].entry.name === nm) { row = si[k]; break; } }
-                var fsoc = row && row.entry && row.entry.fullscreen_on_connect;
+                var fsoc = row && row.entry && protoInfo(row.entry, btnProtocol(conn)).fullscreen_on_connect;
                 // The regular Connect goes zero-click fullscreen in this tab; the
                 // ⧉ button is an explicit "open in a new window", so it keeps the
                 // new-window path.
@@ -654,7 +678,11 @@
                 mount: document.getElementById('search-facets'),
                 id: 'global-search',
                 facets: [
-                    { key: 'type', label: 'Type', value: function (x) { return x.entry.session_type; },
+                    { key: 'type', label: 'Type', value: function (x) {
+                        var e = x.entry, ps = (e.protocols && e.protocols.length) ? e.protocols : [e], out = [];
+                        ps.forEach(function (p) { if (out.indexOf(p.session_type) < 0) out.push(p.session_type); });
+                        return out;
+                    },
                       render: function (v) { return '<span class="type-badge type-' + attr(v) + '">' + esc(v) + '</span>'; } },
                     { key: 'folder', label: 'Folder', value: function (x) { return x.folderPath || null; } }
                 ],

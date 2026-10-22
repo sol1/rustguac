@@ -645,6 +645,70 @@
         /* A non-admin's ad-hoc request can't turn on a drive the site has off. */
         #entry-modal.adhoc.adhoc-restricted.drive-off #em-drive-section { display: none !important; }
         .var-pick { margin-top: 0.3em; font-size: 0.85em; width: auto; max-width: 100%; }
+        /* Multi-protocol entry editor and list (#296) */
+        .em-host-section { margin: 0.8em 0; padding: 0.6em 0.8em; border: 1px solid var(--border); border-radius: 6px; }
+        .em-section-title { font-weight: 600; color: var(--accent); margin-bottom: 0.3em; }
+        .em-section-title span { font-weight: normal; color: var(--text-muted); font-size: 0.85em; }
+        .em-proto-tabs { display: flex; flex-wrap: wrap; gap: 0.3em; margin: 0.8em 0 0.4em; align-items: center; }
+        .em-proto-tab { padding: 0.25em 0.7em; font-size: 0.85em; background: var(--input); color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+        .em-proto-tab.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+        .em-proto-head { padding: 0.5em 0.8em; border-left: 3px solid var(--accent); margin-bottom: 0.6em; }
+        .em-proto-actions { display: flex; gap: 0.4em; margin-top: 0.5em; }
+        .em-proto-actions button { padding: 0.2em 0.7em; font-size: 0.8em; background: var(--input); color: var(--accent); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+        .em-inherit-row { font-size: 0.85em; color: var(--text-muted); margin-top: 0.4em; }
+        .em-inherit-row label { display: inline; margin-right: 0.8em; text-transform: none; letter-spacing: 0; }
+        .em-inherit-row input { display: inline; width: auto; margin-right: 0.3em; }
+        .type-spice { background: #3d6b8f; color: #fff; }
+        /* Type column of an entry with several protocols: compact badges,
+           the primary first and outlined, every protocol shown, wrapping onto
+           as many lines as it takes. */
+        .proto-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 104px; max-width: 176px; }
+        .proto-badges .type-badge {
+            font-size: 10.5px; line-height: 16px; padding: 1px 5px; min-width: 0;
+            letter-spacing: 0.06em; white-space: nowrap; border: 1px solid transparent; box-sizing: border-box;
+        }
+        .proto-badges .proto-primary { box-shadow: inset 0 0 0 1.5px currentColor; }
+        .proto-badges > * { flex: none; }
+        .proto-badges .proto-extra { opacity: 0.8; }
+        /* Connect split button: Connect and the protocol menu toggle are one
+           control, one border, one height, rounded only on the outer ends. */
+        .split-btn { display: inline-flex; vertical-align: middle; }
+        .split-btn .btn-connect { margin: 0; }
+        .split-btn .split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+        .split-btn .split-toggle {
+            min-width: 0; width: 26px; padding: 0; margin-left: 0;
+            border-top-left-radius: 0; border-bottom-left-radius: 0;
+            border-left: 1px solid color-mix(in srgb, var(--bg) 35%, transparent);
+            font-size: var(--fz-sm); line-height: 1;
+        }
+        .split-btn .split-toggle[aria-expanded="true"] { background: var(--accent-hover); }
+        /* The protocol menu: fixed, so the table never clips it, and placed
+           inside the viewport when it opens (openProtoMenu). */
+        .proto-menu-list {
+            position: fixed; z-index: 150; min-width: 200px; max-width: calc(100vw - 16px);
+            max-height: calc(100vh - 16px); overflow-y: auto;
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            padding: var(--s-1); box-shadow: 0 8px 28px rgba(0,0,0,.45); text-align: left;
+        }
+        .proto-menu-list[hidden] { display: none; }
+        .proto-item {
+            display: flex; align-items: center; justify-content: flex-start; gap: var(--s-2); width: 100%;
+            padding: 5px var(--s-2); margin: 0; min-width: 0; height: auto;
+            background: transparent; border: 0; border-radius: var(--radius);
+            color: var(--text); font-size: var(--fz-sm); text-align: left; cursor: pointer; white-space: nowrap;
+        }
+        .proto-item:hover, .proto-item:focus { background: var(--input); outline: none; }
+        .proto-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+        .proto-item .type-badge { font-size: 10.5px; line-height: 16px; padding: 1px 5px; min-width: 44px; letter-spacing: 0.06em; }
+        .proto-item .pi-name { overflow: hidden; text-overflow: ellipsis; }
+        .proto-item .pi-detail { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; max-width: 16em; }
+        .proto-item .pi-port { color: var(--text-muted); margin-left: auto; padding-left: var(--s-2); font-variant-numeric: tabular-nums; }
+        .proto-item .pi-default {
+            font-size: 10px; line-height: 14px; padding: 0 5px; border-radius: 7px;
+            border: 1px solid var(--accent); color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em;
+        }
+        .session-card-info .card-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .session-card-info .card-meta .type-badge { flex: none; }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -831,6 +895,54 @@
             <label>Display name
                 <input type="text" id="em-display-name" placeholder="e.g. Web Server 01">
             </label>
+            <div id="em-host-section" class="em-host-section">
+                <div class="em-section-title">Host <span>defaults every protocol below inherits</span></div>
+                <label>Hostname
+                    <input type="text" id="em-host-hostname" placeholder="10.0.0.10">
+                </label>
+                <label>Username <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="text" id="em-host-username">
+                </label>
+                <label>Password <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <div class="pw-wrap"><input type="password" id="em-host-password" autocomplete="new-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
+                </label>
+                <div class="field-hint">Used by every protocol that leaves its own field blank. Credentials set on a protocol win over these, and folder defaults apply only when neither has any.</div>
+                <label>Allowed groups <span style="color:var(--text-muted);font-size:0.85em">(optional, comma-separated)</span>
+                    <input type="text" id="em-host-groups" placeholder="Blank: everyone who can open the folder">
+                </label>
+                <label>Allowed users <span style="color:var(--text-muted);font-size:0.85em">(optional, login emails, comma-separated)</span>
+                    <input type="text" id="em-host-users">
+                </label>
+                <div class="field-hint">Narrows who can see and use this entry inside the folder. A protocol can set its own rule instead. Admins always can.</div>
+            </div>
+            <div id="em-proto-tabs" class="em-proto-tabs"></div>
+            <div class="em-proto-head">
+                <label>Protocol name <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="text" id="em-proto-name" placeholder="Defaults to the type" pattern="[a-zA-Z0-9_.-]+" maxlength="64">
+                </label>
+                <div class="field-hint">Tells two protocols of the same type apart, e.g. <code>ssh-2222</code>. Links pick a protocol with <code>&amp;protocol=</code> and this name. Fixed once saved.</div>
+                <div class="em-inherit-row">Don't inherit from the host:
+                    <label><input type="checkbox" id="em-proto-clear-hostname">hostname</label>
+                    <label><input type="checkbox" id="em-proto-clear-username">username</label>
+                    <label><input type="checkbox" id="em-proto-clear-password">password</label>
+                </div>
+                <label style="margin-top:0.6em;text-transform:none;letter-spacing:0;cursor:pointer">
+                    <input type="checkbox" id="em-proto-own-rule" style="display:inline;width:auto;margin-right:0.4em"> Own access rule for this protocol
+                </label>
+                <div id="em-proto-rule" style="display:none">
+                    <label>Allowed groups <span style="color:var(--text-muted);font-size:0.85em">(comma-separated)</span>
+                        <input type="text" id="em-proto-groups">
+                    </label>
+                    <label>Allowed users <span style="color:var(--text-muted);font-size:0.85em">(comma-separated)</span>
+                        <input type="text" id="em-proto-users">
+                    </label>
+                    <div class="field-hint">Replaces the host's rule for this protocol. Leave both blank to open it to everyone who can open the folder.</div>
+                </div>
+                <div class="em-proto-actions">
+                    <button type="button" id="em-proto-primary">Make primary</button>
+                    <button type="button" id="em-proto-remove">Remove protocol</button>
+                </div>
+            </div>
             </div>
             <label>Type
                 <select id="em-type">
@@ -2051,6 +2163,9 @@
                     var thumbUrl = s.thumbnail_url || '';
                     var name = s.entry_display_name || s.hostname || s.url || '?';
                     var typeBadge = '<span class="type-badge type-' + escapeHtml(s.session_type) + '">' + escapeHtml(s.session_type) + '</span>';
+                    if (s.address_book_protocol && s.address_book_protocol !== s.session_type) {
+                        typeBadge += ' <span class="card-proto" title="' + escapeAttr(s.address_book_protocol) + '">' + escapeHtml(s.address_book_protocol) + '</span>';
+                    }
                     var shareUrl = s.share_url ? (window.location.origin + s.share_url) : '';
                     var shareUrlRo = s.share_url_readonly ? (window.location.origin + s.share_url_readonly) : '';
                     var actionsHtml = '<div class="card-actions">';
@@ -2907,8 +3022,13 @@
         // Credential variables an entry references that the user hasn't set
         // yet. Empty until the cred status has loaded (setCredVars !== null).
         function entryUnsetVars(e) {
-            if (!setCredVars || !e || !e.credential_variables) return [];
-            return e.credential_variables.filter(function(v) { return !setCredVars.has(v); });
+            if (!setCredVars || !e) return [];
+            // Across every protocol the user may use (#296).
+            var vars = [];
+            ((e.protocols && e.protocols.length) ? e.protocols : [e]).forEach(function(p) {
+                (p.credential_variables || []).forEach(function(v) { if (vars.indexOf(v) < 0) vars.push(v); });
+            });
+            return vars.filter(function(v) { return !setCredVars.has(v); });
         }
 
         // Fetch which credential variables the user has set, then refresh the
@@ -2987,8 +3107,111 @@
         // sessionStorage for this tab; the Folder facet only applies while
         // searching.
         // Folder-view filter (Type), shown in the folder header.
+        // An entry's protocols the caller may use, primary first; an entry
+        // from an older server is its own single protocol.
+        function entryProtocols(e) { return (e && e.protocols && e.protocols.length) ? e.protocols : [e]; }
+        function entryProtocol(e, name) {
+            if (!e || !name) return e;
+            var ps = entryProtocols(e);
+            for (var i = 0; i < ps.length; i++) if (ps[i].protocol === name) return ps[i];
+            return e;
+        }
+        // A protocol's port as the menu shows it: its own, or its type's
+        // standard one; a web protocol's from its URL when it names one.
+        var STANDARD_PORTS = { ssh: 22, rdp: 3389, vnc: 5900, spice: 5900 };
+        function protoPort(p) {
+            if (p.session_type === 'web') {
+                var m = /^[a-z]+:\/\/[^\/:?#]+:(\d+)/i.exec(p.url || '');
+                return m ? m[1] : null;
+            }
+            return p.port || STANDARD_PORTS[p.session_type] || null;
+        }
+        // What a protocol without a port connects to, for the menu.
+        function protoDetail(p) {
+            if (p.session_type === 'proxmox') return p.proxmox_vmid ? 'VM ' + p.proxmox_vmid : '';
+            if (p.session_type === 'vdi') return p.container_image || '';
+            return '';
+        }
+        function protoSummary(p) {
+            var nm = p.protocol || p.session_type;
+            var port = protoPort(p);
+            return (nm === p.session_type ? p.session_type.toUpperCase() : nm + ' (' + p.session_type.toUpperCase() + ')') + (port ? ' :' + port : '');
+        }
+        window.addEventListener('resize', function() { closeProtoMenus(false); });
+
+        // ── Protocol menu of the Connect split button ──
+        function closeProtoMenus(refocus) {
+            document.querySelectorAll('.proto-menu-list:not([hidden])').forEach(function(m) {
+                m.hidden = true;
+                var t = m.parentNode.querySelector('[data-proto-toggle]');
+                if (t) {
+                    t.setAttribute('aria-expanded', 'false');
+                    if (refocus) t.focus();
+                }
+            });
+        }
+        // Below the split button, right-aligned to it; flipped above it or
+        // pulled in when that would leave the viewport.
+        function placeProtoMenu(menu) {
+            var anchor = menu.parentNode.getBoundingClientRect();
+            var mw = menu.offsetWidth, mh = menu.offsetHeight;
+            var vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+            var left = Math.min(anchor.right - mw, vw - mw - 8);
+            var top = anchor.bottom + 4;
+            if (top + mh > vh - 8) top = anchor.top - mh - 4 >= 8 ? anchor.top - mh - 4 : Math.max(8, vh - mh - 8);
+            menu.style.left = Math.max(8, left) + 'px';
+            menu.style.top = top + 'px';
+        }
+        function openProtoMenu(toggle, focusLast) {
+            closeProtoMenus(false);
+            var menu = toggle.parentNode.querySelector('.proto-menu-list');
+            menu.hidden = false;
+            toggle.setAttribute('aria-expanded', 'true');
+            placeProtoMenu(menu);
+            var items = menu.querySelectorAll('[role="menuitem"]');
+            if (items.length) items[focusLast ? items.length - 1 : 0].focus();
+        }
+        document.addEventListener('keydown', function(ev) {
+            var t = ev.target;
+            if (!t || !t.closest) return;
+            if (t.hasAttribute && t.hasAttribute('data-proto-toggle')) {
+                if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+                    ev.preventDefault();
+                    openProtoMenu(t, ev.key === 'ArrowUp');
+                } else if (ev.key === 'Escape') {
+                    closeProtoMenus(true);
+                }
+                return;
+            }
+            var menu = t.closest('.proto-menu-list');
+            if (!menu) return;
+            var items = Array.prototype.slice.call(menu.querySelectorAll('[role="menuitem"]'));
+            var i = items.indexOf(t);
+            if (ev.key === 'ArrowDown') { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
+            else if (ev.key === 'ArrowUp') { ev.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+            else if (ev.key === 'Home') { ev.preventDefault(); items[0].focus(); }
+            else if (ev.key === 'End') { ev.preventDefault(); items[items.length - 1].focus(); }
+            else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); closeProtoMenus(true); }
+            else if (ev.key === 'Tab') { closeProtoMenus(false); }
+        }, true);
+        // A fixed menu follows its button when the page scrolls, and closes
+        // once the button has scrolled out of sight.
+        document.addEventListener('scroll', function(ev) {
+            if (ev.target && ev.target.closest && ev.target.closest('.proto-menu-list')) return;
+            document.querySelectorAll('.proto-menu-list:not([hidden])').forEach(function(m) {
+                var a = m.parentNode.getBoundingClientRect();
+                if (a.bottom < 0 || a.top > document.documentElement.clientHeight) closeProtoMenus(false);
+                else placeProtoMenu(m);
+            });
+        }, true);
+
+        function entryTypes(e) {
+            var out = [];
+            entryProtocols(e).forEach(function(p) { if (out.indexOf(p.session_type) < 0) out.push(p.session_type); });
+            return out;
+        }
         var typeFacet = { key: 'type', label: 'Type',
-            value: function(x) { var e = x.entry || x; return e.session_type; },
+            value: function(x) { var e = x.entry || x; return entryTypes(e); },
             render: function(v) { return '<span class="type-badge type-' + escapeAttr(v) + '">' + escapeHtml(v) + '</span>'; } };
         var entryFilters = rgFilters.create({
             mount: document.getElementById('entries-filters'),
@@ -3058,7 +3281,21 @@
                 html += '<td>' + entryNameHtml(label) + credPill + '</td>';
                 var typeLabel = e.session_type.toUpperCase();
                 if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
-                html += '<td><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
+                var protos = entryProtocols(e);
+                if (protos.length > 1) {
+                    // Every protocol, primary first and outlined, wrapping
+                    // onto more lines when they do not fit on one.
+                    html += '<td class="type-cell"><div class="proto-badges">'
+                        + protos.map(function(p, pi) {
+                            var nm = p.protocol || p.session_type;
+                            var label = nm === p.session_type ? p.session_type.toUpperCase() : nm;
+                            return '<span class="type-badge type-' + escapeAttr(p.session_type) + (pi === 0 ? ' proto-primary' : ' proto-extra') + '"'
+                                + ' title="' + escapeAttr((pi === 0 ? 'Default: ' : '') + protoSummary(p)) + '">' + escapeHtml(label) + '</span>';
+                        }).join('')
+                        + '</div></td>';
+                } else {
+                    html += '<td class="type-cell"><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
+                }
                 html += '<td>' + escapeHtml(hostBase) + hostSuffix + '</td>';
                 var userCol = e.session_type === 'proxmox'
                     ? escapeHtml(e.proxmox_token_id || '')
@@ -3068,8 +3305,33 @@
                 if (e.inherited_credentials) userCol += ' <span style="color:#888;font-size:0.8em" title="Uses the folder\'s default credentials">[folder]</span>';
                 html += '<td>' + userCol + '</td>';
                 var connectLabel = needsPrompt ? 'Login...' : 'Connect';
-                html += '<td class="connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">' + connectLabel + '</button>'
-                    + '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">&#x29c9;</button></td>';
+                var protoAttr = e.protocol ? ' data-protocol="' + escapeAttr(e.protocol) + '"' : '';
+                var connectBtn = '<button class="btn-connect' + (protos.length > 1 ? ' split-main' : '') + '" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '"' + protoAttr + '>' + connectLabel + '</button>';
+                html += '<td class="connect-cell">';
+                if (protos.length > 1) {
+                    // Split button: Connect opens the primary, the toggle a
+                    // menu of every protocol the user may use.
+                    var menuId = 'proto-menu-' + idx;
+                    html += '<span class="split-btn">' + connectBtn
+                        + '<button class="btn-connect split-toggle" data-proto-toggle="1" aria-haspopup="menu" aria-expanded="false" aria-controls="' + menuId + '" aria-label="Choose a protocol" title="Choose a protocol">&#9662;</button>'
+                        + '<div class="proto-menu-list" id="' + menuId + '" role="menu" aria-label="Protocols" hidden>'
+                        + protos.map(function(p, pi) {
+                            var nm = p.protocol || p.session_type;
+                            var port = protoPort(p);
+                            return '<button type="button" class="proto-item" role="menuitem" tabindex="-1" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '" data-protocol="' + escapeAttr(nm) + '">'
+                                + '<span class="type-badge type-' + escapeAttr(p.session_type) + '">' + escapeHtml(p.session_type.toUpperCase()) + '</span>'
+                                + (nm !== p.session_type ? '<span class="pi-name">' + escapeHtml(nm) + '</span>' : '')
+                                + (pi === 0 ? '<span class="pi-default">default</span>' : '')
+                                + (protoDetail(p) ? '<span class="pi-detail">' + escapeHtml(protoDetail(p)) + '</span>' : '')
+                                + (port ? '<span class="pi-port">:' + escapeHtml(String(port)) + '</span>' : '')
+                                + '</button>';
+                        }).join('')
+                        + '</div></span>';
+                } else {
+                    html += connectBtn;
+                }
+                html += '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '"' + protoAttr + '>&#x29c9;</button>';
+                html += '</td>';
                 if (isAdmin) {
                     // One cell for the three admin actions: three cells cost
                     // two extra runs of cell padding on every row, which is
@@ -3462,6 +3724,9 @@
                 targetWin = window.open('', '_blank');
             }
             var body = extraBody || {};
+            // The protocol this button connects with (#296); none: the primary.
+            var connectProtocol = btn.getAttribute && btn.getAttribute('data-protocol');
+            if (connectProtocol && !body.protocol) body.protocol = connectProtocol;
             // Send browser dimensions so RDP sessions start at correct resolution
             var bw = window.innerWidth, bh = window.innerHeight;
             if (!body.width && bw > 0 && bh > 0) {
@@ -3497,6 +3762,7 @@
                 // fullscreen immediately, using the activation from this click.
                 var _e0 = null;
                 for (var _k = 0; _k < currentEntries.length; _k++) { if (currentEntries[_k].name === name) { _e0 = currentEntries[_k]; break; } }
+                _e0 = entryProtocol(_e0, connectProtocol);
                 // A new window (⧉) is explicitly windowed: fs=0 tells the
                 // client not to fullscreen-on-connect even if the entry asks.
                 var url = data.client_url + '?name=' + encodeURIComponent(name)
@@ -3580,8 +3846,20 @@
         });
 
         // Connect / clone / delete / edit actions for the folder entries table.
+        // Close an open protocol menu on a click anywhere outside it.
+        document.addEventListener('click', function(ev) {
+            if (ev.target.closest && ev.target.closest('.split-btn')) return;
+            closeProtoMenus(false);
+        });
+
         function handleEntryActionsClick(e) {
-            var btn = e.target;
+            var btn = e.target.closest ? (e.target.closest('button') || e.target) : e.target;
+
+            if (btn.getAttribute && btn.getAttribute('data-proto-toggle')) {
+                if (btn.getAttribute('aria-expanded') === 'true') closeProtoMenus(true);
+                else openProtoMenu(btn, false);
+                return;
+            }
 
             if (btn.getAttribute('data-connect') || btn.getAttribute('data-connect-win')) {
                 var newWindow = !!btn.getAttribute('data-connect-win');
@@ -3590,11 +3868,16 @@
                 var folder = btn.getAttribute('data-folder');
                 clearError();
 
-                // Find the entry in the current folder's entries.
+                // Find the entry in the current folder's entries, and the
+                // protocol the button is for (none: the primary).
                 var entry = null;
                 for (var i = 0; i < currentEntries.length; i++) {
                     if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
                 }
+                entry = entryProtocol(entry, btn.getAttribute('data-protocol'));
+                // From the menu: close it and give focus back to its toggle.
+                var menu = btn.closest && btn.closest('.proto-menu-list');
+                if (menu) closeProtoMenus(true);
 
                 // Prompt for credentials if prompt_credentials is set or no stored creds
                 // (RDP and SSH entries without passwords/keys)
@@ -4422,390 +4705,321 @@
             renderHops();
         });
 
-        function openNewEntry() {
-            if (!selectedFolder) return;
-            setAdhocMode(false);
-            entryEditMode = null;
-            cloneSource = null;
-            document.getElementById('entry-modal-title').textContent = 'New Entry in ' + folderPath(selectedFolder);
-            document.getElementById('em-name').value = '';
-            document.getElementById('em-name').disabled = false;
-            document.getElementById('em-display-name').value = '';
-            entryTypeSelect.value = 'ssh';
-            entryTypeSelect.disabled = false;
-            entryTypeSelect.dispatchEvent(new Event('change'));
-            clearEntryFields();
-            document.getElementById('em-move-section').style.display = 'none';
-            document.getElementById('em-error').textContent = '';
-            document.getElementById('entry-modal').classList.add('active');
+
+        // ── Multi-protocol entries (#296) ──
+        //
+        // The editor holds the host's fields and a list of protocols. The
+        // Host box edits the host's hostname, username, password and access
+        // rule; the form below it edits the selected protocol, which inherits
+        // any field it leaves blank from the host. Every other field the host
+        // holds (banner, Wake-on-LAN, prompting, ...) is shown in a protocol's
+        // form and stays on the host unless that protocol changes it. The
+        // first protocol is the primary, the one Connect uses.
+        var protoEd = null;
+        // Fields an entry keeps on the host (src/entry_protocols.rs HOST_KEYS).
+        var PROTO_HOST_KEYS = ['hostname', 'display_name', 'external_id', 'banner', 'prompt_credentials',
+            'wol_send_packet', 'wol_mac_addr', 'wol_broadcast_addr', 'wol_udp_port', 'wol_wait_time'];
+        // Host fields edited in the Host box, never through a protocol's form.
+        var PROTO_HOST_FORM_KEYS = ['hostname', 'username', 'password'];
+        // Host fields a protocol form shows, by type: only those types can
+        // change or clear them.
+        var PROTO_FIELD_TYPES = {
+            banner: ['web', 'vdi'],
+            prompt_credentials: ['ssh', 'rdp', 'vnc', 'spice'],
+            wol_send_packet: ['ssh', 'rdp', 'vnc'], wol_mac_addr: ['ssh', 'rdp', 'vnc'],
+            wol_broadcast_addr: ['ssh', 'rdp', 'vnc'], wol_udp_port: ['ssh', 'rdp', 'vnc'], wol_wait_time: ['ssh', 'rdp', 'vnc']
+        };
+        var PROTO_INPUTS = {
+            hostname: { ssh: 'em-hostname', rdp: 'em-rdp-hostname', vnc: 'em-vnc-hostname', spice: 'em-spice-hostname' },
+            username: { ssh: 'em-username', rdp: 'em-rdp-username', vnc: 'em-vnc-username', web: 'em-web-username' },
+            password: { ssh: 'em-password', rdp: 'em-rdp-password', vnc: 'em-vnc-password', spice: 'em-spice-password', web: 'em-web-password' }
+        };
+
+        function protoName(it) { return it.name || it.type; }
+        function splitList(v) {
+            return (v || '').split(',').map(function(x) { return x.trim(); }).filter(function(x) { return x; });
         }
-
-        document.getElementById('btn-new-entry').addEventListener('click', openNewEntry);
-
-        function clearEntryFields() {
-            document.getElementById('em-hostname').value = '';
-            document.getElementById('em-port').value = '22';
-            document.getElementById('em-username').value = '';
-            document.getElementById('em-password').value = '';
-            document.getElementById('em-private-key').value = '';
-            document.getElementById('em-rdp-hostname').value = '';
-            document.getElementById('em-rdp-port').value = '3389';
-            document.getElementById('em-rdp-username').value = '';
-            document.getElementById('em-rdp-password').value = '';
-            document.getElementById('em-rdp-domain').value = '';
-            document.getElementById('em-rdp-security').value = '';
-            document.getElementById('em-rdp-layout').value = '';
-            document.getElementById('em-rdp-ignore-cert').checked = false;
-            document.getElementById('em-rdp-auth-pkg').value = '';
-            document.getElementById('em-rdp-kdc-url').value = '';
-            document.getElementById('em-rdp-prompt-creds').checked = false;
-            document.getElementById('em-ssh-prompt-creds').checked = false;
-            document.getElementById('em-vnc-hostname').value = '';
-            document.getElementById('em-vnc-port').value = '5900';
-            document.getElementById('em-vnc-username').value = '';
-            document.getElementById('em-vnc-password').value = '';
-            document.getElementById('em-vnc-color-depth').value = '';
-            document.getElementById('em-vnc-resize').checked = false;
-            document.getElementById('em-vnc-network').value = '';
-            document.getElementById('em-vnc-prompt-creds').checked = false;
-            document.getElementById('em-spice-hostname').value = '';
-            document.getElementById('em-spice-port').value = '5900';
-            document.getElementById('em-spice-password').value = '';
-            document.getElementById('em-spice-color-depth').value = '';
-            document.getElementById('em-spice-tls').checked = false;
-            document.getElementById('em-spice-tls-port').value = '';
-            document.getElementById('em-spice-ignore-cert').checked = false;
-            document.getElementById('em-spice-ca-cert').value = '';
-            document.getElementById('em-spice-cert-subject').value = '';
-            document.getElementById('em-spice-proxy').value = '';
-            document.getElementById('em-spice-prompt-creds').checked = false;
-            document.getElementById('em-proxmox-url').value = '';
-            document.getElementById('em-proxmox-node').value = '';
-            document.getElementById('em-proxmox-vmid').value = '';
-            document.getElementById('em-proxmox-token-id').value = '';
-            document.getElementById('em-proxmox-token-secret').value = '';
-            document.getElementById('em-proxmox-token-secret').placeholder = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
-            document.getElementById('em-proxmox-color-depth').value = '';
-            document.getElementById('em-proxmox-monitors').value = '1';
-            document.getElementById('em-proxmox-verify-tls').checked = false;
-            document.getElementById('em-ssh-font-size').value = '';
-            document.getElementById('em-wol-enabled').checked = false;
-            document.getElementById('em-wol-mac').value = '';
-            document.getElementById('em-wol-broadcast').value = '';
-            document.getElementById('em-wol-port').value = '';
-            document.getElementById('em-wol-wait').value = '';
-            document.getElementById('em-wol-fields').style.display = 'none';
-            document.getElementById('em-wol-arrow').innerHTML = '&#9654;';
-            document.getElementById('em-url').value = '';
-            document.getElementById('em-banner').value = '';
-            document.getElementById('em-web-username').value = '';
-            document.getElementById('em-web-password').value = '';
-            document.getElementById('em-login-script').value = '';
-            document.getElementById('em-automation-fields').style.display = 'none';
-            document.getElementById('em-automation-arrow').innerHTML = '&#9654;';
-            autofillRows = [];
-            renderAutofillRows();
-            document.getElementById('em-autofill-fields').style.display = 'none';
-            document.getElementById('em-autofill-arrow').innerHTML = '&#9654;';
-            allowedDomains = [];
-            renderAllowedDomains();
-            document.getElementById('em-allowed-domains-fields').style.display = 'none';
-            document.getElementById('em-allowed-domains-arrow').innerHTML = '&#9654;';
-            document.getElementById('em-enable-gfx').checked = false;
-            document.getElementById('em-enable-desktop-comp').checked = false;
-            document.getElementById('em-force-lossless').checked = false;
-            document.getElementById('em-enable-h264').checked = false;
-            document.getElementById('em-enable-wallpaper').checked = false;
-            document.getElementById('em-enable-theming').checked = false;
-            document.getElementById('em-enable-full-window-drag').checked = false;
-            document.getElementById('em-video-perf-fields').style.display = 'none';
-            document.getElementById('em-video-perf-arrow').innerHTML = '&#9654;';
-            document.getElementById('em-disable-copy').checked = false;
-            document.getElementById('em-disable-paste').checked = false;
-            document.getElementById('em-allow-sharing').checked = false;
-            document.getElementById('em-auto-open-singleton').checked = false;
-            document.getElementById('em-fullscreen-on-connect').checked = false;
-            document.getElementById('em-autohide-side-tabs').checked = false;
-            document.getElementById('em-enable-drive').checked = false;
-            document.getElementById('em-drive-warning').style.display = 'none';
-            document.getElementById('em-remote-app').value = '';
-            document.getElementById('em-remote-app-dir').value = '';
-            document.getElementById('em-remote-app-args').value = '';
-            document.getElementById('em-remoteapp-fields').style.display = 'none';
-            document.getElementById('em-remoteapp-arrow').innerHTML = '&#9654;';
-            document.getElementById('em-vdi-image').value = '';
-            document.getElementById('em-vdi-cpu').value = '';
-            document.getElementById('em-vdi-memory').value = '';
-            document.getElementById('em-vdi-env').value = '';
-            document.getElementById('em-vdi-container-username').value = '';
-            document.getElementById('em-vdi-container-password').value = '';
-            document.getElementById('em-vdi-container-password').placeholder = 'Leave blank to generate per-connect';
-            document.getElementById('em-vdi-idle-timeout').value = '';
-            document.getElementById('em-vdi-banner').value = '';
-            document.getElementById('em-override-recording').checked = false;
-            document.getElementById('em-enable-recording').checked = true;
-            document.getElementById('em-max-recordings').value = '0';
-            document.getElementById('em-recording-sub').style.display = 'none';
-            document.getElementById('em-record-typescript').checked = false;
-            document.getElementById('em-recording-fields').style.display = 'none';
-            document.getElementById('em-recording-arrow').innerHTML = '&#9654;';
-            hopList = [];
-            renderHops();
-            document.getElementById('em-tunnel-fields').style.display = 'none';
-            document.getElementById('em-tunnel-arrow').innerHTML = '&#9654;';
-        }
-
-        function openEditEntry(name, scope, folder, type) {
-            setAdhocMode(false);
-            entryEditMode = { scope: scope, folder: folder, name: name };
-            cloneSource = null;
-            document.getElementById('entry-modal-title').textContent = 'Edit: ' + name;
-            document.getElementById('em-name').value = name;
-            document.getElementById('em-name').disabled = true;
-            document.getElementById('em-display-name').value = '';
-            document.getElementById('em-error').textContent = '';
-            clearEntryFields();
-
-            // Pre-select the type from the table data
-            if (type) {
-                entryTypeSelect.value = type;
-                entryTypeSelect.disabled = true;
-                entryTypeSelect.dispatchEvent(new Event('change'));
-            }
-
-            // Populate move-to-folder dropdown (includes top-level + any loaded subfolders)
-            var moveSelect = document.getElementById('em-move-target');
-            moveSelect.innerHTML = '<option value="">(keep in current folder)</option>';
-            var moveCandidates = [];
-            folders.forEach(function(f) { moveCandidates.push(f); });
-            for (var ck in subfolderCache) {
-                subfolderCache[ck].forEach(function(f) { moveCandidates.push(f); });
-            }
-            moveCandidates.forEach(function(f) {
-                var p = folderPath(f);
-                if (p === folder && f.scope === scope) return;
-                var opt = document.createElement('option');
-                opt.value = f.scope + '|' + p;
-                opt.textContent = p + ' (' + f.scope + ')';
-                moveSelect.appendChild(opt);
-            });
-            document.getElementById('em-move-section').style.display = moveCandidates.length > 1 ? '' : 'none';
-
-            // Pre-fill with existing entry data from the loaded entries
-            var entryData = null;
-            for (var i = 0; i < currentEntries.length; i++) {
-                if (currentEntries[i].name === name) {
-                    entryData = currentEntries[i];
-                    break;
-                }
-            }
-            if (entryData) {
-                if (entryData.display_name && entryData.display_name !== name) {
-                    document.getElementById('em-display-name').value = entryData.display_name;
-                }
-                if (type === 'ssh') {
-                    document.getElementById('em-hostname').value = entryData.hostname || '';
-                    document.getElementById('em-port').value = entryData.port || '22';
-                    document.getElementById('em-username').value = entryData.username || '';
-                    document.getElementById('em-ssh-font-size').value = entryData.ssh_font_size || '';
-                    document.getElementById('em-ssh-prompt-creds').checked = !!entryData.prompt_credentials;
-                } else if (type === 'rdp') {
-                    document.getElementById('em-rdp-hostname').value = entryData.hostname || '';
-                    document.getElementById('em-rdp-port').value = entryData.port || '3389';
-                    document.getElementById('em-rdp-username').value = entryData.username || '';
-                    document.getElementById('em-rdp-domain').value = entryData.domain || '';
-                    if (entryData.security) {
-                        document.getElementById('em-rdp-security').value = entryData.security;
-                    }
-                    document.getElementById('em-rdp-layout').value = entryData.server_layout || '';
-                    document.getElementById('em-rdp-ignore-cert').checked = !!entryData.ignore_cert;
-                    document.getElementById('em-rdp-auth-pkg').value = entryData.auth_pkg || '';
-                    document.getElementById('em-rdp-kdc-url').value = entryData.kdc_url || '';
-                    document.getElementById('em-rdp-monitors').value = entryData.max_monitors || 1;
-                    document.getElementById('em-rdp-prompt-creds').checked = !!entryData.prompt_credentials;
-                } else if (type === 'vnc') {
-                    document.getElementById('em-vnc-hostname').value = entryData.hostname || '';
-                    document.getElementById('em-vnc-port').value = entryData.port || '5900';
-                    document.getElementById('em-vnc-username').value = entryData.username || '';
-                    document.getElementById('em-vnc-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
-                    document.getElementById('em-vnc-resize').checked = !!entryData.vnc_resize;
-                    document.getElementById('em-vnc-network').value = entryData.vnc_network || '';
-                    document.getElementById('em-vnc-prompt-creds').checked = !!entryData.prompt_credentials;
-                } else if (type === 'spice') {
-                    document.getElementById('em-spice-hostname').value = entryData.hostname || '';
-                    document.getElementById('em-spice-port').value = entryData.port || '5900';
-                    document.getElementById('em-spice-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
-                    document.getElementById('em-spice-tls').checked = !!entryData.spice_tls;
-                    document.getElementById('em-spice-tls-port').value = entryData.spice_tls_port || '';
-                    document.getElementById('em-spice-ignore-cert').checked = !!entryData.ignore_cert;
-                    document.getElementById('em-spice-ca-cert').value = entryData.spice_ca_cert || '';
-                    document.getElementById('em-spice-cert-subject').value = entryData.spice_cert_subject || '';
-                    document.getElementById('em-spice-proxy').value = entryData.spice_proxy || '';
-                    document.getElementById('em-spice-prompt-creds').checked = !!entryData.prompt_credentials;
-                } else if (type === 'proxmox') {
-                    document.getElementById('em-proxmox-url').value = entryData.proxmox_url || '';
-                    document.getElementById('em-proxmox-node').value = entryData.proxmox_node || '';
-                    document.getElementById('em-proxmox-vmid').value = entryData.proxmox_vmid || '';
-                    document.getElementById('em-proxmox-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
-                    document.getElementById('em-proxmox-monitors').value = entryData.max_monitors || 1;
-                    document.getElementById('em-proxmox-verify-tls').checked = !!entryData.proxmox_verify_tls;
-                    document.getElementById('em-proxmox-token-id').value = entryData.proxmox_token_id || '';
-                    // Secret is never returned; show a hint if one is stored.
-                    var secEl = document.getElementById('em-proxmox-token-secret');
-                    secEl.value = '';
-                    secEl.placeholder = entryData.has_proxmox_token_secret ? '(leave blank to keep existing)' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
-                } else if (type === 'web') {
-                    document.getElementById('em-url').value = entryData.url || '';
-                    document.getElementById('em-banner').value = entryData.banner || '';
-                    document.getElementById('em-web-username').value = entryData.username || '';
-                    loadLoginScripts(function() { populateLoginScriptDropdown(entryData.login_script || ''); });
-                    // Auto-expand automation if any automation fields are set
-                    if (entryData.username || entryData.login_script || entryData.autofill) {
-                        document.getElementById('em-automation-fields').style.display = '';
-                        document.getElementById('em-automation-arrow').innerHTML = '&#9660;';
-                    }
-                    // Populate autofill rows
-                    if (entryData.autofill) {
-                        try {
-                            var afData = typeof entryData.autofill === 'string' ? JSON.parse(entryData.autofill) : entryData.autofill;
-                            if (Array.isArray(afData) && afData.length > 0) {
-                                autofillRows = afData.map(function(r) {
-                                    return { url: r.url || '', username: r.username || '$USERNAME', password: r.password || '$PASSWORD' };
-                                });
-                                renderAutofillRows();
-                                document.getElementById('em-autofill-fields').style.display = '';
-                                document.getElementById('em-autofill-arrow').innerHTML = '&#9660;';
-                            }
-                        } catch(e) { /* ignore bad JSON */ }
-                    }
-                    // Populate allowed domains
-                    if (entryData.allowed_domains && Array.isArray(entryData.allowed_domains) && entryData.allowed_domains.length > 0) {
-                        allowedDomains = entryData.allowed_domains.slice();
-                        renderAllowedDomains();
-                        document.getElementById('em-allowed-domains-fields').style.display = '';
-                        document.getElementById('em-allowed-domains-arrow').innerHTML = '&#9660;';
-                    }
-                } else if (type === 'vdi') {
-                    document.getElementById('em-vdi-image').value = entryData.container_image || '';
-                    document.getElementById('em-vdi-cpu').value = entryData.container_cpu_limit || '';
-                    document.getElementById('em-vdi-memory').value = entryData.container_memory_limit || '';
-                    if (entryData.container_env) {
-                        var envLines = Object.keys(entryData.container_env).map(function(k) {
-                            return k + '=' + entryData.container_env[k];
-                        }).join('\n');
-                        document.getElementById('em-vdi-env').value = envLines;
-                    }
-                    document.getElementById('em-vdi-container-username').value = entryData.container_username || '';
-                    // Password field is left blank by design; the entry retains the stored value
-                    // unless a new one is typed. has_container_password shows whether one is set.
-                    var cpw = document.getElementById('em-vdi-container-password');
-                    cpw.value = '';
-                    cpw.placeholder = entryData.has_container_password
-                        ? '(stored password unchanged unless you type a new one)'
-                        : 'Leave blank to generate per-connect';
-                    document.getElementById('em-vdi-idle-timeout').value = entryData.container_idle_timeout_mins || '';
-                    document.getElementById('em-vdi-banner').value = entryData.banner || '';
-                }
-                if (type === 'ssh' || type === 'rdp') {
-                    document.getElementById('em-enable-drive').checked = !!entryData.enable_drive;
-                    document.getElementById('em-drive-warning').style.display = (entryData.enable_drive && !_driveConfigured) ? '' : 'none';
-                }
-                // Populate RemoteApp fields (RDP)
-                if (type === 'rdp' && (entryData.remote_app || entryData.remote_app_dir || entryData.remote_app_args)) {
-                    document.getElementById('em-remote-app').value = entryData.remote_app || '';
-                    document.getElementById('em-remote-app-dir').value = entryData.remote_app_dir || '';
-                    document.getElementById('em-remote-app-args').value = entryData.remote_app_args || '';
-                    document.getElementById('em-remoteapp-fields').style.display = '';
-                    document.getElementById('em-remoteapp-arrow').innerHTML = '&#9660;';
-                }
-                // Populate recording override fields
-                if (entryData.enable_recording !== null && entryData.enable_recording !== undefined) {
-                    document.getElementById('em-override-recording').checked = true;
-                    document.getElementById('em-recording-sub').style.display = '';
-                    document.getElementById('em-enable-recording').checked = entryData.enable_recording !== false;
-                    document.getElementById('em-max-recordings').value = entryData.max_recordings || '0';
-                    document.getElementById('em-recording-fields').style.display = '';
-                    document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
-                } else if (entryData.max_recordings) {
-                    document.getElementById('em-override-recording').checked = true;
-                    document.getElementById('em-recording-sub').style.display = '';
-                    document.getElementById('em-enable-recording').checked = true;
-                    document.getElementById('em-max-recordings').value = entryData.max_recordings;
-                    document.getElementById('em-recording-fields').style.display = '';
-                    document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
-                }
-                // Typescript recording flag (SSH only; #159)
-                document.getElementById('em-typescript-row').style.display = type === 'ssh' ? '' : 'none';
-                document.getElementById('em-record-typescript').checked = !!entryData.record_typescript;
-                if (entryData.record_typescript) {
-                    document.getElementById('em-recording-fields').style.display = '';
-                    document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
-                }
-                // Populate video performance settings (RDP only)
-                if (type === 'rdp') {
-                    document.getElementById('em-enable-gfx').checked = !!entryData.enable_gfx;
-                    document.getElementById('em-enable-desktop-comp').checked = !!entryData.enable_desktop_composition;
-                    document.getElementById('em-force-lossless').checked = !!entryData.force_lossless;
-                    document.getElementById('em-enable-h264').checked = !!entryData.enable_h264;
-                    document.getElementById('em-enable-wallpaper').checked = !!entryData.enable_wallpaper;
-                    document.getElementById('em-enable-theming').checked = !!entryData.enable_theming;
-                    document.getElementById('em-enable-full-window-drag').checked = !!entryData.enable_full_window_drag;
-                    if (entryData.enable_gfx || entryData.enable_desktop_composition || entryData.force_lossless || entryData.enable_h264 || entryData.enable_wallpaper || entryData.enable_theming || entryData.enable_full_window_drag) {
-                        document.getElementById('em-video-perf-fields').style.display = '';
-                        document.getElementById('em-video-perf-arrow').innerHTML = '&#9660;';
-                    }
-                }
-                // Populate clipboard settings
-                document.getElementById('em-disable-copy').checked = !!entryData.disable_copy;
-                document.getElementById('em-disable-paste').checked = !!entryData.disable_paste;
-                // Populate per-entry sharing flag
-                document.getElementById('em-allow-sharing').checked = !!entryData.allow_sharing;
-                // Populate auto-open singleton flag
-                document.getElementById('em-auto-open-singleton').checked = !!entryData.auto_open_if_singleton;
-                // Populate fullscreen-on-connect flag
-                document.getElementById('em-fullscreen-on-connect').checked = !!entryData.fullscreen_on_connect;
-                // Populate autohide-side-tabs flag
-                document.getElementById('em-autohide-side-tabs').checked = !!entryData.autohide_side_tabs;
-                // Populate Wake-on-LAN fields (SSH/RDP/VNC)
-                if (type === 'ssh' || type === 'rdp' || type === 'vnc') {
-                    document.getElementById('em-wol-enabled').checked = !!entryData.wol_send_packet;
-                    document.getElementById('em-wol-mac').value = entryData.wol_mac_addr || '';
-                    document.getElementById('em-wol-broadcast').value = entryData.wol_broadcast_addr || '';
-                    document.getElementById('em-wol-port').value = entryData.wol_udp_port || '';
-                    document.getElementById('em-wol-wait').value = entryData.wol_wait_time || '';
-                    if (entryData.wol_send_packet || entryData.wol_mac_addr) {
-                        document.getElementById('em-wol-fields').style.display = '';
-                        document.getElementById('em-wol-arrow').innerHTML = '&#9660;';
-                    }
-                }
-                // Populate hop list from jump_hosts array
-                if (entryData.jump_hosts && entryData.jump_hosts.length > 0) {
-                    hopList = entryData.jump_hosts.map(function(h) {
-                        return { hostname: h.hostname || '', port: h.port || 22, username: h.username || '', password: '', private_key: '', host_key: h.host_key || '', host_key_fingerprint: h.host_key_fingerprint || '', expanded: false };
+        // Drop the editor-only flags the server adds in place of secrets.
+        function stripFlags(obj) {
+            var out = {};
+            Object.keys(obj || {}).forEach(function(k) {
+                if (/^has_/.test(k)) return;
+                var v = obj[k];
+                if (k === 'jump_hosts' && Array.isArray(v)) {
+                    v = v.map(function(h) {
+                        var o = {};
+                        Object.keys(h).forEach(function(hk) {
+                            if (!/^has_/.test(hk) && hk !== 'host_key_fingerprint') o[hk] = h[hk];
+                        });
+                        return o;
                     });
-                    renderHops();
-                    // Auto-expand the tunnel section
-                    document.getElementById('em-tunnel-fields').style.display = '';
-                    document.getElementById('em-tunnel-arrow').innerHTML = '&#9660;';
                 }
+                out[k] = v;
+            });
+            return out;
+        }
+        function hopKey(h) { return [h.hostname || '', h.port || 22, h.username || ''].join('|'); }
+        function sameValue(a, b) {
+            if (a === undefined || b === undefined) return a === b;
+            if (Array.isArray(a) && Array.isArray(b) && a.length && typeof a[0] === 'object') {
+                return a.length === b.length && a.every(function(h, i) { return hopKey(h) === hopKey(b[i]); });
             }
-
-            document.getElementById('entry-modal').classList.add('active');
+            return JSON.stringify(a) === JSON.stringify(b);
         }
 
-        document.getElementById('em-cancel').addEventListener('click', function() {
-            document.getElementById('entry-modal').classList.remove('active');
-            entryTypeSelect.disabled = false;
+        function protoEdNew(type) {
+            return { host: {}, hostHasPassword: false, groups: [], users: [], active: 0,
+                items: [{ type: type, name: '', settings: {}, rule: null, isNew: true }] };
+        }
+        // From an entry as the list endpoints give it to an admin.
+        function protoEdFromInfo(info) {
+            var ps = (info.protocols && info.protocols.length) ? info.protocols : [info];
+            var hostSettings = info.settings || {};
+            return {
+                host: stripFlags(hostSettings),
+                hostHasPassword: !!hostSettings.has_password,
+                groups: info.allowed_groups || [],
+                users: info.allowed_users || [],
+                active: 0,
+                items: ps.map(function(p) {
+                    var nm = p.protocol && p.protocol !== p.session_type ? p.protocol : '';
+                    return {
+                        type: p.session_type, name: nm,
+                        // Without settings (an older server) the protocol's
+                        // own fields are the entry's.
+                        settings: p.settings || (info.settings ? {} : p),
+                        rule: (p.allowed_groups || p.allowed_users) ? { groups: p.allowed_groups || [], users: p.allowed_users || [] } : null,
+                        isNew: false
+                    };
+                })
+            };
+        }
+
+        function protoEdOpen(ed) {
+            protoEd = ed;
+            document.getElementById('em-host-hostname').value = ed.host.hostname || '';
+            document.getElementById('em-host-username').value = ed.host.username || '';
+            var hpw = document.getElementById('em-host-password');
+            hpw.value = '';
+            hpw.placeholder = ed.hostHasPassword ? '(stored, leave blank to keep)' : '';
+            document.getElementById('em-host-groups').value = (ed.groups || []).join(', ');
+            document.getElementById('em-host-users').value = (ed.users || []).join(', ');
+            protoLoad(0);
+        }
+
+        function renderProtoTabs() {
+            var bar = document.getElementById('em-proto-tabs');
+            var html = '<span style="color:var(--text-muted);font-size:0.85em;margin-right:0.3em">Protocols:</span>';
+            protoEd.items.forEach(function(it, i) {
+                html += '<button type="button" class="em-proto-tab' + (i === protoEd.active ? ' active' : '') + '" data-proto-tab="' + i + '"'
+                    + (i === 0 ? ' title="Primary: what Connect opens"' : '') + '>'
+                    + (i === 0 ? '&#9733; ' : '') + escapeHtml(protoName(it)) + '</button>';
+            });
+            html += '<button type="button" class="em-proto-tab" id="em-proto-add" title="Add another way to connect to this host">+ Add protocol</button>';
+            bar.innerHTML = html;
+            document.getElementById('em-proto-primary').style.display = protoEd.active > 0 ? '' : 'none';
+            document.getElementById('em-proto-remove').style.display = protoEd.items.length > 1 ? '' : 'none';
+        }
+
+        // Placeholders: a blank field inherits the host's value.
+        function setInheritPlaceholders(type, it) {
+            ['hostname', 'username', 'password'].forEach(function(k) {
+                var id = PROTO_INPUTS[k][type];
+                if (!id) return;
+                var el = document.getElementById(id);
+                if (el.dataset.basePlaceholder === undefined) el.dataset.basePlaceholder = el.placeholder || '';
+                var ph = el.dataset.basePlaceholder;
+                var own = it.settings || {};
+                if (k === 'password' && own.has_password) ph = '(stored, leave blank to keep)';
+                else if (k === 'password' && (protoEd.hostHasPassword || document.getElementById('em-host-password').value)) ph = 'Host password';
+                else if (k !== 'password' && protoEd.host[k]) ph = 'Host: ' + protoEd.host[k];
+                el.placeholder = ph;
+            });
+        }
+
+        // Back to each field's own placeholder, for a form that edits no
+        // entry (an ad-hoc connection).
+        function clearInheritPlaceholders() {
+            document.querySelectorAll('#entry-modal [data-base-placeholder]').forEach(function(el) {
+                el.placeholder = el.dataset.basePlaceholder;
+            });
+        }
+
+        function protoLoad(i) {
+            protoEd.active = i;
+            var it = protoEd.items[i];
+            clearEntryFields();
+            entryTypeSelect.value = it.type;
+            entryTypeSelect.disabled = !it.isNew;
+            entryTypeSelect.dispatchEvent(new Event('change'));
+            // What the form shows: the host's fields this protocol inherits,
+            // then its own on top.
+            var merged = {};
+            Object.keys(protoEd.host).forEach(function(k) {
+                if (PROTO_HOST_FORM_KEYS.indexOf(k) < 0 && k !== 'display_name' && k !== 'external_id') merged[k] = protoEd.host[k];
+            });
+            Object.keys(it.settings || {}).forEach(function(k) { merged[k] = it.settings[k]; });
+            fillFormFromEntry(it.type, merged);
+            setInheritPlaceholders(it.type, it);
+            var nameEl = document.getElementById('em-proto-name');
+            nameEl.value = it.name || '';
+            nameEl.disabled = !it.isNew;
+            ['hostname', 'username', 'password'].forEach(function(k) {
+                document.getElementById('em-proto-clear-' + k).checked = (it.settings || {})[k] === '';
+            });
+            var own = !!it.rule;
+            document.getElementById('em-proto-own-rule').checked = own;
+            document.getElementById('em-proto-rule').style.display = own ? '' : 'none';
+            document.getElementById('em-proto-groups').value = own ? (it.rule.groups || []).join(', ') : '';
+            document.getElementById('em-proto-users').value = own ? (it.rule.users || []).join(', ') : '';
+            renderProtoTabs();
+        }
+
+        // Read the form back into the selected protocol.
+        function protoStore() {
+            var it = protoEd.items[protoEd.active];
+            var flat = buildEntryFromForm(entryTypeSelect.value);
+            it.type = flat.type;
+            delete flat.type;
+            var formKeys = Object.keys(flat);
+            var host = protoEd.host;
+            var single = protoEd.items.length === 1;
+            formKeys.forEach(function(k) {
+                if (PROTO_HOST_FORM_KEYS.indexOf(k) >= 0) return; // the protocol's own
+                if (sameValue(flat[k], host[k])) { delete flat[k]; return; }
+                // With one protocol, a host field changed in its form is the
+                // host's, so the entry stays in the plain single-protocol form.
+                if (single && PROTO_HOST_KEYS.indexOf(k) >= 0) { host[k] = flat[k]; delete flat[k]; }
+            });
+            if (single) {
+                Object.keys(PROTO_FIELD_TYPES).forEach(function(k) {
+                    if (PROTO_FIELD_TYPES[k].indexOf(it.type) >= 0 && k in host && formKeys.indexOf(k) < 0) delete host[k];
+                });
+            }
+            ['hostname', 'username', 'password'].forEach(function(k) {
+                if (document.getElementById('em-proto-clear-' + k).checked && !flat[k]) flat[k] = '';
+            });
+            // Secrets the form never saw stay stored (the server keeps what an
+            // update omits); keep the flags so the placeholders still say so.
+            var prev = it.settings || {};
+            ['has_password', 'has_private_key', 'has_container_password', 'has_proxmox_token_secret'].forEach(function(f) {
+                if (prev[f]) flat[f] = true;
+            });
+            it.settings = flat;
+            if (it.isNew) it.name = document.getElementById('em-proto-name').value.trim();
+            if (document.getElementById('em-proto-own-rule').checked) {
+                it.rule = { groups: splitList(document.getElementById('em-proto-groups').value),
+                            users: splitList(document.getElementById('em-proto-users').value) };
+            } else {
+                it.rule = null;
+            }
+        }
+
+        // The body to save: the host's fields, then the protocols in order.
+        function buildProtoBody(displayName) {
+            protoStore();
+            var body = stripFlags(protoEd.host);
+            if (displayName) body.display_name = displayName; else delete body.display_name;
+            var hh = document.getElementById('em-host-hostname').value.trim();
+            if (hh) body.hostname = hh; else delete body.hostname;
+            var hu = document.getElementById('em-host-username').value.trim();
+            if (hu) body.username = hu; else delete body.username;
+            var hp = document.getElementById('em-host-password').value;
+            if (hp) body.password = hp; else delete body.password;
+            delete body.port; // set per protocol
+            var g = splitList(document.getElementById('em-host-groups').value);
+            var u = splitList(document.getElementById('em-host-users').value);
+            if (g.length) body.allowed_groups = g;
+            if (u.length) body.allowed_users = u;
+            var seen = {};
+            for (var i = 0; i < protoEd.items.length; i++) {
+                var it = protoEd.items[i];
+                if (it.name && !/^[a-zA-Z0-9_.-]+$/.test(it.name)) return 'Protocol name "' + it.name + '": letters, digits, hyphens, underscores and dots only.';
+                if (seen[protoName(it)]) return 'Two protocols are named "' + protoName(it) + '". Give one a name of its own.';
+                seen[protoName(it)] = true;
+            }
+            body.protocols = protoEd.items.map(function(it) {
+                var p = stripFlags(it.settings);
+                delete p.type; delete p.name; delete p.protocol; delete p.protocols;
+                delete p.display_name; delete p.external_id;
+                p.type = it.type;
+                if (it.name) p.name = it.name;
+                if (it.rule) { p.allowed_groups = it.rule.groups; p.allowed_users = it.rule.users; }
+                return p;
+            });
+            // One protocol: a hostname typed into its form is the host's, so
+            // the entry is stored in the plain single-protocol form.
+            if (body.protocols.length === 1) {
+                var p0 = body.protocols[0];
+                if (p0.hostname && (!body.hostname || body.hostname === p0.hostname)) {
+                    body.hostname = p0.hostname;
+                    delete p0.hostname;
+                }
+            }
+            return body;
+        }
+
+        document.getElementById('em-proto-tabs').addEventListener('click', function(e) {
+            var t = e.target.closest('button');
+            if (!t || !protoEd) return;
+            if (t.id === 'em-proto-add') {
+                protoStore();
+                var used = protoEd.items.map(function(x) { return x.type; });
+                var next = ['ssh', 'rdp', 'web', 'vnc', 'spice', 'proxmox', 'vdi'].filter(function(x) { return used.indexOf(x) < 0; })[0] || 'ssh';
+                protoEd.items.push({ type: next, name: '', settings: {}, rule: null, isNew: true });
+                protoLoad(protoEd.items.length - 1);
+                return;
+            }
+            var idx = t.getAttribute('data-proto-tab');
+            if (idx === null) return;
+            protoStore();
+            protoLoad(parseInt(idx, 10));
+        });
+        document.getElementById('em-proto-primary').addEventListener('click', function() {
+            if (!protoEd || protoEd.active === 0) return;
+            protoStore();
+            var it = protoEd.items.splice(protoEd.active, 1)[0];
+            protoEd.items.unshift(it);
+            protoLoad(0);
+        });
+        document.getElementById('em-proto-remove').addEventListener('click', function() {
+            if (!protoEd || protoEd.items.length < 2) return;
+            protoEd.items.splice(protoEd.active, 1);
+            protoLoad(0);
+        });
+        document.getElementById('em-proto-own-rule').addEventListener('change', function() {
+            document.getElementById('em-proto-rule').style.display = this.checked ? '' : 'none';
+        });
+        document.getElementById('em-proto-name').addEventListener('input', function() {
+            if (!protoEd) return;
+            var it = protoEd.items[protoEd.active];
+            if (it.isNew) { it.name = this.value.trim(); renderProtoTabs(); }
+        });
+        // A new protocol's tab follows its type.
+        entryTypeSelect.addEventListener('change', function() {
+            if (!protoEd) return;
+            var it = protoEd.items[protoEd.active];
+            if (it && it.isNew && it.type !== entryTypeSelect.value) {
+                it.type = entryTypeSelect.value;
+                setInheritPlaceholders(it.type, it);
+                renderProtoTabs();
+            }
+        });
+        ['em-host-hostname', 'em-host-username', 'em-host-password'].forEach(function(id) {
+            document.getElementById(id).addEventListener('input', function() {
+                if (!protoEd) return;
+                if (id === 'em-host-hostname') protoEd.host.hostname = this.value.trim();
+                if (id === 'em-host-username') protoEd.host.username = this.value.trim();
+                setInheritPlaceholders(entryTypeSelect.value, protoEd.items[protoEd.active]);
+            });
         });
 
-        // The entry the editor describes, in the form the entries API takes
-        // and the ad-hoc connect endpoint reads. Shared by Save, Connect and
-        // Save as entry, so every option works in all three.
-        function buildEntryFromForm() {
-            var displayName = document.getElementById('em-display-name').value.trim();
-            var type = entryTypeSelect.value;
+        // The entry form for one session type (the selected one when not
+        // given) as a flat entry. The protocol editor, ad-hoc Connect and
+        // Save as entry all read the form through it.
+        function buildEntryFromForm(type) {
+            type = type || entryTypeSelect.value;
             var entry = { type: type };
-            if (displayName) entry.display_name = displayName;
 
             if (type === 'ssh') {
                 var h = document.getElementById('em-hostname').value.trim();
@@ -5022,11 +5236,391 @@
                     });
                 }
             }
+
             return entry;
         }
 
+        // Fill the form for one session type from a flat entry (or a
+        // protocol's fields merged over the host's).
+        function fillFormFromEntry(type, entryData) {
+                if (type === 'ssh') {
+                    document.getElementById('em-hostname').value = entryData.hostname || '';
+                    document.getElementById('em-port').value = entryData.port || '22';
+                    document.getElementById('em-username').value = entryData.username || '';
+                    document.getElementById('em-ssh-font-size').value = entryData.ssh_font_size || '';
+                    document.getElementById('em-ssh-prompt-creds').checked = !!entryData.prompt_credentials;
+                } else if (type === 'rdp') {
+                    document.getElementById('em-rdp-hostname').value = entryData.hostname || '';
+                    document.getElementById('em-rdp-port').value = entryData.port || '3389';
+                    document.getElementById('em-rdp-username').value = entryData.username || '';
+                    document.getElementById('em-rdp-domain').value = entryData.domain || '';
+                    if (entryData.security) {
+                        document.getElementById('em-rdp-security').value = entryData.security;
+                    }
+                    document.getElementById('em-rdp-layout').value = entryData.server_layout || '';
+                    document.getElementById('em-rdp-ignore-cert').checked = !!entryData.ignore_cert;
+                    document.getElementById('em-rdp-auth-pkg').value = entryData.auth_pkg || '';
+                    document.getElementById('em-rdp-kdc-url').value = entryData.kdc_url || '';
+                    document.getElementById('em-rdp-monitors').value = entryData.max_monitors || 1;
+                    document.getElementById('em-rdp-prompt-creds').checked = !!entryData.prompt_credentials;
+                } else if (type === 'vnc') {
+                    document.getElementById('em-vnc-hostname').value = entryData.hostname || '';
+                    document.getElementById('em-vnc-port').value = entryData.port || '5900';
+                    document.getElementById('em-vnc-username').value = entryData.username || '';
+                    document.getElementById('em-vnc-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
+                    document.getElementById('em-vnc-resize').checked = !!entryData.vnc_resize;
+                    document.getElementById('em-vnc-network').value = entryData.vnc_network || '';
+                    document.getElementById('em-vnc-prompt-creds').checked = !!entryData.prompt_credentials;
+                } else if (type === 'spice') {
+                    document.getElementById('em-spice-hostname').value = entryData.hostname || '';
+                    document.getElementById('em-spice-port').value = entryData.port || '5900';
+                    document.getElementById('em-spice-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
+                    document.getElementById('em-spice-tls').checked = !!entryData.spice_tls;
+                    document.getElementById('em-spice-tls-port').value = entryData.spice_tls_port || '';
+                    document.getElementById('em-spice-ignore-cert').checked = !!entryData.ignore_cert;
+                    document.getElementById('em-spice-ca-cert').value = entryData.spice_ca_cert || '';
+                    document.getElementById('em-spice-cert-subject').value = entryData.spice_cert_subject || '';
+                    document.getElementById('em-spice-proxy').value = entryData.spice_proxy || '';
+                    document.getElementById('em-spice-prompt-creds').checked = !!entryData.prompt_credentials;
+                } else if (type === 'proxmox') {
+                    document.getElementById('em-proxmox-url').value = entryData.proxmox_url || '';
+                    document.getElementById('em-proxmox-node').value = entryData.proxmox_node || '';
+                    document.getElementById('em-proxmox-vmid').value = entryData.proxmox_vmid || '';
+                    document.getElementById('em-proxmox-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
+                    document.getElementById('em-proxmox-monitors').value = entryData.max_monitors || 1;
+                    document.getElementById('em-proxmox-verify-tls').checked = !!entryData.proxmox_verify_tls;
+                    document.getElementById('em-proxmox-token-id').value = entryData.proxmox_token_id || '';
+                    // Secret is never returned; show a hint if one is stored.
+                    var secEl = document.getElementById('em-proxmox-token-secret');
+                    secEl.value = '';
+                    secEl.placeholder = entryData.has_proxmox_token_secret ? '(leave blank to keep existing)' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
+                } else if (type === 'web') {
+                    document.getElementById('em-url').value = entryData.url || '';
+                    document.getElementById('em-banner').value = entryData.banner || '';
+                    document.getElementById('em-web-username').value = entryData.username || '';
+                    loadLoginScripts(function() { populateLoginScriptDropdown(entryData.login_script || ''); });
+                    // Auto-expand automation if any automation fields are set
+                    if (entryData.username || entryData.login_script || entryData.autofill) {
+                        document.getElementById('em-automation-fields').style.display = '';
+                        document.getElementById('em-automation-arrow').innerHTML = '&#9660;';
+                    }
+                    // Populate autofill rows
+                    if (entryData.autofill) {
+                        try {
+                            var afData = typeof entryData.autofill === 'string' ? JSON.parse(entryData.autofill) : entryData.autofill;
+                            if (Array.isArray(afData) && afData.length > 0) {
+                                autofillRows = afData.map(function(r) {
+                                    return { url: r.url || '', username: r.username || '$USERNAME', password: r.password || '$PASSWORD' };
+                                });
+                                renderAutofillRows();
+                                document.getElementById('em-autofill-fields').style.display = '';
+                                document.getElementById('em-autofill-arrow').innerHTML = '&#9660;';
+                            }
+                        } catch(e) { /* ignore bad JSON */ }
+                    }
+                    // Populate allowed domains
+                    if (entryData.allowed_domains && Array.isArray(entryData.allowed_domains) && entryData.allowed_domains.length > 0) {
+                        allowedDomains = entryData.allowed_domains.slice();
+                        renderAllowedDomains();
+                        document.getElementById('em-allowed-domains-fields').style.display = '';
+                        document.getElementById('em-allowed-domains-arrow').innerHTML = '&#9660;';
+                    }
+                } else if (type === 'vdi') {
+                    document.getElementById('em-vdi-image').value = entryData.container_image || '';
+                    document.getElementById('em-vdi-cpu').value = entryData.container_cpu_limit || '';
+                    document.getElementById('em-vdi-memory').value = entryData.container_memory_limit || '';
+                    if (entryData.container_env) {
+                        var envLines = Object.keys(entryData.container_env).map(function(k) {
+                            return k + '=' + entryData.container_env[k];
+                        }).join('\n');
+                        document.getElementById('em-vdi-env').value = envLines;
+                    }
+                    document.getElementById('em-vdi-container-username').value = entryData.container_username || '';
+                    // Password field is left blank by design; the entry retains the stored value
+                    // unless a new one is typed. has_container_password shows whether one is set.
+                    var cpw = document.getElementById('em-vdi-container-password');
+                    cpw.value = '';
+                    cpw.placeholder = entryData.has_container_password
+                        ? '(stored password unchanged unless you type a new one)'
+                        : 'Leave blank to generate per-connect';
+                    document.getElementById('em-vdi-idle-timeout').value = entryData.container_idle_timeout_mins || '';
+                    document.getElementById('em-vdi-banner').value = entryData.banner || '';
+                }
+                if (type === 'ssh' || type === 'rdp') {
+                    document.getElementById('em-enable-drive').checked = !!entryData.enable_drive;
+                    document.getElementById('em-drive-warning').style.display = (entryData.enable_drive && !_driveConfigured) ? '' : 'none';
+                }
+                // Populate RemoteApp fields (RDP)
+                if (type === 'rdp' && (entryData.remote_app || entryData.remote_app_dir || entryData.remote_app_args)) {
+                    document.getElementById('em-remote-app').value = entryData.remote_app || '';
+                    document.getElementById('em-remote-app-dir').value = entryData.remote_app_dir || '';
+                    document.getElementById('em-remote-app-args').value = entryData.remote_app_args || '';
+                    document.getElementById('em-remoteapp-fields').style.display = '';
+                    document.getElementById('em-remoteapp-arrow').innerHTML = '&#9660;';
+                }
+                // Populate recording override fields
+                if (entryData.enable_recording !== null && entryData.enable_recording !== undefined) {
+                    document.getElementById('em-override-recording').checked = true;
+                    document.getElementById('em-recording-sub').style.display = '';
+                    document.getElementById('em-enable-recording').checked = entryData.enable_recording !== false;
+                    document.getElementById('em-max-recordings').value = entryData.max_recordings || '0';
+                    document.getElementById('em-recording-fields').style.display = '';
+                    document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
+                } else if (entryData.max_recordings) {
+                    document.getElementById('em-override-recording').checked = true;
+                    document.getElementById('em-recording-sub').style.display = '';
+                    document.getElementById('em-enable-recording').checked = true;
+                    document.getElementById('em-max-recordings').value = entryData.max_recordings;
+                    document.getElementById('em-recording-fields').style.display = '';
+                    document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
+                }
+                // Typescript recording flag (SSH only; #159)
+                document.getElementById('em-typescript-row').style.display = type === 'ssh' ? '' : 'none';
+                document.getElementById('em-record-typescript').checked = !!entryData.record_typescript;
+                if (entryData.record_typescript) {
+                    document.getElementById('em-recording-fields').style.display = '';
+                    document.getElementById('em-recording-arrow').innerHTML = '&#9660;';
+                }
+                // Populate video performance settings (RDP only)
+                if (type === 'rdp') {
+                    document.getElementById('em-enable-gfx').checked = !!entryData.enable_gfx;
+                    document.getElementById('em-enable-desktop-comp').checked = !!entryData.enable_desktop_composition;
+                    document.getElementById('em-force-lossless').checked = !!entryData.force_lossless;
+                    document.getElementById('em-enable-h264').checked = !!entryData.enable_h264;
+                    document.getElementById('em-enable-wallpaper').checked = !!entryData.enable_wallpaper;
+                    document.getElementById('em-enable-theming').checked = !!entryData.enable_theming;
+                    document.getElementById('em-enable-full-window-drag').checked = !!entryData.enable_full_window_drag;
+                    if (entryData.enable_gfx || entryData.enable_desktop_composition || entryData.force_lossless || entryData.enable_h264 || entryData.enable_wallpaper || entryData.enable_theming || entryData.enable_full_window_drag) {
+                        document.getElementById('em-video-perf-fields').style.display = '';
+                        document.getElementById('em-video-perf-arrow').innerHTML = '&#9660;';
+                    }
+                }
+                // Populate clipboard settings
+                document.getElementById('em-disable-copy').checked = !!entryData.disable_copy;
+                document.getElementById('em-disable-paste').checked = !!entryData.disable_paste;
+                // Populate per-entry sharing flag
+                document.getElementById('em-allow-sharing').checked = !!entryData.allow_sharing;
+                // Populate auto-open singleton flag
+                document.getElementById('em-auto-open-singleton').checked = !!entryData.auto_open_if_singleton;
+                // Populate fullscreen-on-connect flag
+                document.getElementById('em-fullscreen-on-connect').checked = !!entryData.fullscreen_on_connect;
+                // Populate autohide-side-tabs flag
+                document.getElementById('em-autohide-side-tabs').checked = !!entryData.autohide_side_tabs;
+                // Populate Wake-on-LAN fields (SSH/RDP/VNC)
+                if (type === 'ssh' || type === 'rdp' || type === 'vnc') {
+                    document.getElementById('em-wol-enabled').checked = !!entryData.wol_send_packet;
+                    document.getElementById('em-wol-mac').value = entryData.wol_mac_addr || '';
+                    document.getElementById('em-wol-broadcast').value = entryData.wol_broadcast_addr || '';
+                    document.getElementById('em-wol-port').value = entryData.wol_udp_port || '';
+                    document.getElementById('em-wol-wait').value = entryData.wol_wait_time || '';
+                    if (entryData.wol_send_packet || entryData.wol_mac_addr) {
+                        document.getElementById('em-wol-fields').style.display = '';
+                        document.getElementById('em-wol-arrow').innerHTML = '&#9660;';
+                    }
+                }
+                // Populate hop list from jump_hosts array
+                if (entryData.jump_hosts && entryData.jump_hosts.length > 0) {
+                    hopList = entryData.jump_hosts.map(function(h) {
+                        return { hostname: h.hostname || '', port: h.port || 22, username: h.username || '', password: '', private_key: '', host_key: h.host_key || '', host_key_fingerprint: h.host_key_fingerprint || '', expanded: false };
+                    });
+                    renderHops();
+                    // Auto-expand the tunnel section
+                    document.getElementById('em-tunnel-fields').style.display = '';
+                    document.getElementById('em-tunnel-arrow').innerHTML = '&#9660;';
+                }
+        }
+
+        function openNewEntry() {
+            if (!selectedFolder) return;
+            setAdhocMode(false);
+            entryEditMode = null;
+            cloneSource = null;
+            document.getElementById('entry-modal-title').textContent = 'New Entry in ' + folderPath(selectedFolder);
+            document.getElementById('em-name').value = '';
+            document.getElementById('em-name').disabled = false;
+            document.getElementById('em-display-name').value = '';
+            protoEdOpen(protoEdNew('ssh'));
+            document.getElementById('em-move-section').style.display = 'none';
+            document.getElementById('em-error').textContent = '';
+            document.getElementById('entry-modal').classList.add('active');
+        }
+
+        document.getElementById('btn-new-entry').addEventListener('click', openNewEntry);
+
+        function clearEntryFields() {
+            document.getElementById('em-hostname').value = '';
+            document.getElementById('em-port').value = '22';
+            document.getElementById('em-username').value = '';
+            document.getElementById('em-password').value = '';
+            document.getElementById('em-private-key').value = '';
+            document.getElementById('em-rdp-hostname').value = '';
+            document.getElementById('em-rdp-port').value = '3389';
+            document.getElementById('em-rdp-username').value = '';
+            document.getElementById('em-rdp-password').value = '';
+            document.getElementById('em-rdp-domain').value = '';
+            document.getElementById('em-rdp-security').value = '';
+            document.getElementById('em-rdp-layout').value = '';
+            document.getElementById('em-rdp-ignore-cert').checked = false;
+            document.getElementById('em-rdp-auth-pkg').value = '';
+            document.getElementById('em-rdp-kdc-url').value = '';
+            document.getElementById('em-rdp-prompt-creds').checked = false;
+            document.getElementById('em-ssh-prompt-creds').checked = false;
+            document.getElementById('em-vnc-hostname').value = '';
+            document.getElementById('em-vnc-port').value = '5900';
+            document.getElementById('em-vnc-username').value = '';
+            document.getElementById('em-vnc-password').value = '';
+            document.getElementById('em-vnc-color-depth').value = '';
+            document.getElementById('em-vnc-resize').checked = false;
+            document.getElementById('em-vnc-network').value = '';
+            document.getElementById('em-vnc-prompt-creds').checked = false;
+            document.getElementById('em-spice-hostname').value = '';
+            document.getElementById('em-spice-port').value = '5900';
+            document.getElementById('em-spice-password').value = '';
+            document.getElementById('em-spice-color-depth').value = '';
+            document.getElementById('em-spice-tls').checked = false;
+            document.getElementById('em-spice-tls-port').value = '';
+            document.getElementById('em-spice-ignore-cert').checked = false;
+            document.getElementById('em-spice-ca-cert').value = '';
+            document.getElementById('em-spice-cert-subject').value = '';
+            document.getElementById('em-spice-proxy').value = '';
+            document.getElementById('em-spice-prompt-creds').checked = false;
+            document.getElementById('em-proxmox-url').value = '';
+            document.getElementById('em-proxmox-node').value = '';
+            document.getElementById('em-proxmox-vmid').value = '';
+            document.getElementById('em-proxmox-token-id').value = '';
+            document.getElementById('em-proxmox-token-secret').value = '';
+            document.getElementById('em-proxmox-token-secret').placeholder = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
+            document.getElementById('em-proxmox-color-depth').value = '';
+            document.getElementById('em-proxmox-monitors').value = '1';
+            document.getElementById('em-proxmox-verify-tls').checked = false;
+            document.getElementById('em-ssh-font-size').value = '';
+            document.getElementById('em-wol-enabled').checked = false;
+            document.getElementById('em-wol-mac').value = '';
+            document.getElementById('em-wol-broadcast').value = '';
+            document.getElementById('em-wol-port').value = '';
+            document.getElementById('em-wol-wait').value = '';
+            document.getElementById('em-wol-fields').style.display = 'none';
+            document.getElementById('em-wol-arrow').innerHTML = '&#9654;';
+            document.getElementById('em-url').value = '';
+            document.getElementById('em-banner').value = '';
+            document.getElementById('em-web-username').value = '';
+            document.getElementById('em-web-password').value = '';
+            document.getElementById('em-login-script').value = '';
+            document.getElementById('em-automation-fields').style.display = 'none';
+            document.getElementById('em-automation-arrow').innerHTML = '&#9654;';
+            autofillRows = [];
+            renderAutofillRows();
+            document.getElementById('em-autofill-fields').style.display = 'none';
+            document.getElementById('em-autofill-arrow').innerHTML = '&#9654;';
+            allowedDomains = [];
+            renderAllowedDomains();
+            document.getElementById('em-allowed-domains-fields').style.display = 'none';
+            document.getElementById('em-allowed-domains-arrow').innerHTML = '&#9654;';
+            document.getElementById('em-enable-gfx').checked = false;
+            document.getElementById('em-enable-desktop-comp').checked = false;
+            document.getElementById('em-force-lossless').checked = false;
+            document.getElementById('em-enable-h264').checked = false;
+            document.getElementById('em-enable-wallpaper').checked = false;
+            document.getElementById('em-enable-theming').checked = false;
+            document.getElementById('em-enable-full-window-drag').checked = false;
+            document.getElementById('em-video-perf-fields').style.display = 'none';
+            document.getElementById('em-video-perf-arrow').innerHTML = '&#9654;';
+            document.getElementById('em-disable-copy').checked = false;
+            document.getElementById('em-disable-paste').checked = false;
+            document.getElementById('em-allow-sharing').checked = false;
+            document.getElementById('em-auto-open-singleton').checked = false;
+            document.getElementById('em-fullscreen-on-connect').checked = false;
+            document.getElementById('em-autohide-side-tabs').checked = false;
+            document.getElementById('em-enable-drive').checked = false;
+            document.getElementById('em-drive-warning').style.display = 'none';
+            document.getElementById('em-remote-app').value = '';
+            document.getElementById('em-remote-app-dir').value = '';
+            document.getElementById('em-remote-app-args').value = '';
+            document.getElementById('em-remoteapp-fields').style.display = 'none';
+            document.getElementById('em-remoteapp-arrow').innerHTML = '&#9654;';
+            document.getElementById('em-vdi-image').value = '';
+            document.getElementById('em-vdi-cpu').value = '';
+            document.getElementById('em-vdi-memory').value = '';
+            document.getElementById('em-vdi-env').value = '';
+            document.getElementById('em-vdi-container-username').value = '';
+            document.getElementById('em-vdi-container-password').value = '';
+            document.getElementById('em-vdi-container-password').placeholder = 'Leave blank to generate per-connect';
+            document.getElementById('em-vdi-idle-timeout').value = '';
+            document.getElementById('em-vdi-banner').value = '';
+            document.getElementById('em-override-recording').checked = false;
+            document.getElementById('em-enable-recording').checked = true;
+            document.getElementById('em-max-recordings').value = '0';
+            document.getElementById('em-recording-sub').style.display = 'none';
+            document.getElementById('em-record-typescript').checked = false;
+            document.getElementById('em-recording-fields').style.display = 'none';
+            document.getElementById('em-recording-arrow').innerHTML = '&#9654;';
+            hopList = [];
+            renderHops();
+            document.getElementById('em-tunnel-fields').style.display = 'none';
+            document.getElementById('em-tunnel-arrow').innerHTML = '&#9654;';
+        }
+
+        function openEditEntry(name, scope, folder, type) {
+            setAdhocMode(false);
+            entryEditMode = { scope: scope, folder: folder, name: name };
+            cloneSource = null;
+            document.getElementById('entry-modal-title').textContent = 'Edit: ' + name;
+            document.getElementById('em-name').value = name;
+            document.getElementById('em-name').disabled = true;
+            document.getElementById('em-display-name').value = '';
+            document.getElementById('em-error').textContent = '';
+            clearEntryFields();
+
+            // Pre-select the type from the table data
+            if (type) {
+                entryTypeSelect.value = type;
+                entryTypeSelect.disabled = true;
+                entryTypeSelect.dispatchEvent(new Event('change'));
+            }
+
+            // Populate move-to-folder dropdown (includes top-level + any loaded subfolders)
+            var moveSelect = document.getElementById('em-move-target');
+            moveSelect.innerHTML = '<option value="">(keep in current folder)</option>';
+            var moveCandidates = [];
+            folders.forEach(function(f) { moveCandidates.push(f); });
+            for (var ck in subfolderCache) {
+                subfolderCache[ck].forEach(function(f) { moveCandidates.push(f); });
+            }
+            moveCandidates.forEach(function(f) {
+                var p = folderPath(f);
+                if (p === folder && f.scope === scope) return;
+                var opt = document.createElement('option');
+                opt.value = f.scope + '|' + p;
+                opt.textContent = p + ' (' + f.scope + ')';
+                moveSelect.appendChild(opt);
+            });
+            document.getElementById('em-move-section').style.display = moveCandidates.length > 1 ? '' : 'none';
+
+            // Pre-fill with existing entry data from the loaded entries
+            var entryData = null;
+            for (var i = 0; i < currentEntries.length; i++) {
+                if (currentEntries[i].name === name) {
+                    entryData = currentEntries[i];
+                    break;
+                }
+            }
+            if (entryData && entryData.display_name && entryData.display_name !== name) {
+                document.getElementById('em-display-name').value = entryData.display_name;
+            }
+            protoEdOpen(entryData ? protoEdFromInfo(entryData) : protoEdNew(type || 'ssh'));
+
+            document.getElementById('entry-modal').classList.add('active');
+        }
+
+        document.getElementById('em-cancel').addEventListener('click', function() {
+            document.getElementById('entry-modal').classList.remove('active');
+            entryTypeSelect.disabled = false;
+        });
+
         document.getElementById('em-save').addEventListener('click', function() {
             var name = document.getElementById('em-name').value.trim();
+            var displayName = document.getElementById('em-display-name').value.trim();
+            var type = entryTypeSelect.value;
             var errEl = document.getElementById('em-error');
 
             if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name)) {
@@ -5034,7 +5628,11 @@
                 return;
             }
 
-            var entry = buildEntryFromForm();
+            var entry = buildProtoBody(displayName);
+            if (typeof entry === 'string') {
+                errEl.textContent = entry;
+                return;
+            }
 
             errEl.textContent = '';
             var scope = selectedFolder.scope;
@@ -5239,6 +5837,9 @@
             if (!canAdhoc) return;
             entryEditMode = null;
             cloneSource = null;
+            // One protocol, typed in full: nothing is inherited from a host.
+            protoEd = null;
+            clearInheritPlaceholders();
             setAdhocMode(true);
             document.getElementById('entry-modal-title').textContent = 'Connect to a host';
             document.getElementById('em-name').value = '';
