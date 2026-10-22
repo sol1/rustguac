@@ -77,11 +77,22 @@
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
         var myName = null;
         var myRole = null;
+        var sessionIdentityReady = false;
+        function sessionIdentityLoaded() {
+            sessionIdentityReady = true;
+            // Sessions and identity load independently. Paint cached sessions
+            // immediately once ownership/permissions are known, not at the
+            // next five-second poll.
+            if (lastSessionList) renderSessionList(lastSessionList);
+        }
+        function sessionIdentityFailed() {
+            document.getElementById('error').textContent = 'Failed to load session permissions. Please reload the page.';
+        }
         function checkRole() {
             fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
-                if (!res.ok) return;
+                if (!res.ok) throw new Error('identity request failed');
                 return res.json();
             })
             .then(function(data) {
@@ -105,8 +116,9 @@
                 if (level >= 3) {
                     document.getElementById('reports-link').style.display = '';
                 }
+                sessionIdentityLoaded();
             })
-            .catch(function() {});
+            .catch(sessionIdentityFailed);
         }
         if (apiKey) {
             // A key is never on the page GET, so the server served the anonymous variant.
@@ -118,9 +130,13 @@
             document.getElementById('reports-link').style.display = '';
             // Fetch /api/me anyway to learn our display_name for own-session checks.
             fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
-                .then(function(r) { return r.ok ? r.json() : null; })
-                .then(function(d) { if (d && d.name) myName = d.name; })
-                .catch(function() {});
+                .then(function(r) { if (!r.ok) throw new Error('identity request failed'); return r.json(); })
+                .then(function(d) {
+                    if (!d) return;
+                    myName = d.name || null;
+                    sessionIdentityLoaded();
+                })
+                .catch(sessionIdentityFailed);
         } else {
             checkRole();
         }
@@ -183,6 +199,7 @@
         });
 
         function renderSessionList(allSessions) {
+                if (!sessionIdentityReady) return;
                 sessionFilters.update(allSessions);
                 var sessions = sessionFilters.apply(allSessions);
                 var q = sessionSearchQuery();
