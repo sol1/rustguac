@@ -1840,6 +1840,36 @@
                 rgGo('/connections.html');
             });
 
+            var sessionEndStatus = null;
+            var sessionHasEnded = false;
+            function showSessionEnd(status) {
+                // Keep the first reported reason: subsequent tunnel closure is
+                // a consequence, not a new error. A clean end does not prove
+                // Windows logoff (guacd also uses SUCCESS for disconnect).
+                if (status && !sessionEndStatus) sessionEndStatus = status;
+                var firstEnd = !sessionHasEnded;
+                sessionHasEnded = true;
+                var code = sessionEndStatus && sessionEndStatus.code;
+                var normalEnd = !sessionEndStatus || code === Guacamole.Status.Code.SUCCESS
+                    || code === Guacamole.Status.Code.SESSION_CLOSED
+                    || code === Guacamole.Status.Code.SESSION_TIMEOUT
+                    || code === Guacamole.Status.Code.SESSION_CONFLICT;
+                var message = (sessionEndStatus && sessionEndStatus.message)
+                    || (code === Guacamole.Status.Code.SESSION_TIMEOUT ? 'The remote session timed out.' : '')
+                    || (code === Guacamole.Status.Code.SESSION_CONFLICT ? 'Disconnected by another connection.' : '')
+                    || (normalEnd ? 'The remote connection has ended.' : 'Connection lost');
+                statusEl.textContent = normalEnd ? message : 'Error: ' + message;
+                statusEl.className = '';
+                rgDisarmFullscreenGesture(); rgHideConnectCover();
+                if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
+                if (firstEnd) teardownMonitorWindows('disconnect');
+                if (embedded) { if (firstEnd) rgNotifyParent('end'); return; }
+                document.getElementById('disconnected-title').textContent = normalEnd ? 'Session Ended' : 'Connection Error';
+                document.getElementById('disconnected-message').textContent = message;
+                document.getElementById('disconnected-overlay').className = 'visible';
+                if (rgFullscreenEl()) rgExitFullscreen();
+            }
+
             client.onstatechange = function(state) {
                 switch (state) {
                     case Guacamole.Client.State.CONNECTING: statusEl.textContent = 'Connecting...'; statusEl.className = ''; rgGateStatus('Connecting...', false); break;
@@ -1923,7 +1953,9 @@
                         }
                         break;
                     case Guacamole.Client.State.DISCONNECTING:
-                        statusEl.textContent = 'Disconnecting...'; statusEl.className = '';
+                        if (!sessionHasEnded) {
+                            statusEl.textContent = 'Disconnecting...'; statusEl.className = '';
+                        }
                         // Final thumbnail capture before disconnect
                         if (_thumbInterval) {
                             clearInterval(_thumbInterval);
@@ -1932,45 +1964,21 @@
                         }
                         break;
                     case Guacamole.Client.State.DISCONNECTED:
-                        statusEl.textContent = 'Disconnected'; statusEl.className = '';
-                        rgDisarmFullscreenGesture(); rgHideConnectCover();
-                        if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
-                        if (embedded) { rgNotifyParent('end'); break; }
-                        document.getElementById('disconnected-overlay').className = 'visible';
-                        if (rgFullscreenEl()) rgExitFullscreen();
-                        // Reflect the disconnect in any open monitor pop-outs
-                        // (freeze the stale blit + show a "Disconnected" overlay).
-                        teardownMonitorWindows('disconnect');
+                        showSessionEnd();
                         break;
                 }
             };
 
             client.onerror = function(status) {
-                statusEl.textContent = 'Error: ' + (status.message || 'Unknown error');
-                statusEl.className = '';
-                rgDisarmFullscreenGesture(); rgHideConnectCover();
-                // Stop the 10s thumbnail uploader; the session is dead and
-                // each XHR would otherwise 404 against a cleaned-up id.
-                if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
-                document.getElementById('disconnected-title').textContent = 'Connection Error';
-                document.getElementById('disconnected-message').textContent = status.message || 'An error occurred.';
-                document.getElementById('disconnected-overlay').className = 'visible';
-                if (rgFullscreenEl()) rgExitFullscreen();
+                showSessionEnd(status || { code: Guacamole.Status.Code.SERVER_ERROR });
+                client.disconnect();
             };
 
             // Wire tunnel events back into the client. Upstream Guacamole's
-            // Client.js deliberately doesn't listen on tunnel.onerror /
-            // tunnel.onstatechange — the Apache webapp installs those
-            // handlers externally via AngularJS. Our lean client.html
-            // inherits Tunnel.js + Client.js from upstream but used to
-            // miss this glue, so when a mid-path middlebox silently
-            // dropped the WS and socket.onclose fired, the tunnel would
-            // transition to CLOSED, fire onerror into the void, and the
-            // Guacamole client would stay stuck in CONNECTED forever.
-            // Effect: the user saw a frozen tab, no "Session Ended"
-            // overlay, and the browser kept uploading thumbnails into
-            // 404 responses for hours. Forwarding tunnel events into the
-            // existing client.onerror closes that loop.
+            // Tunnel.js reports abnormal closure via onerror before CLOSED.
+            // CLOSED itself is not an error: it also follows a clean remote
+            // ending or client.disconnect(). Always finish client cleanup,
+            // without replacing a specific reason with "Connection lost".
             tunnel.onerror = function(status) {
                 if (typeof console !== 'undefined')
                     console.log('[rustguac] tunnel error:',
@@ -1985,11 +1993,9 @@
                 if (state === Guacamole.Tunnel.State.CLOSED) {
                     if (typeof console !== 'undefined')
                         console.log('[rustguac] tunnel closed');
-                    if (client.onerror) client.onerror({
-                        code: 519,
-                        message: 'Connection lost'
-                    });
-                } else if (state === Guacamole.Tunnel.State.UNSTABLE) {
+                    client.disconnect();
+                    showSessionEnd();
+                } else if (state === Guacamole.Tunnel.State.UNSTABLE && !sessionHasEnded) {
                     if (typeof console !== 'undefined')
                         console.log('[rustguac] tunnel unstable');
                     statusEl.textContent = 'Connection unstable...';
