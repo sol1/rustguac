@@ -283,6 +283,9 @@ async fn handle_ws(
                         session_type: session_info
                             .as_ref()
                             .map(|s| format!("{:?}", s.session_type).to_lowercase()),
+                        protocol: session_info
+                            .as_ref()
+                            .and_then(|s| s.address_book_protocol.clone()),
                     };
                     if let Err(e) = crate::recording::write_meta(&recording_path, &meta) {
                         tracing::warn!(session_id = %session_id, error = %e, "Failed to write recording .meta");

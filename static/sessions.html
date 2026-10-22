@@ -223,6 +223,11 @@
 
                     var tdType = document.createElement('td');
                     tdType.appendChild(h('span', s.session_type, { 'class': 'type-badge type-' + s.session_type }));
+                    // The entry protocol's name, when it says more than the type (#296).
+                    if (s.address_book_protocol && s.address_book_protocol !== s.session_type) {
+                        tdType.appendChild(document.createTextNode(' '));
+                        tdType.appendChild(h('span', s.address_book_protocol, { 'style': 'color:var(--text-muted);font-size:0.8em' }));
+                    }
                     tr.appendChild(tdType);
                     tr.appendChild(h('td', hostCol));
                     tr.appendChild(h('td', s.username));

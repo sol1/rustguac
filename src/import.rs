@@ -200,6 +200,7 @@ pub async fn cmd_import_guacamole(
             wol_wait_time: param_map.get("wol-wait-time").and_then(|s| s.parse().ok()),
             // A Guacamole dump is a one-off import, not a sync source.
             external_id: None,
+            protocols: None,
         };
 
         if !cred_maps.is_empty()

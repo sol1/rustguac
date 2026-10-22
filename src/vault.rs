@@ -273,8 +273,11 @@ impl FolderConfig {
 /// A connection entry stored in Vault.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AddressBookEntry {
-    #[serde(rename = "type")]
-    pub session_type: String, // "ssh", "rdp", "vnc", "web"
+    /// Session type of an entry in the single-protocol form ("ssh", "rdp",
+    /// "vnc", "web", ...). Empty, and not stored, for an entry that lists
+    /// its `protocols` instead (see `crate::entry_protocols`).
+    #[serde(rename = "type", default, skip_serializing_if = "String::is_empty")]
+    pub session_type: String,
     pub hostname: Option<String>,
     pub port: Option<u16>,
     pub username: Option<String>,
@@ -509,6 +512,11 @@ pub struct AddressBookEntry {
     /// the edit form does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
+    /// The ways to connect to this host (#296), the primary first. Each
+    /// inherits the fields above and overrides any of them. Absent for an
+    /// entry in the single-protocol form, which has a top-level `type`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocols: Option<Vec<crate::entry_protocols::ProtocolEntry>>,
 }
 
 impl AddressBookEntry {
@@ -722,6 +730,18 @@ pub struct EntryInfo {
     /// `AddressBookEntry::external_id`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
+    /// Name of the protocol the fields above describe: the primary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    /// Every protocol, in order, each described as the fields above
+    /// describe the first (#296). Empty inside a protocol.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<EntryInfo>,
+    /// Admins only: the fields set at this level, as stored, for the editor:
+    /// the host's own on the entry, a protocol's overrides on a protocol.
+    /// Secrets appear only as `has_<field>` flags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings: Option<serde_json::Value>,
 }
 
 impl EntryInfo {
@@ -831,7 +851,52 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             wol_udp_port: e.wol_udp_port,
             wol_wait_time: e.wol_wait_time,
             external_id: e.external_id.clone(),
+            protocol: None,
+            protocols: Vec::new(),
+            settings: None,
         }
+    }
+}
+
+impl EntryInfo {
+    /// An entry as a list shows it: the primary's fields, and every
+    /// protocol under `protocols`. `None` when no protocol forms a valid
+    /// entry. An admin also gets each level's own fields for the editor
+    /// (secrets as flags only).
+    pub fn for_viewer(
+        name: &str,
+        e: &AddressBookEntry,
+        defaults: Option<&FolderDefaults>,
+        admin: bool,
+    ) -> Option<EntryInfo> {
+        use crate::entry_protocols::{editor_settings, host_settings};
+        let mut protocols: Vec<EntryInfo> = e
+            .visible_protocols()
+            .into_iter()
+            .map(|(p, eff)| {
+                let mut info = EntryInfo::from((name, &eff));
+                info.apply_inherited(&eff, defaults);
+                info.protocol = Some(p.name().to_string());
+                if admin {
+                    info.settings = Some(editor_settings(&p.settings));
+                }
+                info
+            })
+            .collect();
+        if protocols.is_empty() {
+            return None;
+        }
+        let mut top = protocols[0].clone();
+        top.settings = None;
+        if admin {
+            let (host, _) = e.split();
+            top.settings = Some(editor_settings(&host_settings(&host)));
+        }
+        for p in &mut protocols {
+            p.protocols = Vec::new();
+        }
+        top.protocols = protocols;
+        Some(top)
     }
 }
 

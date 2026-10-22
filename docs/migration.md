@@ -162,6 +162,22 @@ Once imported, connections appear in the connections UI. You can:
 - Guacamole user/group permissions are not imported. Use rustguac's OIDC group mappings and folder `allowed_groups` instead.
 - Credentials (passwords, private keys) are imported into Vault where they are stored encrypted at rest and never touch disk.
 
+## Multi-protocol entries
+
+Connection entries can list several [protocols](api.md#multi-protocol-entries) for one host (RDP, SSH and a web UI on the same server), with host-level defaults that each protocol can override.
+
+Nothing needs to be done on upgrade:
+
+- Existing entries are read as they are, as entries with one protocol, and connect exactly as before. Nothing in Vault is rewritten.
+- Existing links (`/api/connect?scope=…&folder=…&entry=…`), API clients, scripts, imports and the original single-protocol NetBox webhook keep working, since the single-protocol form (a top-level `type`) is still accepted everywhere.
+- An entry that can be stored in the old form without losing anything still is, whether it was saved from the editor, the API or a webhook, so older instances keep reading it.
+
+An entry is stored in the new form only when it needs it: more than one protocol, a protocol with a name of its own, or a host-level default such as a shared username. **Older rustguac versions cannot read an entry in the new form**: they leave it out of their lists and cannot connect to it. An update from them (an edit, or the NetBox webhook's `PUT`) is refused rather than written over it, but creating a new entry of the same name there replaces it. It is missing for everyone on that instance until it is upgraded.
+
+So, when several rustguac instances share a Vault (including a `[vault_shared]` scope), upgrade every one of them before anyone adds a second protocol or a protocol name to an entry, or switches the NetBox webhook to the [multi-protocol template](netbox.md#multi-protocol-entries).
+
+There is no bulk conversion command, and none is needed: old entries keep working in the old form, and each entry moves to the new one only when it is edited to use something that needs it.
+
 ## Splitting to multiple Vaults (disaster recovery)
 
 If you already run a single Vault serving both the `shared` and `instance`

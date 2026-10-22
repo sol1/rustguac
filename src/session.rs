@@ -92,6 +92,9 @@ pub struct CreateSessionRequest {
     pub address_book_entry: Option<String>,
     /// Address book folder name (for reporting).
     pub address_book_folder: Option<String>,
+    /// Name of the entry protocol (#296); set by the API for an entry.
+    #[serde(default)]
+    pub address_book_protocol: Option<String>,
     /// Display name of the address book entry (for reporting).
     pub entry_display_name: Option<String>,
     /// Per-entry max recordings to keep.
@@ -225,6 +228,7 @@ impl CreateSessionRequest {
     /// session belongs to and carry its admin's policy:
     ///
     /// - `address_book_entry` / `address_book_folder` / `entry_display_name`
+    ///   / `address_book_protocol`
     ///   attribute the session and its recording to an entry. Claimed by an
     ///   ad-hoc caller together with `max_recordings`, per-entry rotation
     ///   would delete that entry's older recordings when the session ended.
@@ -243,6 +247,7 @@ impl CreateSessionRequest {
     pub fn clear_entry_only_fields(&mut self) {
         self.address_book_entry = None;
         self.address_book_folder = None;
+        self.address_book_protocol = None;
         self.entry_display_name = None;
         self.max_recordings = None;
         self.record_typescript = None;
@@ -404,6 +409,10 @@ pub struct SessionInfo {
     pub address_book_entry: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address_book_folder: Option<String>,
+    /// Name of the entry protocol the session connects with (#296), for
+    /// entries with more than one way in (`ssh`, `rdp`, `ssh-2222`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address_book_protocol: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -458,6 +467,8 @@ pub struct Session {
     pub address_book_entry: Option<String>,
     /// Address book folder name (for reporting).
     pub address_book_folder: Option<String>,
+    /// Name of the entry protocol the session uses (#296).
+    pub address_book_protocol: Option<String>,
     /// Display name of the address book entry (for reporting).
     pub entry_display_name: Option<String>,
     /// Per-entry max recordings to keep (from address book entry).
@@ -850,6 +861,7 @@ impl Session {
             url: self.url.clone(),
             address_book_entry: self.address_book_entry.clone(),
             address_book_folder: self.address_book_folder.clone(),
+            address_book_protocol: self.address_book_protocol.clone(),
             entry_display_name: self.entry_display_name.clone(),
             thumbnail_url: Some(format!("/api/sessions/{}/thumbnail", self.id)),
             fullscreen_on_connect: self.fullscreen_on_connect,
@@ -2135,6 +2147,7 @@ impl SessionManager {
             recording_enabled,
             address_book_entry: req.address_book_entry,
             address_book_folder: req.address_book_folder,
+            address_book_protocol: req.address_book_protocol,
             entry_display_name: req.entry_display_name,
             max_recordings: req.max_recordings,
             login_script_handle,
@@ -2966,6 +2979,7 @@ mod tests {
             "hostname": "10.0.0.1",
             "address_book_entry": "shared/prod/db01",
             "address_book_folder": "prod",
+            "address_book_protocol": "ssh",
             "entry_display_name": "db01",
             "max_recordings": 1,
             "record_typescript": true,
@@ -2975,6 +2989,7 @@ mod tests {
         req.clear_entry_only_fields();
         assert_eq!(req.address_book_entry, None);
         assert_eq!(req.address_book_folder, None);
+        assert_eq!(req.address_book_protocol, None);
         assert_eq!(req.entry_display_name, None);
         assert_eq!(req.max_recordings, None);
         assert_eq!(req.record_typescript, None);
@@ -3014,6 +3029,7 @@ mod tests {
             "enable_recording": false,
             "enable_drive": true,
             "address_book_entry": "shared/prod/db01",
+            "address_book_protocol": "ssh-2222",
             "max_recordings": 1,
             "record_typescript": true,
             "wol_send_packet": true,
@@ -3035,6 +3051,7 @@ mod tests {
         assert_eq!(req.kerberos_cache, None);
         assert_eq!(req.allow_sharing, None);
         assert_eq!(req.address_book_entry, None);
+        assert_eq!(req.address_book_protocol, None);
         assert_eq!(req.max_recordings, None);
         assert_eq!(req.record_typescript, None);
         assert_eq!(req.wol_send_packet, None);
@@ -3487,6 +3504,7 @@ mod tests {
             recording_enabled: false,
             address_book_entry: None,
             address_book_folder: None,
+            address_book_protocol: None,
             entry_display_name: None,
             max_recordings: None,
             login_script_handle: None,
@@ -4123,6 +4141,8 @@ mod tests {
             ("disable_copy", serde_json::json!(true)),
             ("allow_sharing", serde_json::json!(true)),
             ("container_env", serde_json::json!({"A": "1"})),
+            // Another protocol of the same entry is another session (#296).
+            ("address_book_protocol", serde_json::json!("ssh-2222")),
         ] {
             let other = entry_request(serde_json::json!({ key: value }));
             assert_ne!(

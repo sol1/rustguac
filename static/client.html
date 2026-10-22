@@ -503,7 +503,8 @@
                     relaunchInfo = {
                         entry_key: session.address_book_entry,
                         folder: session.address_book_folder || '',
-                        display_name: session.entry_display_name || ''
+                        display_name: session.entry_display_name || '',
+                        protocol: session.address_book_protocol || ''
                     };
                 }
                 if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
@@ -2057,6 +2058,8 @@
                         try { return localStorage.getItem('rustguac_keyboard_layout') || undefined; } catch (e) { return undefined; }
                     })()
                 };
+                // Reconnect with the protocol the session used (#296).
+                if (relaunchInfo.protocol) body.protocol = relaunchInfo.protocol;
 
                 var url = '/api/addressbook/folders/' + encodeURIComponent(scope)
                     + '/' + encodeURIComponent(folder)
