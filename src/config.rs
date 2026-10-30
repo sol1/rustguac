@@ -93,6 +93,9 @@ pub struct VaultConfig {
     pub role_id: String,
     /// Workload JWT login; when configured, never fall back to AppRole.
     pub jwt_auth: Option<VaultJwtAuth>,
+    /// An existing short-lived token managed by Vault/OpenBao Agent. Reopened
+    /// for each request; rustguac never renews this externally owned token.
+    pub token_file: Option<PathBuf>,
     pub namespace: Option<String>,
     /// Instance name for instance-scoped address book entries.
     /// Entries under `<base_path>/shared/` are visible to all instances.
@@ -119,6 +122,7 @@ impl std::fmt::Debug for VaultConfig {
             .field("mount", &self.mount)
             .field("base_path", &self.base_path)
             .field("role_id", &"[REDACTED]")
+            .field("token_file", &self.token_file)
             .field("namespace", &self.namespace)
             .field("instance_name", &self.instance_name)
             .field("tls_skip_verify", &self.tls_skip_verify)
@@ -197,9 +201,18 @@ impl VaultJwtAuth {
 
 impl VaultConfig {
     /// The AppRole secret ID to log in with, from the environment variable
-    /// `env_name`, or an empty string when this backend logs in with a JWT
-    /// and needs none. The error says what is missing.
+    /// `env_name`, or an empty string for JWT or externally managed token-file
+    /// authentication, which need none. The error says what is missing.
     pub fn login_secret(&self, env_name: &str) -> Result<String, String> {
+        if let Some(ref path) = self.token_file {
+            if path.as_os_str().is_empty()
+                || self.jwt_auth.is_some()
+                || !self.role_id.trim().is_empty()
+            {
+                return Err("token_file requires a nonempty path and cannot be combined with JWT or AppRole".into());
+            }
+            return Ok(String::new());
+        }
         if let Some(ref jwt) = self.jwt_auth {
             jwt.validate()?;
             return Ok(String::new());

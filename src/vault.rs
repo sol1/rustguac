@@ -1,4 +1,4 @@
-//! HashiVault / OpenBao KV v2 client with AppRole or workload JWT authentication.
+//! HashiVault / OpenBao KV v2 client with AppRole, workload JWT, or token-file authentication.
 //!
 //! Stores address book entries (connection credentials) in Vault.
 //! Path structure:
@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
 use crate::config::VaultConfig;
@@ -866,6 +867,32 @@ pub struct VaultClient {
     role_id: String,
     secret_id: String,
     jwt_auth: Option<crate::config::VaultJwtAuth>,
+    token_file: Option<std::path::PathBuf>,
+}
+
+/// The external token manager owns renewal and rotation. Never cache the file's
+/// content, include it in errors, or fall back to another identity when unreadable.
+async fn read_token_file(path: &std::path::Path) -> Result<String, VaultError> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|_| VaultError::Auth("cannot open external token file".into()))?;
+    let mut bytes = Vec::new();
+    file.take(65537)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|_| VaultError::Auth("cannot read external token file".into()))?;
+    if bytes.len() > 65536 {
+        return Err(VaultError::Auth("external token exceeds size limit".into()));
+    }
+    let raw = String::from_utf8(bytes)
+        .map_err(|_| VaultError::Auth("external token is not UTF-8".into()))?;
+    let token = raw.trim();
+    if token.is_empty() || !token.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(VaultError::Auth(
+            "external token is empty or malformed".into(),
+        ));
+    }
+    Ok(token.into())
 }
 
 /// The workload identity JWT for a login: read from `path`, or printed by
@@ -922,7 +949,9 @@ async fn fetch_workload_jwt(cfg: &crate::config::VaultJwtAuth) -> Result<String,
 impl VaultClient {
     /// Create a new Vault client and perform initial login.
     pub async fn new(config: &VaultConfig, secret_id: &str) -> Result<Self, VaultError> {
-        if let Some(ref jwt_auth) = config.jwt_auth {
+        if config.token_file.is_some() {
+            config.login_secret("").map_err(VaultError::Auth)?;
+        } else if let Some(ref jwt_auth) = config.jwt_auth {
             jwt_auth.validate().map_err(VaultError::Auth)?;
         } else if config.role_id.trim().is_empty() {
             return Err(VaultError::Auth(
@@ -947,11 +976,14 @@ impl VaultClient {
             role_id: config.role_id.clone(),
             secret_id: secret_id.to_string(),
             jwt_auth: config.jwt_auth.clone(),
+            token_file: config.token_file.clone(),
         };
 
         // Perform initial login
         let (token, _ttl) = client.login().await?;
-        *client.token.write().await = token;
+        if client.token_file.is_none() {
+            *client.token.write().await = token;
+        }
 
         Ok(client)
     }
@@ -960,6 +992,9 @@ impl VaultClient {
     /// fetched again every time, so a rotated token (kubelet, Nomad,
     /// spiffe-helper, a metadata service) is always the one sent.
     async fn login(&self) -> Result<(String, u64), VaultError> {
+        if let Some(ref path) = self.token_file {
+            return Ok((read_token_file(path).await?, 0));
+        }
         let (url, body) = if let Some(ref jwt_auth) = self.jwt_auth {
             let jwt = fetch_workload_jwt(jwt_auth).await?;
             (
@@ -1021,6 +1056,9 @@ impl VaultClient {
 
     /// Spawn a background task that renews the token at 50% of TTL.
     pub fn spawn_renewal_task(self: &Arc<Self>) {
+        if self.token_file.is_some() {
+            return; // Agent, not this process, owns these tokens.
+        }
         let client = Arc::clone(self);
         tokio::spawn(async move {
             // Initial TTL — re-login to get it
@@ -1079,7 +1117,8 @@ impl VaultClient {
         Ok(json["auth"]["lease_duration"].as_u64().unwrap_or(3600))
     }
 
-    /// Make an authenticated request to Vault. Retries once on 403 with re-login.
+    /// Make an authenticated request to Vault. On 403, retry once after re-login
+    /// or, for an externally managed token, only if the file now holds a new token.
     async fn request(
         &self,
         method: reqwest::Method,
@@ -1088,11 +1127,11 @@ impl VaultClient {
     ) -> Result<reqwest::Response, VaultError> {
         let url = format!("{}{}", self.addr, path);
 
-        let do_request = |token: String| {
+        let do_request = |token: &str| {
             let mut req = self
                 .http
                 .request(method.clone(), &url)
-                .header("X-Vault-Token", &token);
+                .header("X-Vault-Token", token);
             if let Some(ref ns) = self.namespace {
                 req = req.header("X-Vault-Namespace", ns.as_str());
             }
@@ -1102,16 +1141,28 @@ impl VaultClient {
             req.send()
         };
 
-        let token = self.token.read().await.clone();
-        let resp = do_request(token).await?;
+        let token = match self.token_file {
+            Some(ref path) => read_token_file(path).await?,
+            None => self.token.read().await.clone(),
+        };
+        let resp = do_request(&token).await?;
 
         if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            if let Some(ref path) = self.token_file {
+                let new_token = read_token_file(path).await?;
+                return if new_token != token {
+                    tracing::debug!("Vault 403, retrying with updated token file");
+                    Ok(do_request(&new_token).await?)
+                } else {
+                    Ok(resp)
+                };
+            }
             // Re-login and retry once
             tracing::debug!("Vault 403, attempting re-login and retry");
             match self.login().await {
                 Ok((new_token, _)) => {
                     *self.token.write().await = new_token.clone();
-                    let resp = do_request(new_token).await?;
+                    let resp = do_request(&new_token).await?;
                     Ok(resp)
                 }
                 Err(e) => Err(e),
@@ -2451,6 +2502,199 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn agent_token_file_refuses_invalid_or_missing_material_without_leaking_it() {
+        let path = std::env::temp_dir().join(format!("rustguac-agent-{}", uuid::Uuid::new_v4()));
+        assert!(read_token_file(&path).await.is_err());
+        for invalid in [
+            Vec::new(),
+            b" \n\t".to_vec(),
+            b"synthetic-secret\0".to_vec(),
+            b"synthetic-secret\x7f".to_vec(),
+            "synthetic-secret\u{e9}".as_bytes().to_vec(),
+            b"synthetic-secret with spaces".to_vec(),
+            vec![b'x'; 65537],
+            vec![255],
+        ] {
+            tokio::fs::write(&path, invalid).await.unwrap();
+            let error = read_token_file(&path).await.unwrap_err().to_string();
+            assert!(!error.contains("synthetic-secret"));
+        }
+        tokio::fs::write(&path, vec![b'x'; 65536]).await.unwrap();
+        assert_eq!(read_token_file(&path).await.unwrap().len(), 65536);
+        tokio::fs::remove_file(path).await.unwrap();
+    }
+
+    #[test]
+    fn agent_token_file_is_exclusive_and_needs_no_secret_id_environment() {
+        let mut config = base_config();
+        config.token_file = Some("/run/agent/token".into());
+        assert!(config.login_secret("RUSTGUAC_ABSENT_TEST_SECRET").is_err());
+        config.role_id.clear();
+        assert_eq!(
+            config.login_secret("RUSTGUAC_ABSENT_TEST_SECRET").unwrap(),
+            ""
+        );
+        config.jwt_auth = Some(jwt_file_auth(std::path::Path::new("/run/jwt")));
+        assert!(config.login_secret("RUSTGUAC_ABSENT_TEST_SECRET").is_err());
+        config.jwt_auth = None;
+        config.token_file = Some("".into());
+        assert!(config.login_secret("RUSTGUAC_ABSENT_TEST_SECRET").is_err());
+    }
+
+    #[tokio::test]
+    async fn token_file_forbidden_retries_only_once_and_only_after_rotation() {
+        use axum::{extract::Request, http::StatusCode, routing::any, Router};
+        for (replace, reject_new) in [(false, false), (true, false), (true, true)] {
+            let path =
+                std::env::temp_dir().join(format!("rustguac-token-{}", uuid::Uuid::new_v4()));
+            tokio::fs::write(&path, "old-token").await.unwrap();
+            let calls = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+            let recorded = calls.clone();
+            let sink = path.clone();
+            let app = Router::new().fallback(any(move |request: Request| {
+                let recorded = recorded.clone();
+                let sink = sink.clone();
+                async move {
+                    assert_eq!(request.uri().path(), "/v1/check");
+                    assert_eq!(request.headers()["X-Vault-Namespace"], "example-ns");
+                    let token = request.headers()["X-Vault-Token"]
+                        .to_str()
+                        .unwrap()
+                        .to_string();
+                    recorded.lock().await.push(token.clone());
+                    if token == "old-token" {
+                        if replace {
+                            let next = sink.with_extension("next");
+                            tokio::fs::write(&next, "new-token").await.unwrap();
+                            tokio::fs::rename(next, sink).await.unwrap();
+                        }
+                        StatusCode::FORBIDDEN
+                    } else if reject_new {
+                        StatusCode::FORBIDDEN
+                    } else {
+                        StatusCode::OK
+                    }
+                }
+            }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let mut config = base_config();
+            config.addr = format!("http://{addr}");
+            config.role_id.clear();
+            config.token_file = Some(path.clone());
+            config.namespace = Some("example-ns".into());
+            let client = VaultClient::new(&config, "").await.unwrap();
+            let response = client
+                .request(reqwest::Method::GET, "/v1/check", None)
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if replace && !reject_new {
+                    StatusCode::OK
+                } else {
+                    StatusCode::FORBIDDEN
+                }
+            );
+            assert_eq!(
+                *calls.lock().await,
+                if replace {
+                    vec!["old-token", "new-token"]
+                } else {
+                    vec!["old-token"]
+                }
+            );
+            assert!(client.token.read().await.is_empty());
+            tokio::fs::remove_file(path).await.unwrap();
+            server.abort();
+        }
+    }
+
+    #[test]
+    fn token_file_deserializes_for_each_backend() {
+        for section in ["vault", "vault_shared", "vault_local"] {
+            let config: crate::config::Config = toml::from_str(&format!(
+                "[{section}]\naddr = 'https://vault.example.com:8200'\ntoken_file = '/run/agent/token'\n"
+            )).unwrap();
+            let backend = match section {
+                "vault" => config.vault,
+                "vault_shared" => config.vault_shared,
+                _ => config.vault_local,
+            }
+            .unwrap();
+            assert!(backend
+                .login_secret("RUSTGUAC_ABSENT_TEST_SECRET")
+                .unwrap()
+                .is_empty());
+            assert_eq!(
+                backend.token_file.unwrap(),
+                std::path::PathBuf::from("/run/agent/token")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_token_file_reopens_atomic_rotation_without_auth_or_renew_requests() {
+        use axum::{extract::Request, routing::any, Json, Router};
+        let calls = Arc::new(tokio::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let recorded = calls.clone();
+        let app = Router::new().fallback(any(move |request: Request| {
+            let recorded = recorded.clone();
+            async move {
+                recorded.lock().await.push((
+                    request.uri().path().to_string(),
+                    request.headers()["X-Vault-Token"]
+                        .to_str()
+                        .unwrap()
+                        .to_string(),
+                ));
+                Json(serde_json::json!({"data": {}}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let path = std::env::temp_dir().join(format!("rustguac-agent-{}", uuid::Uuid::new_v4()));
+        tokio::fs::write(&path, "synthetic-agent-one\n")
+            .await
+            .unwrap();
+        let mut config = base_config();
+        config.addr = format!("http://{addr}");
+        config.role_id.clear();
+        config.token_file = Some(path.clone());
+        let client = Arc::new(VaultClient::new(&config, "").await.unwrap());
+        client.spawn_renewal_task();
+        client
+            .request(reqwest::Method::GET, "/v1/check", None)
+            .await
+            .unwrap();
+        let replacement = path.with_extension("next");
+        tokio::fs::write(&replacement, "synthetic-agent-two\n")
+            .await
+            .unwrap();
+        tokio::fs::rename(replacement, &path).await.unwrap();
+        client
+            .request(reqwest::Method::GET, "/v1/check", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            *calls.lock().await,
+            vec![
+                ("/v1/check".into(), "synthetic-agent-one".into()),
+                ("/v1/check".into(), "synthetic-agent-two".into()),
+            ]
+        );
+        tokio::fs::remove_file(path).await.unwrap();
+        assert!(client
+            .request(reqwest::Method::GET, "/v1/check", None)
+            .await
+            .is_err());
+        assert_eq!(calls.lock().await.len(), 2);
+        server.abort();
+    }
+
     fn base_config() -> VaultConfig {
         VaultConfig {
             addr: "https://vault.example.com:8200".into(),
@@ -2458,6 +2702,7 @@ mod tests {
             base_path: "rustguac".into(),
             role_id: "test-role-id".into(),
             jwt_auth: None,
+            token_file: None,
             namespace: None,
             instance_name: None,
             tls_skip_verify: false,
