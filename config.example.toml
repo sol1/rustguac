@@ -196,6 +196,11 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # # instance_name = "prod-1"  # optional, enables instance-scoped entries
 # # tls_skip_verify = false   # skip TLS cert verification (dev only, default: false)
 
+# # Or omit role_id and jwt_auth and consume an externally managed Vault token:
+# # token_file = "/run/vault-agent/token" # e.g. a Vault/OpenBao Agent file sink
+# # The external manager handles login/renewal; rustguac reopens it per request.
+# # See docs/integrations.md for ownership, permissions and container examples.
+
 # # Instead of role_id/VAULT_SECRET_ID, read a projected workload JWT:
 # [vault.jwt_auth]
 # mount = "workload-jwt"      # JWT auth mount, not the KV mount
