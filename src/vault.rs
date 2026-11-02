@@ -1694,15 +1694,8 @@ impl VaultClient {
     async fn kv_list(&self, path: &str) -> Result<Vec<String>, VaultError> {
         // Vault LIST is a GET with ?list=true (also works with HTTP method LIST,
         // but ?list=true is more portable across HTTP clients).
-        let url = format!("{}{}?list=true", self.addr, path);
-        let token = self.token.read().await.clone();
-
-        let mut req = self.http.get(&url).header("X-Vault-Token", &token);
-        if let Some(ref ns) = self.namespace {
-            req = req.header("X-Vault-Namespace", ns.as_str());
-        }
-
-        let resp = req.send().await?;
+        let path = format!("{}?list=true", path);
+        let resp = self.request(reqwest::Method::GET, &path, None).await?;
 
         match resp.status().as_u16() {
             200 => {
@@ -2645,20 +2638,30 @@ mod tests {
 
     #[tokio::test]
     async fn agent_token_file_reopens_atomic_rotation_without_auth_or_renew_requests() {
-        use axum::{extract::Request, routing::any, Json, Router};
+        use axum::{extract::Request, http::StatusCode, routing::any, Json, Router};
         let calls = Arc::new(tokio::sync::Mutex::new(Vec::<(String, String)>::new()));
         let recorded = calls.clone();
         let app = Router::new().fallback(any(move |request: Request| {
             let recorded = recorded.clone();
             async move {
-                recorded.lock().await.push((
-                    request.uri().path().to_string(),
-                    request.headers()["X-Vault-Token"]
-                        .to_str()
-                        .unwrap()
-                        .to_string(),
-                ));
-                Json(serde_json::json!({"data": {}}))
+                assert_eq!(request.headers()["X-Vault-Namespace"], "example-ns");
+                let token = request.headers()["X-Vault-Token"]
+                    .to_str()
+                    .unwrap()
+                    .to_string();
+                let status = if token.is_empty() {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::OK
+                };
+                recorded
+                    .lock()
+                    .await
+                    .push((request.uri().path_and_query().unwrap().to_string(), token));
+                (
+                    status,
+                    Json(serde_json::json!({"data": {"keys": ["team/"]}})),
+                )
             }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2672,12 +2675,14 @@ mod tests {
         config.addr = format!("http://{addr}");
         config.role_id.clear();
         config.token_file = Some(path.clone());
+        config.namespace = Some("example-ns".into());
         let client = Arc::new(VaultClient::new(&config, "").await.unwrap());
         client.spawn_renewal_task();
         client
             .request(reqwest::Method::GET, "/v1/check", None)
             .await
             .unwrap();
+        assert_eq!(client.kv_list("/v1/folders").await.unwrap(), vec!["team/"]);
         let replacement = path.with_extension("next");
         tokio::fs::write(&replacement, "synthetic-agent-two\n")
             .await
@@ -2687,11 +2692,14 @@ mod tests {
             .request(reqwest::Method::GET, "/v1/check", None)
             .await
             .unwrap();
+        assert_eq!(client.kv_list("/v1/folders").await.unwrap(), vec!["team/"]);
         assert_eq!(
             *calls.lock().await,
             vec![
                 ("/v1/check".into(), "synthetic-agent-one".into()),
+                ("/v1/folders?list=true".into(), "synthetic-agent-one".into()),
                 ("/v1/check".into(), "synthetic-agent-two".into()),
+                ("/v1/folders?list=true".into(), "synthetic-agent-two".into()),
             ]
         );
         tokio::fs::remove_file(path).await.unwrap();
@@ -2699,7 +2707,8 @@ mod tests {
             .request(reqwest::Method::GET, "/v1/check", None)
             .await
             .is_err());
-        assert_eq!(calls.lock().await.len(), 2);
+        assert!(client.kv_list("/v1/folders").await.is_err());
+        assert_eq!(calls.lock().await.len(), 4);
         server.abort();
     }
 
