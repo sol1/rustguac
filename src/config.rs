@@ -26,6 +26,10 @@ pub struct OidcConfig {
     pub redirect_uri: String,
     #[serde(default = "default_oidc_default_role")]
     pub default_role: String,
+    /// Recompute the role from current OIDC groups on every login, falling
+    /// back to default_role when no mapping matches. Overrides manual roles.
+    #[serde(default)]
+    pub sync_role_on_login: bool,
     /// Create a user account on first OIDC login (default: true). When false,
     /// only users already in the database (pre-provisioned with `add-user`,
     /// `POST /api/users` or the Admin page) can log in.
@@ -64,6 +68,7 @@ impl std::fmt::Debug for OidcConfig {
             )
             .field("redirect_uri", &self.redirect_uri)
             .field("default_role", &self.default_role)
+            .field("sync_role_on_login", &self.sync_role_on_login)
             .field("auto_create_users", &self.auto_create_users)
             .field("allow_unverified_email", &self.allow_unverified_email)
             .field("groups_claim", &self.groups_claim)
@@ -1714,6 +1719,7 @@ mod tests {
             client_secret: Some("sensitive-value".into()),
             redirect_uri: "https://console.example.com/oidc/callback".into(),
             default_role: default_oidc_default_role(),
+            sync_role_on_login: false,
             auto_create_users: true,
             allow_unverified_email: false,
             groups_claim: default_groups_claim(),
@@ -1724,6 +1730,20 @@ mod tests {
         let dbg = format!("{:?}", config);
         assert!(!dbg.contains("sensitive-value"), "got: {}", dbg);
         assert!(dbg.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn oidc_role_sync_is_opt_in() {
+        let minimal = r#"
+            issuer_url = "https://idp.example.com"
+            client_id = "console"
+            redirect_uri = "https://console.example.com/auth/callback"
+        "#;
+        let config: OidcConfig = toml::from_str(minimal).unwrap();
+        assert!(!config.sync_role_on_login);
+        let config: OidcConfig =
+            toml::from_str(&format!("{minimal}\nsync_role_on_login = true")).unwrap();
+        assert!(config.sync_role_on_login);
     }
 
     // ── Theme TOML loader (v1.7.1) ──

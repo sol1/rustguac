@@ -49,6 +49,40 @@ OIDC users are assigned a role through three mechanisms (in order of precedence)
 2. **Manual role assignment** — admins can set a user's role via CLI, API, or the Admin page.
 3. **Default role** — new users get the `default_role` from OIDC config on first login (default: `operator`).
 
+#### SSO-managed roles
+
+By default, group mappings override the stored role when they match, but an
+unmatched user keeps their existing role. `default_role` is applied only when
+creating an account.
+
+To make SSO authoritative at every login:
+
+```toml
+[oidc]
+# Other provider settings omitted.
+default_role = "operator"
+sync_role_on_login = true
+```
+
+The highest matching group-to-role mapping wins (`viewer < operator < poweruser < admin`).
+When no group matches, the user receives `default_role`, including existing users.
+The default is a fallback, not a minimum: a matching `viewer` mapping still yields
+`viewer` when the default is `operator`. Manual assignments are overwritten at the
+next login. This also applies to pre-provisioned users with `auto_create_users = false`;
+disabled accounts and identity checks still prevent login.
+
+For example, mapping `remote-admins` to `admin` promotes members on login. Removing
+that membership returns them to `operator` at the next login if no other mapping
+matches. Changing the default also updates unmatched existing users on their next
+login. A missing or empty groups claim counts as no matching groups, so choose a
+default appropriate for every user the identity provider allows to sign in.
+
+Role lookup or persistence errors reject the login instead of issuing a session
+with stale privileges. Synchronization runs on a fresh OIDC login, not on every
+request or token refresh. It does not poll the identity provider or terminate
+existing remote desktop sessions; membership changes are not immediate revocation.
+Local API-key admins are unaffected.
+
 #### Only users you have added
 
 With `auto_create_users = false` in `[oidc]`, rustguac does not create accounts on login: a user must be added first with `rustguac add-user --email <email> --role <role>`, `POST /api/users`, or **Add User** on the Admin page. Anyone else who authenticates with the identity provider is sent back to the login page with "You do not have an account here". The role the admin chose is kept; `default_role` is not applied, but group-to-role mappings still are.
