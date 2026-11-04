@@ -520,19 +520,6 @@ pub async fn callback(
         .await;
     }
 
-    // Resolve role from group-to-role mappings (highest matching wins).
-    // Returns Some(role) only if a mapping matched; None means keep existing role.
-    let db_for_role = database.clone();
-    let groups_for_role = groups.clone();
-    let mapped_role = match tokio::task::spawn_blocking(move || {
-        db::resolve_role_from_groups(&db_for_role, &groups_for_role)
-    })
-    .await
-    {
-        Ok(Ok(role)) => role,
-        _ => None,
-    };
-
     // Upsert user in DB (sets default_role only on first login INSERT, not on subsequent updates).
     // With auto_create_users = false, only already-provisioned users get through.
     let default_role = oidc.config.default_role.clone();
@@ -541,6 +528,7 @@ pub async fn callback(
     let email_clone = email.clone();
     let name_clone = name.clone();
     let subject_clone = subject.clone();
+    let groups_for_user = groups.clone();
 
     let user = match tokio::task::spawn_blocking(move || {
         db::upsert_user(
@@ -549,7 +537,7 @@ pub async fn callback(
             &name_clone,
             Some(&subject_clone),
             &default_role,
-            &groups,
+            &groups_for_user,
             auto_create,
         )
     })
@@ -596,25 +584,38 @@ pub async fn callback(
         }
     };
 
-    // If a group mapping matched, update the user's role to the mapped value
-    let effective_role = if let Some(ref role) = mapped_role {
-        let db_clone = database.clone();
-        let email_clone = email.clone();
-        let role_clone = role.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            db::set_user_role(&db_clone, &email_clone, &role_clone)
-        })
-        .await;
-        tracing::info!(email = %email, role = %role, "Role set from group mapping");
-        role.clone()
-    } else {
-        user.role.clone()
-    };
-
     if user.disabled {
         tracing::warn!(email = %email, "OIDC login rejected: account is disabled");
         return Redirect::to("/?sso_error=disabled").into_response();
     }
+
+    // Persist the effective role before issuing a session. A lookup or write
+    // failure must not let a login keep stale privileges.
+    let db_for_role = database.clone();
+    let user_for_role = user.clone();
+    let groups_for_role = groups.clone();
+    let config_for_role = oidc.config.clone();
+    let effective_role = match tokio::task::spawn_blocking(move || {
+        reconcile_login_role(
+            &db_for_role,
+            &user_for_role,
+            &groups_for_role,
+            &config_for_role,
+        )
+    })
+    .await
+    {
+        Ok(Ok(role)) => role,
+        result => {
+            tracing::error!(email = %email, error = ?result, "OIDC role reconciliation failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": "failed to reconcile user role"})),
+            )
+                .into_response();
+        }
+    };
+    tracing::info!(email = %email, role = %effective_role, "OIDC role resolved");
 
     // Create auth session
     let user_id = user.id;
@@ -661,6 +662,29 @@ pub async fn callback(
         Redirect::temporary(&redirect_to),
     )
         .into_response()
+}
+
+/// Group mappings are authoritative when matched. With synchronization enabled,
+/// the default is authoritative too; otherwise preserve an unmatched user's role.
+fn reconcile_login_role(
+    database: &Db,
+    user: &db::User,
+    groups: &[String],
+    config: &OidcConfig,
+) -> Result<String, String> {
+    let mapped_role = db::resolve_role_from_groups(database, groups).map_err(|e| e.to_string())?;
+    let role = match mapped_role {
+        Some(role) => role,
+        None if config.sync_role_on_login => config.default_role.clone(),
+        None => return Ok(user.role.clone()),
+    };
+    if crate::auth::role_level(&role) == 0 {
+        return Err("invalid OIDC role".into());
+    }
+    if !db::set_user_role(database, &user.email, &role).map_err(|e| e.to_string())? {
+        return Err("OIDC user no longer exists".into());
+    }
+    Ok(role)
 }
 
 /// GET /auth/logout — clear session cookie and redirect to login.
@@ -938,6 +962,146 @@ fn parse_issuer_mismatch(raw: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    fn role_config(sync: bool, default_role: &str) -> crate::config::OidcConfig {
+        toml::from_str(&format!(
+            r#"
+            issuer_url = "https://idp.example.com"
+            client_id = "console"
+            redirect_uri = "https://console.example.com/auth/callback"
+            default_role = "{default_role}"
+            sync_role_on_login = {sync}
+            "#
+        ))
+        .unwrap()
+    }
+
+    fn login_user(db: &crate::db::Db, groups: &[String]) -> crate::db::User {
+        match crate::db::upsert_user(
+            db,
+            "alice@example.com",
+            "Alice",
+            Some("alice-sub"),
+            "viewer",
+            groups,
+            true,
+        )
+        .unwrap()
+        {
+            crate::db::OidcLogin::User(user) => user,
+            result => panic!("unexpected login result: {result:?}"),
+        }
+    }
+
+    #[test]
+    fn role_sync_promotes_and_demotes_from_current_groups() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        crate::db::create_group_mapping(&db, "operators", "operator").unwrap();
+        crate::db::create_group_mapping(&db, "admins", "admin").unwrap();
+        let config = role_config(true, "viewer");
+        let groups = vec!["admins".into(), "operators".into()];
+        let user = login_user(&db, &groups);
+        assert_eq!(
+            super::reconcile_login_role(&db, &user, &groups, &config).unwrap(),
+            "admin"
+        );
+        let groups = vec!["operators".into()];
+        let user = login_user(&db, &groups);
+        assert_eq!(user.role, "admin");
+        assert_eq!(
+            super::reconcile_login_role(&db, &user, &groups, &config).unwrap(),
+            "operator"
+        );
+        let user = login_user(&db, &[]);
+        assert_eq!(
+            super::reconcile_login_role(&db, &user, &[], &config).unwrap(),
+            "viewer"
+        );
+        assert_eq!(login_user(&db, &[]).role, "viewer");
+    }
+
+    #[test]
+    fn role_sync_updates_existing_users_when_default_changes() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user = login_user(&db, &[]);
+        for default_role in ["operator", "viewer"] {
+            let config = role_config(true, default_role);
+            assert_eq!(
+                super::reconcile_login_role(&db, &user, &[], &config).unwrap(),
+                default_role
+            );
+            assert_eq!(login_user(&db, &[]).role, default_role);
+        }
+    }
+
+    #[test]
+    fn role_sync_default_is_a_fallback_not_a_minimum() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        crate::db::create_group_mapping(&db, "readers", "viewer").unwrap();
+        let config = role_config(true, "operator");
+        let groups = vec!["readers".into()];
+        let user = login_user(&db, &groups);
+        assert_eq!(
+            super::reconcile_login_role(&db, &user, &groups, &config).unwrap(),
+            "viewer"
+        );
+        let groups = vec!["unmapped".into()];
+        let user = login_user(&db, &groups);
+        assert_eq!(
+            super::reconcile_login_role(&db, &user, &groups, &config).unwrap(),
+            "operator"
+        );
+    }
+
+    #[test]
+    fn role_sync_disabled_preserves_unmatched_manual_roles_but_applies_mappings() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user = login_user(&db, &[]);
+        crate::db::set_user_role(&db, &user.email, "admin").unwrap();
+        let user = login_user(&db, &[]);
+        let config = role_config(false, "operator");
+        assert_eq!(
+            super::reconcile_login_role(&db, &user, &[], &config).unwrap(),
+            "admin"
+        );
+        crate::db::create_group_mapping(&db, "readers", "viewer").unwrap();
+        let groups = vec!["readers".into()];
+        assert_eq!(
+            super::reconcile_login_role(&db, &user, &groups, &config).unwrap(),
+            "viewer"
+        );
+        assert_eq!(login_user(&db, &groups).role, "viewer");
+    }
+
+    #[test]
+    fn role_sync_rejects_lookup_and_persistence_failures() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user = login_user(&db, &[]);
+        let config = role_config(true, "operator");
+        db.lock()
+            .unwrap()
+            .execute("DROP TABLE group_role_mappings", [])
+            .unwrap();
+        assert!(super::reconcile_login_role(&db, &user, &["admins".into()], &config).is_err());
+        db.lock().unwrap().execute_batch(
+            "CREATE TRIGGER refuse_role_update BEFORE UPDATE OF role ON users BEGIN SELECT RAISE(ABORT, 'write refused'); END;"
+        ).unwrap();
+        assert!(super::reconcile_login_role(&db, &user, &[], &config).is_err());
+        assert_eq!(login_user(&db, &[]).role, "viewer");
+    }
+
+    #[test]
+    fn role_sync_rejects_invalid_fallback_and_deleted_user() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user = login_user(&db, &[]);
+        assert!(
+            super::reconcile_login_role(&db, &user, &[], &role_config(true, "invalid")).is_err()
+        );
+        db.lock().unwrap().execute("DELETE FROM users", []).unwrap();
+        assert!(
+            super::reconcile_login_role(&db, &user, &[], &role_config(true, "operator")).is_err()
+        );
+    }
+
     #[test]
     fn only_an_explicitly_unverified_email_is_refused_unless_allowed() {
         use super::refuse_unverified_email as refuse;

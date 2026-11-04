@@ -1639,7 +1639,7 @@ pub fn cleanup_session_history(db: &Db, retain_days: u32) -> rusqlite::Result<us
 
 /// Resolve the best role for a user based on their OIDC groups and the group-to-role mappings.
 /// Returns `Some(role)` if at least one group matched a mapping (highest wins),
-/// or `None` if no mappings matched (caller should preserve the existing role).
+/// or `None` if no mappings matched (caller chooses its fallback policy).
 pub fn resolve_role_from_groups(db: &Db, groups: &[String]) -> rusqlite::Result<Option<String>> {
     if groups.is_empty() {
         return Ok(None);

@@ -110,6 +110,7 @@ Enables OpenID Connect authentication. When configured, the web UI shows a login
 | `client_secret` | — | OIDC client secret (or use `OIDC_CLIENT_SECRET` env var) |
 | `redirect_uri` | — | Redirect URI: `https://your-host/auth/callback` (required) |
 | `default_role` | `operator` | Role assigned to new users on first login |
+| `sync_role_on_login` | `false` | Recompute the role at every OIDC login: highest matching group mapping, otherwise `default_role`. Overrides manual roles, including downgrades. See [SSO-managed roles](roles-and-access-control.md#sso-managed-roles) |
 | `auto_create_users` | `true` | Create an account on first OIDC login. When `false`, only users already in the database can log in; add them with `rustguac add-user`, `POST /api/users` or the Admin page. See [Only users you have added](roles-and-access-control.md#only-users-you-have-added) |
 | `groups_claim` | `groups` | JWT claim name containing group memberships |
 | `extra_scopes` | `[]` | Additional OIDC scopes to request |
