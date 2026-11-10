@@ -508,6 +508,36 @@ type WsSink = Arc<tokio::sync::Mutex<futures_util::stream::SplitSink<WebSocket, 
 /// something pathological. 16 MiB is well above any real instruction.
 const MAX_GUACD_CARRY: usize = 16 * 1024 * 1024;
 
+/// How often the server pings the browser with a WebSocket Ping frame. The
+/// browser answers below JavaScript, so a background tab still replies.
+const BROWSER_PING_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// A browser that has sent nothing at all (no data, no tunnel ping, no Pong)
+/// for this long is gone: a laptop that slept, a network that changed. The
+/// proxy ends so the session doesn't stay Active for the half hour TCP
+/// takes to give up on its own (#330).
+const BROWSER_SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Longest a single send to the browser may take. A dead peer with a full
+/// TCP buffer otherwise blocks the send, and the pump, indefinitely.
+const BROWSER_SEND_LIMIT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Send one message to the browser, giving up after `BROWSER_SEND_LIMIT`
+/// (including the wait for the shared sink).
+async fn send_to_browser(
+    ws: &WsSink,
+    msg: Message,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match tokio::time::timeout(BROWSER_SEND_LIMIT, async {
+        ws.lock().await.send(msg).await
+    })
+    .await
+    {
+        Ok(r) => Ok(r?),
+        Err(_) => Err("browser stopped accepting data".into()),
+    }
+}
+
 /// Forward data from guacd to WebSocket, recording along the way.
 ///
 /// The browser's Tunnel.js parser concatenates every Message::Text into a
@@ -576,8 +606,7 @@ async fn guacd_to_ws(
             server_disconnected.store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
-        let mut sink = ws.lock().await;
-        sink.send(Message::Text(text.into())).await?;
+        send_to_browser(&ws, Message::Text(text.into())).await?;
     }
 
     Ok(())
@@ -596,8 +625,24 @@ async fn ws_to_guacd(
     mut guacd: tokio::io::WriteHalf<GuacdStream>,
     ws_sink: WsSink,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    while let Some(msg) = ws_read.next().await {
+    let mut ping = tokio::time::interval(BROWSER_PING_EVERY);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ping.tick().await; // the first tick is immediate
+    let mut last_heard = tokio::time::Instant::now();
+    loop {
+        let msg = tokio::select! {
+            msg = ws_read.next() => msg,
+            _ = ping.tick() => {
+                if last_heard.elapsed() >= BROWSER_SILENCE_LIMIT {
+                    return Err("browser stopped responding".into());
+                }
+                send_to_browser(&ws_sink, Message::Ping(Default::default())).await?;
+                continue;
+            }
+        };
+        let Some(msg) = msg else { break };
         let msg = msg?;
+        last_heard = tokio::time::Instant::now();
         match msg {
             Message::Text(text) => {
                 // Empty-opcode instructions always start with "0.," — fast
@@ -609,8 +654,7 @@ async fn ws_to_guacd(
                             // internal channel.
                             if instr.args.first().map(|s| s.as_str()) == Some("ping") {
                                 let echo = Instruction::new("", instr.args).encode();
-                                let mut sink = ws_sink.lock().await;
-                                sink.send(Message::Text(echo.into())).await?;
+                                send_to_browser(&ws_sink, Message::Text(echo.into())).await?;
                             }
                             continue;
                         }
