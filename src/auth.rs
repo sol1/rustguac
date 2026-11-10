@@ -257,22 +257,32 @@ fn parse_forwarded_ip(raw: &[u8]) -> Option<IpAddr> {
         .and_then(|r| r.parse::<IpAddr>().ok())
 }
 
+/// Every `name=value` pair in the request's cookies. HTTP/2 lets a client
+/// split cookies over several `Cookie` headers (RFC 9113 8.2.3), and some
+/// proxies pass them on unmerged, so all of them are read, not just the
+/// first (#328).
+pub fn cookie_pairs(headers: &axum::http::HeaderMap) -> impl Iterator<Item = (&str, &str)> {
+    headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|cookies| cookies.split(';'))
+        .filter_map(|c| {
+            let (name, value) = c.trim().split_once('=')?;
+            Some((name.trim(), value))
+        })
+}
+
+/// The value of the cookie `name`, from any of the request's Cookie headers.
+pub fn cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+    cookie_pairs(headers)
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| v.to_string())
+}
+
 /// Extract session cookie value from the Cookie header.
 fn extract_cookie(request: &Request, name: &str) -> Option<String> {
-    request
-        .headers()
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                let c = c.trim();
-                if let Some(val) = c.strip_prefix(name) {
-                    val.strip_prefix('=').map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+    cookie_value(request.headers(), name)
 }
 
 /// Axum middleware that validates either API key or session cookie.
@@ -578,6 +588,40 @@ pub async fn optional_auth(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cookies_are_read_from_every_cookie_header() {
+        // #328: an HTTP/2 client or a proxy can split cookies over several
+        // Cookie headers; the one we want may be in any of them.
+        let mut h = axum::http::HeaderMap::new();
+        h.append(
+            axum::http::header::COOKIE,
+            "theme=dark; a=1".parse().unwrap(),
+        );
+        h.append(
+            axum::http::header::COOKIE,
+            "rustguac_oidc_state=abc; rustguac_session=xyz"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            super::cookie_value(&h, "rustguac_oidc_state").as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            super::cookie_value(&h, "rustguac_session").as_deref(),
+            Some("xyz")
+        );
+        assert_eq!(super::cookie_value(&h, "a").as_deref(), Some("1"));
+        // A name that is a prefix of another is not confused with it.
+        assert_eq!(super::cookie_value(&h, "rustguac"), None);
+        assert_eq!(super::cookie_value(&h, "missing"), None);
+        let names: Vec<_> = super::cookie_pairs(&h).map(|(n, _)| n).collect();
+        assert_eq!(
+            names,
+            ["theme", "a", "rustguac_oidc_state", "rustguac_session"]
+        );
+    }
+
     use super::*;
 
     #[test]

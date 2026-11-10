@@ -789,17 +789,10 @@ fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
 /// Collect the names of cookies present in the request (values omitted, so we
 /// never log secrets). Used for diagnosing missing-cookie failures.
 fn cookie_names(headers: &axum::http::HeaderMap) -> Vec<String> {
-    headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .map(|cookies| {
-            cookies
-                .split(';')
-                .filter_map(|c| c.trim().split('=').next().map(|n| n.trim().to_string()))
-                .filter(|n| !n.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
+    crate::auth::cookie_pairs(headers)
+        .map(|(n, _)| n.to_string())
+        .filter(|n| !n.is_empty())
+        .collect()
 }
 
 /// Read a request header as a string for diagnostic logging.
@@ -845,19 +838,7 @@ fn safe_next(next: &str) -> Option<&str> {
 }
 
 fn extract_cookie_from_headers(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                let c = c.trim();
-                if let Some(val) = c.strip_prefix(name) {
-                    val.strip_prefix('=').map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+    crate::auth::cookie_value(headers, name)
 }
 
 /// Reshape the openidconnect crate's discovery error into something an
