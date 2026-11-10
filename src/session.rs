@@ -981,35 +981,18 @@ impl SessionManager {
         // Enforce session limits (only count active/pending sessions)
         {
             let sessions = self.sessions.read().await;
-            let max_global = self.config.max_sessions;
-            let max_per_user = self.config.max_sessions_per_user;
-
-            if max_global > 0 {
-                let active_count = sessions.values().count(); // includes all states still in HashMap
-                if active_count >= max_global {
-                    return Err(SessionError::ValidationError(format!(
-                        "maximum concurrent sessions reached ({})",
-                        max_global
-                    )));
-                }
+            let mut live = Vec::with_capacity(sessions.len());
+            for session in sessions.values() {
+                let s = session.lock().await;
+                live.push((s.created_by.clone(), s.status.clone()));
             }
-
-            if max_per_user > 0 {
-                let mut user_count = 0usize;
-                for session in sessions.values() {
-                    let s = session.lock().await;
-                    if s.created_by == created_by
-                        && matches!(s.status, SessionStatus::Pending | SessionStatus::Active)
-                    {
-                        user_count += 1;
-                    }
-                }
-                if user_count >= max_per_user {
-                    return Err(SessionError::ValidationError(format!(
-                        "maximum sessions per user reached ({})",
-                        max_per_user
-                    )));
-                }
+            if let Some(msg) = session_limit_reached(
+                &live,
+                &created_by,
+                self.config.max_sessions,
+                self.config.max_sessions_per_user,
+            ) {
+                return Err(SessionError::ValidationError(msg));
             }
         }
 
@@ -2864,6 +2847,38 @@ fn checked_spice_ca(ca: Option<String>) -> Result<Option<String>, SessionError> 
 /// directory under `home_base`, so only a plain name is accepted. Letters,
 /// digits, '.', '_' and '-', at most 32 characters (the Linux limit), not
 /// starting with '.' or '-' (which rules out `.` and `..`).
+/// Whether a new session for `created_by` would exceed `max_sessions` or
+/// `max_sessions_per_user` (0 = unlimited), given every session still held
+/// in memory as (owner, status). Only pending and active sessions count:
+/// finished ones stay in memory for `session_cleanup_delay_secs` and must
+/// not use up the limits meanwhile (#332).
+fn session_limit_reached(
+    sessions: &[(String, SessionStatus)],
+    created_by: &str,
+    max_global: usize,
+    max_per_user: usize,
+) -> Option<String> {
+    let live =
+        |status: &SessionStatus| matches!(status, SessionStatus::Pending | SessionStatus::Active);
+    if max_global > 0 && sessions.iter().filter(|(_, st)| live(st)).count() >= max_global {
+        return Some(format!(
+            "maximum concurrent sessions reached ({max_global})"
+        ));
+    }
+    if max_per_user > 0
+        && sessions
+            .iter()
+            .filter(|(by, st)| by == created_by && live(st))
+            .count()
+            >= max_per_user
+    {
+        return Some(format!(
+            "maximum sessions per user reached ({max_per_user})"
+        ));
+    }
+    None
+}
+
 /// A fresh Ed25519 keypair for an ad-hoc SSH session: the private key in
 /// OpenSSH format, and the public key line to put in `authorized_keys`.
 fn ephemeral_ssh_keypair() -> Result<(String, String), String> {
@@ -2956,6 +2971,31 @@ pub(crate) fn check_share_token_match(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_pending_and_active_sessions_count_towards_the_limits() {
+        use SessionStatus::*;
+        let held = |v: &[(&str, SessionStatus)]| -> Vec<(String, SessionStatus)> {
+            v.iter().map(|(u, s)| (u.to_string(), s.clone())).collect()
+        };
+        // #332: two finished sessions waiting for cleanup don't fill a
+        // global limit of 2.
+        let s = held(&[("a", Completed), ("b", Error), ("c", Active)]);
+        assert_eq!(session_limit_reached(&s, "d", 2, 0), None);
+        let s = held(&[("a", Active), ("b", Pending), ("c", Completed)]);
+        assert!(session_limit_reached(&s, "d", 2, 0)
+            .unwrap()
+            .contains("concurrent"));
+        // Per user, as before.
+        let s = held(&[("a", Active), ("a", Completed), ("b", Active)]);
+        assert_eq!(session_limit_reached(&s, "a", 0, 2), None);
+        let s = held(&[("a", Active), ("a", Pending)]);
+        assert!(session_limit_reached(&s, "a", 0, 2)
+            .unwrap()
+            .contains("per user"));
+        // 0 = unlimited.
+        assert_eq!(session_limit_reached(&s, "a", 0, 0), None);
+    }
+
     #[test]
     fn ephemeral_keypairs_are_fresh_ed25519_in_openssh_format() {
         let (private_pem, public_key) = ephemeral_ssh_keypair().unwrap();
