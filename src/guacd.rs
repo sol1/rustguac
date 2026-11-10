@@ -90,6 +90,8 @@ pub struct SshParams {
     pub create_typescript_path: bool,
     /// Terminal font size in points (guacd default: 12).
     pub font_size: Option<u32>,
+    /// Terminal colours, one of `SSH_COLOR_SCHEMES` (default `gray-black`).
+    pub color_scheme: Option<String>,
     /// Wake-on-LAN parameters.
     pub wol: WolParams,
 }
@@ -142,6 +144,10 @@ pub fn vnc_network_preset(preset: &str) -> Option<(&'static str, u8, u8, Option<
 
 /// The preset names `vnc_network_preset` knows, `auto` included.
 pub const VNC_NETWORK_PRESETS: &[&str] = &["auto", "lan", "wan", "slow"];
+
+/// guacd's built-in terminal colour schemes, as `<text>-<background>`. The
+/// first is the default: grey text on black, which some find dim (#344).
+pub const SSH_COLOR_SCHEMES: &[&str] = &["gray-black", "white-black", "green-black", "black-white"];
 
 /// The RDP keyboard layouts guacd has a keymap for (guacd `server-layout`),
 /// named as in guacamole-server's `src/protocols/rdp/keymaps/*.keymap`.
@@ -435,7 +441,10 @@ pub async fn connect_and_handshake(
                 "width" => p.width.to_string(),
                 "height" => p.height.to_string(),
                 "dpi" => p.dpi.to_string(),
-                "color-scheme" => "gray-black".into(),
+                "color-scheme" => p
+                    .color_scheme
+                    .clone()
+                    .unwrap_or_else(|| SSH_COLOR_SCHEMES[0].into()),
                 "font-size" => p.font_size.unwrap_or(12).to_string(),
                 "font-name" => "monospace".into(),
                 "terminal-type" => "xterm-256color".into(),

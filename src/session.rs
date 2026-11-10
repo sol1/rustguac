@@ -207,6 +207,9 @@ pub struct CreateSessionRequest {
     pub fence_all_targets: bool,
     /// SSH terminal font size in points (SSH only; default 12).
     pub ssh_font_size: Option<u32>,
+    /// SSH terminal colours, one of `guacd::SSH_COLOR_SCHEMES`.
+    #[serde(default)]
+    pub ssh_color_scheme: Option<String>,
     /// Wake-on-LAN: send a magic packet before connecting (SSH/RDP/VNC).
     pub wol_send_packet: Option<bool>,
     /// Wake-on-LAN: target MAC address.
@@ -1176,6 +1179,7 @@ impl SessionManager {
                     font_size: req
                         .ssh_font_size
                         .map(|s| s.clamp(MIN_SSH_FONT, MAX_SSH_FONT)),
+                    color_scheme: ssh_color_scheme(req.ssh_color_scheme.as_deref())?,
                     wol: wol.clone(),
                 });
                 (
@@ -2847,6 +2851,19 @@ fn checked_spice_ca(ca: Option<String>) -> Result<Option<String>, SessionError> 
 /// directory under `home_base`, so only a plain name is accepted. Letters,
 /// digits, '.', '_' and '-', at most 32 characters (the Linux limit), not
 /// starting with '.' or '-' (which rules out `.` and `..`).
+/// An SSH colour scheme from a request: unset or blank for guacd's default,
+/// otherwise one of `guacd::SSH_COLOR_SCHEMES`.
+fn ssh_color_scheme(scheme: Option<&str>) -> Result<Option<String>, SessionError> {
+    match scheme.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(s) if crate::guacd::SSH_COLOR_SCHEMES.contains(&s) => Ok(Some(s.to_string())),
+        Some(s) => Err(SessionError::ValidationError(format!(
+            "ssh_color_scheme must be one of {}, not {s:?}",
+            crate::guacd::SSH_COLOR_SCHEMES.join(", ")
+        ))),
+    }
+}
+
 /// Whether a new session for `created_by` would exceed `max_sessions` or
 /// `max_sessions_per_user` (0 = unlimited), given every session still held
 /// in memory as (owner, status). Only pending and active sessions count:
@@ -2971,6 +2988,22 @@ pub(crate) fn check_share_token_match(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ssh_color_schemes_are_checked() {
+        assert_eq!(ssh_color_scheme(None).unwrap(), None);
+        assert_eq!(ssh_color_scheme(Some(" ")).unwrap(), None);
+        assert_eq!(
+            ssh_color_scheme(Some("white-black")).unwrap().as_deref(),
+            Some("white-black")
+        );
+        for s in crate::guacd::SSH_COLOR_SCHEMES {
+            assert!(ssh_color_scheme(Some(s)).is_ok());
+        }
+        // guacd also takes custom palettes, but only the named ones are offered.
+        assert!(ssh_color_scheme(Some("foreground:rgb:ff/ff/ff")).is_err());
+        assert!(ssh_color_scheme(Some("pink-black")).is_err());
+    }
+
     #[test]
     fn only_pending_and_active_sessions_count_towards_the_limits() {
         use SessionStatus::*;

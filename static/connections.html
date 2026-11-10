@@ -869,6 +869,14 @@
                     <input type="number" id="em-ssh-font-size" min="6" max="72" placeholder="12">
                 </label>
                 <div class="field-hint">Points. Leave blank for the default (12). Increase or decrease to tune readability — the terminal size no longer scales with display DPI.</div>
+                <label id="em-ssh-color-row">Terminal colours
+                    <select id="em-ssh-color-scheme">
+                        <option value="">Default (grey on black)</option>
+                        <option value="white-black">White on black</option>
+                        <option value="green-black">Green on black</option>
+                        <option value="black-white">Black on white</option>
+                    </select>
+                </label>
                 <div class="entry-only">
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-ssh-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
@@ -4028,6 +4036,7 @@
             document.getElementById('em-typescript-row').style.display = val === 'ssh' ? '' : 'none';
             // SSH terminal font size is SSH-only
             document.getElementById('em-ssh-font-size').parentElement.style.display = val === 'ssh' ? '' : 'none';
+            document.getElementById('em-ssh-color-row').style.display = val === 'ssh' ? '' : 'none';
             // Wake-on-LAN applies to SSH/RDP/VNC (guacd passes the magic packet)
             document.getElementById('em-wol-section').style.display = (val === 'ssh' || val === 'rdp' || val === 'vnc') ? '' : 'none';
         });
@@ -4489,6 +4498,7 @@
             document.getElementById('em-proxmox-monitors').value = '1';
             document.getElementById('em-proxmox-verify-tls').checked = false;
             document.getElementById('em-ssh-font-size').value = '';
+            document.getElementById('em-ssh-color-scheme').value = '';
             document.getElementById('em-wol-enabled').checked = false;
             document.getElementById('em-wol-mac').value = '';
             document.getElementById('em-wol-broadcast').value = '';
@@ -4608,6 +4618,7 @@
                     document.getElementById('em-port').value = entryData.port || '22';
                     document.getElementById('em-username').value = entryData.username || '';
                     document.getElementById('em-ssh-font-size').value = entryData.ssh_font_size || '';
+                    document.getElementById('em-ssh-color-scheme').value = entryData.ssh_color_scheme || '';
                     document.getElementById('em-ssh-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'rdp') {
                     document.getElementById('em-rdp-hostname').value = entryData.hostname || '';
@@ -4820,6 +4831,8 @@
                 if (pk) entry.private_key = pk;
                 var fs = parseInt(document.getElementById('em-ssh-font-size').value);
                 if (fs > 0) entry.ssh_font_size = fs;
+                var cs = document.getElementById('em-ssh-color-scheme').value;
+                if (cs) entry.ssh_color_scheme = cs;
                 if (document.getElementById('em-ssh-prompt-creds').checked) entry.prompt_credentials = true;
             } else if (type === 'rdp') {
                 var h = document.getElementById('em-rdp-hostname').value.trim();

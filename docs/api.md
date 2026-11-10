@@ -233,6 +233,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `dpi` | integer | All | Display DPI |
 | `banner` | string | All | Banner message shown before session starts |
 | `ssh_font_size` | integer | SSH | Terminal font size in points (default 12, 6 to 72) |
+| `ssh_color_scheme` | string | SSH | Terminal colours: `gray-black` (default), `white-black`, `green-black` or `black-white` (text on background) |
 | `wol_send_packet` | boolean | SSH, RDP, VNC | Send a Wake-on-LAN magic packet before connecting |
 | `wol_mac_addr` | string | SSH, RDP, VNC | MAC address to wake (required with `wol_send_packet`) |
 | `wol_broadcast_addr` | string | SSH, RDP, VNC | Broadcast address for the packet (guacd default `255.255.255.255`) |
