@@ -1113,27 +1113,8 @@ impl SessionManager {
                 );
 
                 let (private_key, ssh_banner) = if req.generate_keypair.unwrap_or(false) {
-                    let keypair = ssh_key::PrivateKey::random(
-                        &mut ssh_key::rand_core::OsRng,
-                        ssh_key::Algorithm::Ed25519,
-                    )
-                    .map_err(|e| {
-                        SessionError::ValidationError(format!("keypair generation failed: {}", e))
-                    })?;
-
-                    let private_pem = keypair.to_openssh(ssh_key::LineEnding::LF).map_err(|e| {
-                        SessionError::ValidationError(format!("private key export failed: {}", e))
-                    })?;
-
-                    let public_key = format!(
-                        "{} rustguac-ephemeral",
-                        keypair.public_key().to_openssh().map_err(|e| {
-                            SessionError::ValidationError(format!(
-                                "public key export failed: {}",
-                                e
-                            ))
-                        })?
-                    );
+                    let (private_pem, public_key) =
+                        ephemeral_ssh_keypair().map_err(SessionError::ValidationError)?;
 
                     let auth_keys_path = if username.is_empty() {
                         "~/.ssh/authorized_keys".to_string()
@@ -1150,7 +1131,7 @@ impl SessionManager {
                     }
 
                     tracing::info!(session_id = %session_id, "Generated ephemeral SSH keypair");
-                    (Some(private_pem.to_string()), Some(banner))
+                    (Some(private_pem), Some(banner))
                 } else {
                     (req.private_key.clone(), None)
                 };
@@ -2883,6 +2864,27 @@ fn checked_spice_ca(ca: Option<String>) -> Result<Option<String>, SessionError> 
 /// directory under `home_base`, so only a plain name is accepted. Letters,
 /// digits, '.', '_' and '-', at most 32 characters (the Linux limit), not
 /// starting with '.' or '-' (which rules out `.` and `..`).
+/// A fresh Ed25519 keypair for an ad-hoc SSH session: the private key in
+/// OpenSSH format, and the public key line to put in `authorized_keys`.
+fn ephemeral_ssh_keypair() -> Result<(String, String), String> {
+    let keypair = russh::keys::PrivateKey::random(
+        &mut russh::keys::key::safe_rng(),
+        russh::keys::Algorithm::Ed25519,
+    )
+    .map_err(|e| format!("keypair generation failed: {e}"))?;
+    let private_pem = keypair
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .map_err(|e| format!("private key export failed: {e}"))?;
+    let public_key = keypair
+        .public_key()
+        .to_openssh()
+        .map_err(|e| format!("public key export failed: {e}"))?;
+    Ok((
+        private_pem.to_string(),
+        format!("{public_key} rustguac-ephemeral"),
+    ))
+}
+
 pub(crate) fn valid_vdi_username(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 32
@@ -2954,6 +2956,28 @@ pub(crate) fn check_share_token_match(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ephemeral_keypairs_are_fresh_ed25519_in_openssh_format() {
+        let (private_pem, public_key) = ephemeral_ssh_keypair().unwrap();
+        assert!(private_pem.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+        assert!(public_key.starts_with("ssh-ed25519 "));
+        assert!(public_key.ends_with(" rustguac-ephemeral"));
+        // The private key round-trips and matches the public key it came with.
+        let parsed = russh::keys::PrivateKey::from_openssh(&private_pem).unwrap();
+        assert_eq!(
+            format!(
+                "{} rustguac-ephemeral",
+                parsed.public_key().to_openssh().unwrap()
+            ),
+            public_key
+        );
+        assert_ne!(
+            ephemeral_ssh_keypair().unwrap().1,
+            public_key,
+            "each call is a new key"
+        );
+    }
+
     use super::*;
 
     #[test]
