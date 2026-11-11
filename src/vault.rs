@@ -873,9 +873,13 @@ pub struct VaultClient {
 /// The external token manager owns renewal and rotation. Never cache the file's
 /// content, include it in errors, or fall back to another identity when unreadable.
 async fn read_token_file(path: &std::path::Path) -> Result<String, VaultError> {
-    let file = tokio::fs::File::open(path)
-        .await
-        .map_err(|_| VaultError::Auth("cannot open external token file".into()))?;
+    let file = tokio::fs::File::open(path).await.map_err(|e| {
+        VaultError::Auth(format!(
+            "cannot open external token file {}: {}",
+            path.display(),
+            e.kind()
+        ))
+    })?;
     let mut bytes = Vec::new();
     file.take(65537)
         .read_to_end(&mut bytes)
@@ -983,6 +987,33 @@ impl VaultClient {
         let (token, _ttl) = client.login().await?;
         if client.token_file.is_none() {
             *client.token.write().await = token;
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let path = client.token_file.as_ref().unwrap();
+                let metadata = tokio::fs::metadata(path).await.map_err(|e| {
+                    VaultError::Auth(format!(
+                        "cannot inspect external token file {}: {}",
+                        path.display(),
+                        e.kind()
+                    ))
+                })?;
+                if metadata.permissions().mode() & 0o044 != 0 {
+                    tracing::warn!(path = %path.display(), "External Vault token file is group or world readable; restrict access to the token manager and rustguac");
+                }
+            }
+            // Validate the externally issued identity before marking this backend
+            // connected. Initial failures use the existing reconnect/status path.
+            let response = client
+                .request(reqwest::Method::GET, "/v1/auth/token/lookup-self", None)
+                .await?;
+            if !response.status().is_success() {
+                return Err(VaultError::Auth(format!(
+                    "external token lookup-self failed (HTTP {})",
+                    response.status()
+                )));
+            }
         }
 
         Ok(client)
@@ -2496,9 +2527,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn token_file_startup_rejects_invalid_identity_and_recovers_after_rotation() {
+        use axum::{
+            http::{HeaderMap, StatusCode},
+            routing::get,
+            Router,
+        };
+        let calls = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let recorded = calls.clone();
+        let app = Router::new().route(
+            "/v1/auth/token/lookup-self",
+            get(move |headers: HeaderMap| {
+                let recorded = recorded.clone();
+                async move {
+                    assert_eq!(headers["X-Vault-Namespace"], "example-ns");
+                    let token = headers["X-Vault-Token"].to_str().unwrap().to_string();
+                    recorded.lock().await.push(token.clone());
+                    if token == "valid-agent-token" {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::FORBIDDEN
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let path = std::env::temp_dir().join(format!("rustguac-lookup-{}", uuid::Uuid::new_v4()));
+        let mut config = base_config();
+        config.addr = format!("http://{addr}");
+        config.role_id.clear();
+        config.token_file = Some(path.clone());
+        config.namespace = Some("example-ns".into());
+        for token in ["expired-agent-token", "garbage-token"] {
+            tokio::fs::write(&path, token).await.unwrap();
+            let error = match VaultClient::new(&config, "").await {
+                Ok(_) => panic!("invalid external token accepted"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains("lookup-self"));
+            assert!(!error.contains(token));
+        }
+        let next = path.with_extension("next");
+        tokio::fs::write(&next, "valid-agent-token").await.unwrap();
+        tokio::fs::rename(next, &path).await.unwrap();
+        let client = VaultClient::new(&config, "").await.unwrap();
+        assert!(client.token.read().await.is_empty());
+        assert_eq!(
+            *calls.lock().await,
+            vec!["expired-agent-token", "garbage-token", "valid-agent-token"]
+        );
+        tokio::fs::remove_file(path).await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn agent_token_file_refuses_invalid_or_missing_material_without_leaking_it() {
         let path = std::env::temp_dir().join(format!("rustguac-agent-{}", uuid::Uuid::new_v4()));
-        assert!(read_token_file(&path).await.is_err());
+        let error = read_token_file(&path).await.unwrap_err().to_string();
+        assert!(error.contains(path.to_str().unwrap()));
         for invalid in [
             Vec::new(),
             b" \n\t".to_vec(),
@@ -2537,7 +2625,12 @@ mod tests {
 
     #[tokio::test]
     async fn token_file_forbidden_retries_only_once_and_only_after_rotation() {
-        use axum::{extract::Request, http::StatusCode, routing::any, Router};
+        use axum::{
+            extract::Request,
+            http::StatusCode,
+            routing::{any, get},
+            Router,
+        };
         for (replace, reject_new) in [(false, false), (true, false), (true, true)] {
             let path =
                 std::env::temp_dir().join(format!("rustguac-token-{}", uuid::Uuid::new_v4()));
@@ -2545,31 +2638,36 @@ mod tests {
             let calls = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
             let recorded = calls.clone();
             let sink = path.clone();
-            let app = Router::new().fallback(any(move |request: Request| {
-                let recorded = recorded.clone();
-                let sink = sink.clone();
-                async move {
-                    assert_eq!(request.uri().path(), "/v1/check");
-                    assert_eq!(request.headers()["X-Vault-Namespace"], "example-ns");
-                    let token = request.headers()["X-Vault-Token"]
-                        .to_str()
-                        .unwrap()
-                        .to_string();
-                    recorded.lock().await.push(token.clone());
-                    if token == "old-token" {
-                        if replace {
-                            let next = sink.with_extension("next");
-                            tokio::fs::write(&next, "new-token").await.unwrap();
-                            tokio::fs::rename(next, sink).await.unwrap();
+            let app = Router::new()
+                .route(
+                    "/v1/auth/token/lookup-self",
+                    get(|| async { StatusCode::OK }),
+                )
+                .fallback(any(move |request: Request| {
+                    let recorded = recorded.clone();
+                    let sink = sink.clone();
+                    async move {
+                        assert_eq!(request.uri().path(), "/v1/check");
+                        assert_eq!(request.headers()["X-Vault-Namespace"], "example-ns");
+                        let token = request.headers()["X-Vault-Token"]
+                            .to_str()
+                            .unwrap()
+                            .to_string();
+                        recorded.lock().await.push(token.clone());
+                        if token == "old-token" {
+                            if replace {
+                                let next = sink.with_extension("next");
+                                tokio::fs::write(&next, "new-token").await.unwrap();
+                                tokio::fs::rename(next, sink).await.unwrap();
+                            }
+                            StatusCode::FORBIDDEN
+                        } else if reject_new {
+                            StatusCode::FORBIDDEN
+                        } else {
+                            StatusCode::OK
                         }
-                        StatusCode::FORBIDDEN
-                    } else if reject_new {
-                        StatusCode::FORBIDDEN
-                    } else {
-                        StatusCode::OK
                     }
-                }
-            }));
+                }));
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = listener.local_addr().unwrap();
             let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -2688,6 +2786,10 @@ mod tests {
         assert_eq!(
             *calls.lock().await,
             vec![
+                (
+                    "/v1/auth/token/lookup-self".into(),
+                    "synthetic-agent-one".into()
+                ),
                 ("/v1/check".into(), "synthetic-agent-one".into()),
                 ("/v1/folders?list=true".into(), "synthetic-agent-one".into()),
                 ("/v1/check".into(), "synthetic-agent-two".into()),
@@ -2700,7 +2802,7 @@ mod tests {
             .await
             .is_err());
         assert!(client.kv_list("/v1/folders").await.is_err());
-        assert_eq!(calls.lock().await.len(), 4);
+        assert_eq!(calls.lock().await.len(), 5);
         server.abort();
     }
 
