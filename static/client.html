@@ -1863,7 +1863,7 @@
                 rgDisarmFullscreenGesture(); rgHideConnectCover();
                 if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                 if (firstEnd) teardownMonitorWindows('disconnect');
-                if (embedded) { if (firstEnd) rgNotifyParent('end'); return; }
+                if (embedded && normalEnd) { if (firstEnd) rgNotifyParent('end'); return; }
                 document.getElementById('disconnected-title').textContent = normalEnd ? 'Session Ended' : 'Connection Error';
                 document.getElementById('disconnected-message').textContent = message;
                 document.getElementById('disconnected-overlay').className = 'visible';

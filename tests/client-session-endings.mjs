@@ -111,14 +111,18 @@ for (const success of [false, true]) {
     h.cleanup();
 }
 
-// Embedded launcher receives one end notification, including for errors.
+// Only normal endings dismiss the embedded frame. Errors keep Reconnect visible.
 for (const error of [false, true]) {
     const h = setup(true);
     if (error) h.ctx.tunnel.onerror({ code: h.codes.SERVER_ERROR, message: 'Connection lost' });
     h.closed();
     h.closed();
-    assert.deepEqual(h.ctx.notifications, ['end']);
-    assert.equal(h.title(), undefined, 'embedded sessions use their launcher');
+    assert.deepEqual(h.ctx.notifications, error ? [] : ['end']);
+    assert.equal(h.title(), error ? 'Connection Error' : undefined);
+    if (error) {
+        assert.equal(h.message(), 'Connection lost');
+        assert.equal(h.elements.get('disconnected-overlay').className, 'visible');
+    }
     h.cleanup();
 }
 
