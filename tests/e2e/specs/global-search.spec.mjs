@@ -3,7 +3,7 @@
 // closes it, and on the connections page the folder view underneath is
 // left exactly as it was.
 import { test, expect } from '@playwright/test';
-import { installApi, settle } from '../lib/api.mjs';
+import { installApi, settle, ROLE_PERMS } from '../lib/api.mjs';
 
 const TOTAL_ENTRIES = 4 + 2 + 20;
 
@@ -114,7 +114,7 @@ for (const path of ['/sessions.html', '/recordings.html', '/docs.html']) {
         // The static harness bakes no role on <html>; the real server writes 0
         // for an anonymous caller, which is the case under test.
         await page.addInitScript(() => {
-            document.addEventListener('DOMContentLoaded', () => document.documentElement.setAttribute('data-role-level', '0'));
+            document.addEventListener('DOMContentLoaded', () => { document.documentElement.setAttribute('data-role-level', '0'); document.documentElement.setAttribute('data-perms', ''); });
         });
         await page.goto(path);
         // The page itself bounces to the login page on 401; the assertions hold either side of that.
@@ -165,7 +165,7 @@ test('the same login keeps its cached index across pages', async ({ page }) => {
 test('logging out forgets the cached index before the login page shows', async ({ page }) => {
     let signedIn = true;
     await installApi(page, { routes: { 'GET /api/me': () => signedIn
-        ? { name: 'tester@example.com', role: 'admin', groups: ['everyone'], vault_enabled: true, vault_configured: true }
+        ? { name: 'tester@example.com', role: 'admin', permissions: ROLE_PERMS.admin, groups: ['everyone'], vault_enabled: true, vault_configured: true }
         : { status: 401, contentType: 'application/json', body: '{"error":"not authenticated"}' } } });
     await page.goto('/recordings.html');
     await settle(page);

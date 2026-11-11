@@ -1,17 +1,39 @@
 # Roles and Access Control
 
-## Role hierarchy
+## Roles and permissions
 
-rustguac implements a 4-tier role hierarchy:
+Every check on the server asks for a **permission**, and a role is a named set of permissions. There are four built-in roles, each granting everything the one below it does:
 
-| Role | Level | Description |
-|------|-------|-------------|
-| **admin** | 4 | Full access — manage users, connections, recordings, sessions, group mappings, all API tokens |
-| **poweruser** | 3 | Ad-hoc connections (Connect to a host) + connections connect + self-service API tokens |
-| **operator** | 2 | Connections connect only (no ad-hoc connections); can view own API tokens |
-| **viewer** | 1 | Read-only — view sessions and recordings; no API token access |
+| Role | Adds | Description |
+|------|------|-------------|
+| **viewer** | `docs.view` | Read the docs. Can sign in, but can't open Connections. |
+| **operator** | `connections.connect`, `credentials.self` | Open Connections and connect to entries in folders they can access, and save their own credential variables. |
+| **poweruser** | `connections.adhoc`, `recordings.view`, `reports.view`, `tokens.self` | Ad-hoc connections (**Connect to a host**), recordings, reports, and their own API tokens. |
+| **admin** | every permission | Everything, including any permission added in a later release. |
 
-Roles are hierarchical: each role includes all permissions of lower roles. For example, a poweruser can do everything an operator can, plus open ad-hoc connections.
+The permissions and what they allow:
+
+| Permission | Allows |
+|---|---|
+| `connections.connect` | See folders and entries in Connections, connect to them, and list and end your own sessions and VDI containers |
+| `credentials.self` | Save your own credential variables |
+| `connections.adhoc` | Ad-hoc sessions to any host, ad-hoc `/api/connect` links, and the SSH host-key probe they use |
+| `recordings.view` | List and play recordings and typescripts |
+| `reports.view` | Reports |
+| `tokens.self` | Create and revoke your own API tokens |
+| `connections.edit` | Create, edit, move, copy and delete entries and folders, and folder default credentials. Sees and connects to every folder |
+| `folders.manage_access` | Change who can open a folder (anyone with this can give themselves any folder) |
+| `connections.unrestricted` | Ad-hoc and link sessions skip the [ad-hoc policy](api.md#post-apisessions) |
+| `sessions.view_all` | See, thumbnail and end anyone's session |
+| `sessions.shadow` | Shadow someone else's session |
+| `recordings.delete` | Delete recordings |
+| `admin.users` | Manage users and the API tokens issued to them |
+| `admin.roles` | Set users' roles, and manage group-to-role mappings |
+| `admin.audit` | Audit logs |
+| `admin.system` | Detailed system status |
+| `docs.view` | Documentation |
+
+`GET /api/me` returns the caller's `permissions`. Custom roles, built from these permissions, are planned ([#294](https://github.com/sol1/rustguac/issues/294)).
 
 ## Authentication paths
 

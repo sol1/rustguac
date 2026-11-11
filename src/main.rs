@@ -8,6 +8,7 @@ mod guacd;
 mod import;
 mod migrate;
 mod oidc;
+mod perms;
 mod protocol;
 mod pve;
 mod recording;
@@ -547,7 +548,7 @@ fn cmd_list_users(database: &Db) {
 fn cmd_add_user(database: &Db, email: &str, role: &str, name: &str) {
     let email = email.trim();
     let name = name.trim();
-    if !["admin", "poweruser", "operator", "viewer"].contains(&role) {
+    if !crate::perms::BUILTIN_ROLES.contains(&role) {
         eprintln!("Role must be admin, poweruser, operator, or viewer.");
         std::process::exit(1);
     }
@@ -595,7 +596,7 @@ fn cmd_reset_oidc_subject(database: &Db, email: &str) {
 }
 
 fn cmd_set_role(database: &Db, email: &str, role: &str) {
-    if !["admin", "poweruser", "operator", "viewer"].contains(&role) {
+    if !crate::perms::BUILTIN_ROLES.contains(&role) {
         eprintln!("Role must be admin, poweruser, operator, or viewer.");
         std::process::exit(1);
     }
@@ -655,7 +656,7 @@ fn cmd_delete_user(database: &Db, email: &str) {
 }
 
 fn cmd_map_group(database: &Db, group: &str, role: &str, force: bool) {
-    if !["admin", "poweruser", "operator", "viewer"].contains(&role) {
+    if !crate::perms::BUILTIN_ROLES.contains(&role) {
         eprintln!("Role must be admin, poweruser, operator, or viewer.");
         std::process::exit(1);
     }
@@ -1765,9 +1766,9 @@ fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {
 /// The pages are branded once at startup and cannot change until a restart,
 /// so the tags are computed there too -- serving one is a string compare.
 ///
-/// The variants differ only in the `data-role-level` attribute written on
-/// `<html>`: the stylesheet gates navigation links and admin-only controls on
-/// it, so the header is right on first paint for whoever the page is served
+/// The variants differ only in the `data-role-level` and `data-perms`
+/// attributes written on `<html>`: the stylesheet gates navigation links and
+/// admin-only controls on them, so the header is right on first paint for whoever the page is served
 /// to, instead of hiding everything gated and showing it after `/api/me`
 /// answers, which flashed and reflowed on every navigation.
 struct BrandedPage {
@@ -1808,11 +1809,19 @@ impl BrandedPage {
 /// Write the caller's role level onto the page's `<html>` tag. A page that
 /// has no bare `<html>` start tag is returned unchanged. Extracted for test.
 fn role_variant_html(html: &str, level: u8) -> String {
+    // The permissions of the built-in role at this level (#294); the
+    // stylesheet hides what the caller can't use from them.
+    let perms = level
+        .checked_sub(1)
+        .and_then(|i| crate::perms::BUILTIN_ROLES.get(i as usize))
+        .map(|role| crate::perms::role_perms(role).names().join(" "))
+        .unwrap_or_default();
     match html.find("<html>") {
         Some(i) => format!(
-            "{}<html data-role-level=\"{}\">{}",
+            "{}<html data-role-level=\"{}\" data-perms=\"{}\">{}",
             &html[..i],
             level,
+            perms,
             &html[i + "<html>".len()..]
         ),
         None => html.to_string(),
@@ -2098,7 +2107,15 @@ mod tests {
     fn role_variant_writes_level_on_html_tag_only() {
         let page = "<!DOCTYPE html>\n<html>\n<head><title>x</title></head><body><html>text</html></body></html>";
         let v = role_variant_html(page, 4);
-        assert!(v.starts_with("<!DOCTYPE html>\n<html data-role-level=\"4\">\n<head>"));
+        assert!(v.starts_with("<!DOCTYPE html>\n<html data-role-level=\"4\" data-perms=\""));
+        // The built-in role at each level, with its permissions (#294).
+        assert!(v.contains(" admin.roles ") || v.contains("admin.roles\""));
+        let operator = role_variant_html(page, 2);
+        assert!(
+            operator.contains(r#"data-perms="connections.connect credentials.self docs.view">"#)
+        );
+        let anonymous = role_variant_html(page, 0);
+        assert!(anonymous.contains(r#"<html data-role-level="0" data-perms="">"#));
         // only the first bare start tag is touched; the literal later on is content
         assert_eq!(v.matches("data-role-level").count(), 1);
         assert_eq!(

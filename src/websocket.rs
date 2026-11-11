@@ -4,6 +4,7 @@ use crate::api::AppState;
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::guacd::GuacdStream;
+use crate::perms::Perm;
 use crate::protocol::{last_instruction_boundary, Instruction};
 use crate::session::{SessionManager, ShareTokenValidation};
 use axum::{
@@ -102,7 +103,9 @@ pub async fn ws_handler(
     if is_owner {
         let creator = manager.get_session_creator(session_id).await;
         match &identity {
-            Some(id) if id.has_role("operator") && is_session_owner(id, creator.as_deref()) => {}
+            Some(id)
+                if id.has_perm(Perm::ConnectionsConnect)
+                    && is_session_owner(id, creator.as_deref()) => {}
             Some(id) => {
                 tracing::warn!(
                     session_id = %session_id,

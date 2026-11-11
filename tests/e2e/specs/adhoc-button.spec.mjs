@@ -3,7 +3,7 @@
 // can_connect_adhoc: poweruser and above. On Connections it opens the ad-hoc
 // editor in place; anywhere else it goes to /connections.html#adhoc.
 import { test, expect } from '@playwright/test';
-import { installApi, settle } from '../lib/api.mjs';
+import { installApi, settle, ROLE_PERMS } from '../lib/api.mjs';
 
 const GONE = { status: 401, contentType: 'application/json', body: '{"error":"not authenticated"}' };
 
@@ -65,7 +65,7 @@ test('no button signed out, on the login page or on a page', async ({ page }) =>
 
 test('without Vault a poweruser still gets the button', async ({ page }) => {
     await installApi(page, { role: 'poweruser', routes: {
-        'GET /api/me': { name: 'pu@example.com', role: 'poweruser', groups: [], vault_enabled: false, vault_configured: false },
+        'GET /api/me': { name: 'pu@example.com', role: 'poweruser', permissions: ROLE_PERMS.poweruser, groups: [], vault_enabled: false, vault_configured: false },
         'GET /api/addressbook/search-index': { status: 404, contentType: 'application/json', body: '{"error":"vault not configured"}' }
     } });
     await page.goto('/recordings.html');
@@ -91,7 +91,7 @@ test('the button goes when the session expires, and after logout', async ({ page
 test('logging out leaves no button on the login page', async ({ page }) => {
     let signedIn = true;
     await installApi(page, { routes: { 'GET /api/me': () => signedIn
-        ? { name: 'pu@example.com', role: 'poweruser', groups: [], vault_enabled: true, vault_configured: true }
+        ? { name: 'pu@example.com', role: 'poweruser', permissions: ROLE_PERMS.poweruser, groups: [], vault_enabled: true, vault_configured: true }
         : GONE } });
     await page.goto('/recordings.html');
     await settle(page);

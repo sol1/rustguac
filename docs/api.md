@@ -902,13 +902,14 @@ No authentication required. Returns whether OIDC is enabled and the site title.
 
 ### `GET /api/me`
 
-Returns current user info. Requires authentication.
+Returns current user info. Requires authentication. `permissions` lists what the caller may do (see [Roles and permissions](roles-and-access-control.md#roles-and-permissions)); an admin API key holds every permission.
 
 ```json
 {
   "name": "User Name",
   "email": "user@example.com",
   "role": "operator",
+  "permissions": ["connections.connect", "credentials.self", "docs.view"],
   "groups": ["engineering"],
   "auth_type": "oidc",
   "vault_enabled": true,

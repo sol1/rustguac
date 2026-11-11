@@ -28,7 +28,7 @@
     window.__rgGlobalSearch = true;
 
     var searchIndex = null, searchEngaged = false, searchFilters = null;
-    var confirmedLevel = null; // role level /api/me answered with
+    var confirmedPerms = null; // permissions /api/me answered with (#294)
 
     function esc(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -80,10 +80,12 @@
     }
 
     // "Connect to a host": poweruser and above, the server's can_connect_adhoc.
-    var ADHOC_LEVEL = 3;
-    function injectAdhoc(level) {
+    // Whether a permission list holds connections.adhoc, which the
+    // "Connect to a host" button needs.
+    function canAdhoc(perms) { return !!perms && perms.indexOf('connections.adhoc') >= 0; }
+    function injectAdhoc(perms) {
         var brand = document.querySelector('.brand-row');
-        if (!brand || level == null || level < ADHOC_LEVEL || document.getElementById('rg-adhoc')) return;
+        if (!brand || !canAdhoc(perms) || document.getElementById('rg-adhoc')) return;
         var b = document.createElement('button');
         b.type = 'button'; b.id = 'rg-adhoc'; b.className = 'btn-add global-adhoc';
         b.title = 'Connect to a host that is not a saved entry, with every option an entry has. Nothing is saved.';
@@ -585,24 +587,25 @@
         });
     }
 
-    var ROLE_LEVEL = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
-    var MIN_LEVEL = 2; // the search endpoints answer operator and above
+    // The search endpoints need connections.connect.
+    var SEARCH_PERM = 'connections.connect';
 
-    // Who the served page says it is for. Missing (a static copy with no
-    // server behind it) is unknown, not anonymous.
-    function servedLevel() {
-        var v = document.documentElement.getAttribute('data-role-level');
-        return v == null || v === '' ? null : (parseInt(v, 10) || 0);
+    // The permissions the served page says its user holds. Missing (a static
+    // copy with no server behind it) is unknown, not anonymous.
+    function servedPerms() {
+        var v = document.documentElement.getAttribute('data-perms');
+        return v == null ? null : v.split(' ').filter(Boolean);
     }
 
     // Ask the server who the caller is. Resolves to an identity string, or
-    // null when the caller is not signed in or is below operator.
+    // null when the caller is not signed in or can't search.
     function whoAmI() {
         return fetch('/api/me', { headers: headers(), credentials: 'same-origin' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (me) {
-                if (!me || !me.role || (ROLE_LEVEL[me.role] || 0) < MIN_LEVEL) return null;
-                confirmedLevel = ROLE_LEVEL[me.role];
+                var perms = (me && me.permissions) || [];
+                if (!me || perms.indexOf(SEARCH_PERM) < 0) return null;
+                confirmedPerms = perms;
                 return (me.name || '') + '|' + me.role + '|' + (me.groups || []).join(',');
             })
             .catch(function () { return null; });
@@ -615,31 +618,32 @@
             if (t) dropCache();
         }, true);
 
-        var level = servedLevel();
-        // The server wrote anonymous or viewer on the page and no API key is in
-        // hand: nothing to search with, nothing to show. Also sweep any index
-        // a previous login left in this tab.
-        if (level != null && level < MIN_LEVEL && !apiKey()) { dropCache(); return; }
+        var served = servedPerms();
+        var canSearch = served != null && served.indexOf(SEARCH_PERM) >= 0;
+        // The server wrote someone who can't search on the page and no API key
+        // is in hand: nothing to search with, nothing to show. Also sweep any
+        // index a previous login left in this tab.
+        if (served != null && !canSearch && !apiKey()) { dropCache(); return; }
         if (!document.querySelector('.brand-row')) return;
 
-        // Operator or above by the server's word: paint the box now so the
-        // header is right on first paint, and confirm the identity in the
-        // background. Anyone else (API key, or a page with no role written on
-        // it) is confirmed first and gets the box only on a yes.
-        if (level != null && level >= MIN_LEVEL) {
+        // Can search by the server's word: paint the box now so the header is
+        // right on first paint, and confirm the identity in the background.
+        // Anyone else (API key, or a page with no permissions written on it)
+        // is confirmed first and gets the box only on a yes.
+        if (canSearch) {
             injectUI();
-            injectAdhoc(level);
+            injectAdhoc(served);
             whoAmI().then(function (who) {
                 if (!who) { signedOut(); return; }
                 // The server's answer wins over the page's.
-                if (confirmedLevel < ADHOC_LEVEL) removeAdhoc(); else injectAdhoc(confirmedLevel);
+                if (!canAdhoc(confirmedPerms)) removeAdhoc(); else injectAdhoc(confirmedPerms);
                 boot(who);
             });
         } else {
             whoAmI().then(function (who) {
                 if (!who) { dropCache(); return; }
                 injectUI();
-                injectAdhoc(confirmedLevel);
+                injectAdhoc(confirmedPerms);
                 boot(who);
             });
         }

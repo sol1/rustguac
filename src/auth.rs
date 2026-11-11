@@ -119,10 +119,18 @@ impl AuthIdentity {
         }
     }
 
-    /// Check if identity has at least the given role level.
-    /// admin > poweruser > operator > viewer
-    pub fn has_role(&self, min_role: &str) -> bool {
-        role_level(self.role()) >= role_level(min_role)
+    /// Everything this identity may do. Admin API keys hold every
+    /// permission; a user holds what their role grants (#294).
+    pub fn permissions(&self) -> crate::perms::PermSet {
+        match self {
+            AuthIdentity::ApiKey(_) => crate::perms::PermSet::all(),
+            AuthIdentity::User { role, .. } => crate::perms::role_perms(role),
+        }
+    }
+
+    /// Whether this identity holds `perm`.
+    pub fn has_perm(&self, perm: crate::perms::Perm) -> bool {
+        self.permissions().contains(perm)
     }
 }
 
@@ -782,18 +790,26 @@ mod tests {
     }
 
     #[test]
-    fn test_has_role() {
+    fn identities_hold_their_roles_permissions() {
+        use crate::perms::Perm;
         let admin = AuthIdentity::ApiKey("admin".into());
-        assert!(admin.has_role("viewer"));
-        assert!(admin.has_role("admin"));
+        assert!(admin.has_perm(Perm::DocsView));
+        assert!(admin.has_perm(Perm::AdminRoles));
 
         let viewer = AuthIdentity::User {
             email: "test@test.com".into(),
             role: "viewer".into(),
             groups: vec![],
         };
-        assert!(viewer.has_role("viewer"));
-        assert!(!viewer.has_role("operator"));
-        assert!(!viewer.has_role("admin"));
+        assert!(viewer.has_perm(Perm::DocsView));
+        assert!(!viewer.has_perm(Perm::ConnectionsConnect));
+        assert!(!viewer.has_perm(Perm::AdminRoles));
+
+        let unknown = AuthIdentity::User {
+            email: "test@test.com".into(),
+            role: "someday-custom".into(),
+            groups: vec![],
+        };
+        assert_eq!(unknown.permissions(), crate::perms::PermSet::EMPTY);
     }
 }

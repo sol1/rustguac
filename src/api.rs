@@ -1,7 +1,8 @@
 //! REST API routes.
 
-use crate::auth::{self, client_ip, role_level, AuthIdentity, TrustedProxies};
+use crate::auth::{self, client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
+use crate::perms::Perm;
 use crate::session::{CreateSessionRequest, SessionManager, SessionType};
 use crate::vault::{AddressBookEntry, DefaultsSource, FolderConfig, VaultClient, VaultError};
 use axum::{
@@ -30,11 +31,13 @@ pub async fn create_session(
     Json(mut req): Json<CreateSessionRequest>,
 ) -> impl IntoResponse {
     let identity = identity.map(|Extension(id)| id);
-    // Ad-hoc targets from anyone below admin get every network fence, none
-    // of the fields only a saved entry may set, and the site's recording,
-    // drive and VDI limits.
-    let is_admin = identity.as_ref().is_some_and(|id| id.has_role("admin"));
-    crate::session::apply_adhoc_policy(&mut req, is_admin, manager.config());
+    // Ad-hoc targets from anyone without connections.unrestricted get every
+    // network fence, none of the fields only a saved entry may set, and the
+    // site's recording, drive and VDI limits.
+    let unrestricted = identity
+        .as_ref()
+        .is_some_and(|id| id.has_perm(Perm::ConnectionsUnrestricted));
+    crate::session::apply_adhoc_policy(&mut req, unrestricted, manager.config());
     let caller_name = identity
         .as_ref()
         .map(|id| id.display_name().to_string())
@@ -57,7 +60,10 @@ pub async fn create_session(
     let admin_name = match req.owner.as_deref() {
         None => caller_name.clone(),
         Some(owner) => {
-            if !identity.as_ref().is_some_and(|id| id.has_role("admin")) {
+            if !identity
+                .as_ref()
+                .is_some_and(|id| id.has_perm(Perm::AdminUsers))
+            {
                 return (
                     StatusCode::FORBIDDEN,
                     Json(json!({"error": "admin role required to create a session for another owner"})),
@@ -188,7 +194,9 @@ fn redact_share_url(
     identity: &Option<Extension<AuthIdentity>>,
 ) -> crate::session::SessionInfo {
     let is_owner_or_admin = match identity {
-        Some(Extension(id)) => id.has_role("admin") || id.display_name() == info.created_by,
+        Some(Extension(id)) => {
+            id.has_perm(Perm::SessionsViewAll) || id.display_name() == info.created_by
+        }
         None => false,
     };
     if !is_owner_or_admin {
@@ -218,7 +226,7 @@ pub async fn list_sessions(
 ) -> impl IntoResponse {
     let is_admin = identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::SessionsViewAll))
         .unwrap_or(false);
     let owner = identity
         .as_ref()
@@ -246,7 +254,7 @@ pub async fn get_session(
         Some(info) => {
             let is_admin = identity
                 .as_ref()
-                .map(|Extension(id)| id.has_role("admin"))
+                .map(|Extension(id)| id.has_perm(Perm::SessionsViewAll))
                 .unwrap_or(false);
             let is_owner = identity
                 .as_ref()
@@ -294,7 +302,7 @@ pub async fn delete_session(
         }
     };
 
-    if !id_inner.has_role("operator") {
+    if !id_inner.has_perm(Perm::ConnectionsConnect) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "insufficient permissions — operator role required"})),
@@ -303,7 +311,7 @@ pub async fn delete_session(
     }
 
     // Operators can only delete their own sessions; admins can delete any
-    if !id_inner.has_role("admin") {
+    if !id_inner.has_perm(Perm::SessionsViewAll) {
         if let Some(creator) = manager.get_session_creator(id).await {
             if creator != id_inner.display_name() {
                 return (
@@ -348,7 +356,7 @@ pub async fn put_session_thumbnail(
     // Authorise: owner or admin only (privacy — GitHub #102)
     let is_admin = identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::SessionsViewAll))
         .unwrap_or(false);
     let is_owner = identity
         .as_ref()
@@ -395,7 +403,7 @@ pub async fn get_session_thumbnail(
     };
     let is_admin = identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::SessionsViewAll))
         .unwrap_or(false);
     let is_owner = identity
         .as_ref()
@@ -446,7 +454,7 @@ pub async fn shadow_session(
 ) -> impl IntoResponse {
     let read_only = body.map(|Json(b)| b.read_only).unwrap_or(false);
     let id_inner = match identity {
-        Some(Extension(ref id)) if id.has_role("admin") => id.clone(),
+        Some(Extension(ref id)) if id.has_perm(Perm::SessionsShadow) => id.clone(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -537,7 +545,7 @@ pub async fn list_vdi_containers(
     identity: Option<Extension<AuthIdentity>>,
 ) -> impl IntoResponse {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id)) if id.has_perm(Perm::ConnectionsConnect) => id,
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -623,7 +631,7 @@ pub async fn get_vdi_container_thumbnail(
     let owns = !current_user.is_empty()
         && (name == format!("rustguac-vdi-{}", current_user)
             || name.starts_with(&format!("rustguac-vdi-{}-", current_user)));
-    if !id.has_role("admin") && !owns {
+    if !id.has_perm(Perm::SessionsViewAll) && !owns {
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -658,7 +666,7 @@ pub async fn list_login_scripts(
         }
     };
 
-    if !id_inner.has_role("operator") {
+    if !id_inner.has_perm(Perm::ConnectionsConnect) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "insufficient permissions — operator role required"})),
@@ -722,7 +730,7 @@ pub async fn system_status(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminSystem))
         .unwrap_or(false)
     {
         return (
@@ -923,7 +931,7 @@ pub async fn list_recordings(
     mp4: Option<Extension<Arc<crate::recording_mp4::Mp4Converter>>>,
 ) -> impl IntoResponse {
     match &identity {
-        Some(Extension(id)) if id.has_role("poweruser") => {}
+        Some(Extension(id)) if id.has_perm(Perm::RecordingsView) => {}
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -1028,7 +1036,7 @@ pub async fn list_typescripts(
     identity: Option<Extension<AuthIdentity>>,
 ) -> impl IntoResponse {
     match &identity {
-        Some(Extension(id)) if id.has_role("poweruser") => {}
+        Some(Extension(id)) if id.has_perm(Perm::RecordingsView) => {}
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -1198,7 +1206,7 @@ pub async fn report_sessions(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("poweruser"))
+        .map(|Extension(id)| id.has_perm(Perm::ReportsView))
         .unwrap_or(false)
     {
         return (
@@ -1249,7 +1257,7 @@ pub async fn report_sessions_csv(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("poweruser"))
+        .map(|Extension(id)| id.has_perm(Perm::ReportsView))
         .unwrap_or(false)
     {
         return (
@@ -1373,7 +1381,7 @@ pub async fn report_top_connections(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("poweruser"))
+        .map(|Extension(id)| id.has_perm(Perm::ReportsView))
         .unwrap_or(false)
     {
         return (
@@ -1401,7 +1409,7 @@ pub async fn report_top_users(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("poweruser"))
+        .map(|Extension(id)| id.has_perm(Perm::ReportsView))
         .unwrap_or(false)
     {
         return (
@@ -1428,7 +1436,7 @@ pub async fn report_summary(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("poweruser"))
+        .map(|Extension(id)| id.has_perm(Perm::ReportsView))
         .unwrap_or(false)
     {
         return (
@@ -1454,7 +1462,7 @@ pub async fn serve_recording(
     identity: Option<Extension<AuthIdentity>>,
 ) -> impl IntoResponse {
     match &identity {
-        Some(Extension(id)) if id.has_role("poweruser") => {}
+        Some(Extension(id)) if id.has_perm(Perm::RecordingsView) => {}
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -1507,7 +1515,7 @@ fn check_recording_read(
     recording_dir: &std::path::Path,
 ) -> Result<(), Response> {
     match identity {
-        Some(Extension(id)) if id.has_role("poweruser") => {}
+        Some(Extension(id)) if id.has_perm(Perm::RecordingsView) => {}
         _ => {
             return Err((
                 StatusCode::FORBIDDEN,
@@ -1643,7 +1651,7 @@ pub async fn delete_recording(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
+        if !id.has_perm(Perm::RecordingsDelete) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "insufficient permissions — admin role required"})),
@@ -1708,7 +1716,7 @@ pub async fn list_users(
     Extension(database): Extension<Db>,
 ) -> impl IntoResponse {
     if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
+        if !id.has_perm(Perm::AdminUsers) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "admin role required"})),
@@ -1745,7 +1753,7 @@ pub async fn create_user(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminUsers))
         .unwrap_or(false)
     {
         return (
@@ -1760,7 +1768,7 @@ pub async fn create_user(
     if let Err(msg) = db::check_user_email(&email).and_then(|_| db::check_user_name(&name)) {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response();
     }
-    if !["admin", "poweruser", "operator", "viewer"].contains(&req.role.as_str()) {
+    if !crate::perms::BUILTIN_ROLES.contains(&req.role.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "role must be admin, poweruser, operator, or viewer"})),
@@ -1808,7 +1816,7 @@ pub async fn set_user_role(
     Json(req): Json<SetRoleRequest>,
 ) -> impl IntoResponse {
     if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
+        if !id.has_perm(Perm::AdminRoles) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "admin role required"})),
@@ -1817,7 +1825,7 @@ pub async fn set_user_role(
         }
     }
 
-    if !["admin", "poweruser", "operator", "viewer"].contains(&req.role.as_str()) {
+    if !crate::perms::BUILTIN_ROLES.contains(&req.role.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "role must be admin, poweruser, operator, or viewer"})),
@@ -1849,7 +1857,7 @@ pub async fn delete_user(
     Path(email): Path<String>,
 ) -> impl IntoResponse {
     if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
+        if !id.has_perm(Perm::AdminUsers) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "admin role required"})),
@@ -1882,7 +1890,7 @@ pub async fn delete_user_sessions(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminUsers))
         .unwrap_or(false)
     {
         return (
@@ -1935,6 +1943,7 @@ pub async fn me(
             Json(json!({
                 "name": id.display_name(),
                 "role": id.role(),
+                "permissions": id.permissions().names(),
                 "groups": id.groups(),
                 "vault_enabled": vault_available,
                 "vault_configured": vault_configured.0,
@@ -1992,7 +2001,7 @@ pub async fn disable_user(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminUsers))
         .unwrap_or(false)
     {
         return (
@@ -2026,7 +2035,7 @@ pub async fn enable_user(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminUsers))
         .unwrap_or(false)
     {
         return (
@@ -2067,7 +2076,7 @@ pub async fn list_group_mappings(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminRoles))
         .unwrap_or(false)
     {
         return (
@@ -2097,7 +2106,7 @@ pub async fn list_known_groups(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminRoles))
         .unwrap_or(false)
     {
         return (
@@ -2126,7 +2135,7 @@ pub async fn create_group_mapping(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminRoles))
         .unwrap_or(false)
     {
         return (
@@ -2136,7 +2145,7 @@ pub async fn create_group_mapping(
             .into_response();
     }
 
-    if !["admin", "poweruser", "operator", "viewer"].contains(&req.role.as_str()) {
+    if !crate::perms::BUILTIN_ROLES.contains(&req.role.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "role must be admin, poweruser, operator, or viewer"})),
@@ -2190,7 +2199,7 @@ pub async fn update_group_mapping(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminRoles))
         .unwrap_or(false)
     {
         return (
@@ -2200,7 +2209,7 @@ pub async fn update_group_mapping(
             .into_response();
     }
 
-    if !["admin", "poweruser", "operator", "viewer"].contains(&req.role.as_str()) {
+    if !crate::perms::BUILTIN_ROLES.contains(&req.role.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "role must be admin, poweruser, operator, or viewer"})),
@@ -2252,7 +2261,7 @@ pub async fn delete_group_mapping(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::AdminRoles))
         .unwrap_or(false)
     {
         return (
@@ -2644,7 +2653,7 @@ async fn check_folder_access(
     folder: &str,
     identity: &AuthIdentity,
 ) -> Result<(), Response> {
-    if identity.has_role("admin") {
+    if identity.has_perm(Perm::ConnectionsEdit) {
         return Ok(());
     }
 
@@ -2711,7 +2720,7 @@ pub async fn ab_list_folders(
     Extension(vault): Extension<VaultState>,
 ) -> impl IntoResponse {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id)) if id.has_perm(Perm::ConnectionsConnect) => id,
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -2739,7 +2748,7 @@ pub async fn ab_list_folders(
     let who = id.folder_subject();
     let mut visible = Vec::new();
     for folder in folders {
-        if id.has_role("admin")
+        if id.has_perm(Perm::ConnectionsEdit)
             || folder_or_descendant_accessible(&vault, &folder.scope, &folder.name, who).await
         {
             visible.push(folder);
@@ -2756,7 +2765,7 @@ pub async fn ab_list_subfolders(
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id)) if id.has_perm(Perm::ConnectionsConnect) => id,
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -2770,7 +2779,7 @@ pub async fn ab_list_subfolders(
     // openable: that is how a grant on a deeper folder is reached. The
     // children are filtered the same way below, so nothing off the path is
     // named, and the folder's own entries are still refused elsewhere.
-    if !id.has_role("admin")
+    if !id.has_perm(Perm::ConnectionsEdit)
         && !folder_or_descendant_accessible(&vault, &scope, &folder, id.folder_subject()).await
     {
         return (
@@ -2788,7 +2797,7 @@ pub async fn ab_list_subfolders(
             // everything. Fixes #147: previously every subfolder of an
             // accessible parent was returned, so users saw folders they could
             // only click into and get "no access".
-            if id.has_role("admin") {
+            if id.has_perm(Perm::ConnectionsEdit) {
                 return Json(json!(subfolders)).into_response();
             }
             let who = id.folder_subject();
@@ -2836,7 +2845,7 @@ pub async fn ab_get_folder_defaults(
     Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if !matches!(identity, Some(Extension(ref id)) if id.has_role("admin")) {
+    if !matches!(identity, Some(Extension(ref id)) if id.has_perm(Perm::ConnectionsEdit)) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "admin role required"})),
@@ -2888,7 +2897,7 @@ pub async fn ab_put_folder_defaults(
     Json(patch): Json<std::collections::BTreeMap<String, Option<DefaultCredentialsPatch>>>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -3014,7 +3023,7 @@ pub async fn ab_delete_folder_defaults(
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -3469,7 +3478,7 @@ pub async fn ab_version(
     Query(q): Query<AbVersionQuery>,
 ) -> impl IntoResponse {
     let id = match identity {
-        Some(Extension(id)) if id.has_role("operator") => id,
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsConnect) => id,
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -3494,7 +3503,7 @@ pub async fn ab_version(
         }
     };
     let changes = match answer.changes {
-        Some(rows) if !rows.is_empty() && !id.has_role("admin") => {
+        Some(rows) if !rows.is_empty() && !id.has_perm(Perm::ConnectionsEdit) => {
             let who = id.folder_subject();
             Some(match vault {
                 Some(Extension(vault)) => {
@@ -3526,7 +3535,7 @@ pub async fn ab_list_all(
     Extension(vault): Extension<VaultState>,
 ) -> impl IntoResponse {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id)) if id.has_perm(Perm::ConnectionsConnect) => id,
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -3554,7 +3563,7 @@ pub async fn ab_list_all(
         // folder the user cannot open is still listed, without its entries,
         // when it leads to a subfolder they can: that is how the tree reaches
         // a grant made only on `users/jsmith`.
-        if !id.has_role("admin")
+        if !id.has_perm(Perm::ConnectionsEdit)
             && !vault
                 .resolve_folder_access(&folder.scope, &folder.name, who)
                 .await
@@ -3634,7 +3643,7 @@ pub async fn ab_search_index(
     Extension(vault): Extension<VaultState>,
 ) -> impl IntoResponse {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id)) if id.has_perm(Perm::ConnectionsConnect) => id,
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -3645,7 +3654,7 @@ pub async fn ab_search_index(
     };
 
     let who = id.folder_subject();
-    let is_admin = id.has_role("admin");
+    let is_admin = id.has_perm(Perm::ConnectionsEdit);
 
     let top = match vault.list_all_folders().await {
         Ok((f, _)) => f,
@@ -3722,7 +3731,7 @@ pub async fn ab_list_entries(
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id)) if id.has_perm(Perm::ConnectionsConnect) => id,
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -3804,7 +3813,7 @@ pub async fn ssh_probe_host_key(
 ) -> impl IntoResponse {
     // Used while filling in an entry or an ad-hoc connection.
     match &identity {
-        Some(Extension(id)) if id.has_role("admin") || can_connect_adhoc(id) => {}
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) || can_connect_adhoc(id) => {}
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -3820,7 +3829,7 @@ pub async fn ssh_probe_host_key(
     // address; unchecked it is a port scanner and banner grabber for anything
     // rustguac can reach (guacd, Vault, metadata services). Admins probe
     // freely, since they configure jump hosts outside the allowlists.
-    let is_admin = matches!(&identity, Some(Extension(id)) if id.has_role("admin"));
+    let is_admin = matches!(&identity, Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit));
     let dial = if is_admin {
         body.hostname.clone()
     } else {
@@ -4114,7 +4123,7 @@ fn entry_connect_request(
 /// Whether `id` may open ad-hoc connections: sessions to a target of their
 /// own choosing rather than a saved entry. The one place that decides it.
 pub fn can_connect_adhoc(id: &AuthIdentity) -> bool {
-    id.has_role("poweruser")
+    id.has_perm(Perm::ConnectionsAdhoc)
 }
 
 /// POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect — Create session from entry.
@@ -4130,7 +4139,7 @@ pub async fn ab_connect_entry(
     Json(req): Json<ConnectRequest>,
 ) -> impl IntoResponse {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id.clone(),
+        Some(Extension(ref id)) if id.has_perm(Perm::ConnectionsConnect) => id.clone(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -4419,13 +4428,17 @@ pub async fn ab_adhoc_connect(
         Ok(e) => e,
         Err(e) => return e.into_response(),
     };
-    let create_req =
-        match adhoc_session_request(entry, &req, id.has_role("admin"), manager.config()) {
-            Ok(r) => r,
-            Err(msg) => {
-                return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
-            }
-        };
+    let create_req = match adhoc_session_request(
+        entry,
+        &req,
+        id.has_perm(Perm::ConnectionsUnrestricted),
+        manager.config(),
+    ) {
+        Ok(r) => r,
+        Err(msg) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
+        }
+    };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip_addr = client_ip(&headers, addr.ip(), &proxies);
@@ -4568,7 +4581,7 @@ pub async fn ab_create_folder(
     Json(req): Json<CreateFolderRequest>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -4660,7 +4673,7 @@ pub async fn ab_update_folder(
     Json(req): Json<UpdateFolderRequest>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -4746,7 +4759,7 @@ pub async fn ab_get_folder_config(
 ) -> impl IntoResponse {
     if !identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
+        .map(|Extension(id)| id.has_perm(Perm::ConnectionsEdit))
         .unwrap_or(false)
     {
         return (
@@ -4791,7 +4804,7 @@ pub async fn ab_delete_folder(
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -4855,7 +4868,7 @@ pub async fn ab_create_entry(
     Json(req): Json<CreateEntryRequest>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -5261,7 +5274,7 @@ pub async fn ab_update_entry(
     Json(data): Json<AddressBookEntry>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -5483,7 +5496,9 @@ fn require_ab_admin(
     identity: &Option<Extension<AuthIdentity>>,
 ) -> Result<String, (StatusCode, String)> {
     match identity {
-        Some(Extension(id)) if id.has_role("admin") => Ok(id.display_name().to_string()),
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) => {
+            Ok(id.display_name().to_string())
+        }
         _ => Err((StatusCode::FORBIDDEN, "admin role required".into())),
     }
 }
@@ -6048,7 +6063,7 @@ pub async fn ab_delete_entry(
     Path((scope, folder, entry)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_perm(Perm::ConnectionsEdit) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -6145,7 +6160,7 @@ pub async fn create_my_token(
     };
 
     // Only poweruser+ can self-create tokens
-    if !id.has_role("poweruser") {
+    if !id.has_perm(Perm::TokensSelf) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "poweruser role or higher required to create tokens"})),
@@ -6167,14 +6182,14 @@ pub async fn create_my_token(
 
     // Validate max_role if provided
     if let Some(ref max_role) = req.max_role {
-        if !["admin", "poweruser", "operator", "viewer"].contains(&max_role.as_str()) {
+        if !crate::perms::BUILTIN_ROLES.contains(&max_role.as_str()) {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": "max_role must be admin, poweruser, operator, or viewer"})),
             )
                 .into_response();
         }
-        if role_level(max_role) > role_level(id.role()) {
+        if !crate::perms::role_perms(max_role).is_subset(id.permissions()) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "max_role cannot exceed your current role"})),
@@ -6329,12 +6344,10 @@ pub async fn revoke_my_token(
     trusted: Option<Extension<TrustedProxies>>,
     Path(token_id): Path<i64>,
 ) -> impl IntoResponse {
-    let (email, role) = match identity {
-        Some(Extension(AuthIdentity::User {
-            ref email,
-            ref role,
-            ..
-        })) => (email.clone(), role.clone()),
+    let (email, can_manage) = match identity {
+        Some(Extension(ref id @ AuthIdentity::User { ref email, .. })) => {
+            (email.clone(), id.has_perm(Perm::TokensSelf))
+        }
         _ => {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -6344,7 +6357,7 @@ pub async fn revoke_my_token(
         }
     };
 
-    if role_level(&role) < role_level("poweruser") {
+    if !can_manage {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "poweruser role or higher required to manage tokens"})),
@@ -6548,11 +6561,11 @@ pub async fn put_my_credentials(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let email = match identity {
-        Some(Extension(AuthIdentity::User {
-            ref email,
-            ref role,
-            ..
-        })) if role_level(role) >= role_level("operator") => email.clone(),
+        Some(Extension(ref id @ AuthIdentity::User { ref email, .. }))
+            if id.has_perm(Perm::CredentialsSelf) =>
+        {
+            email.clone()
+        }
         Some(Extension(AuthIdentity::User { .. })) => {
             return (
                 StatusCode::FORBIDDEN,
@@ -6767,7 +6780,7 @@ pub async fn list_credential_variables(
     Extension(vault): Extension<VaultState>,
 ) -> impl IntoResponse {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id.clone(),
+        Some(Extension(ref id)) if id.has_perm(Perm::CredentialsSelf) => id.clone(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -6827,7 +6840,7 @@ pub async fn admin_create_user_token(
     Json(req): Json<AdminCreateTokenRequest>,
 ) -> impl IntoResponse {
     let admin_name = match identity {
-        Some(Extension(ref id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(ref id)) if id.has_perm(Perm::AdminUsers) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -6846,7 +6859,7 @@ pub async fn admin_create_user_token(
     }
 
     if let Some(ref max_role) = req.max_role {
-        if !["admin", "poweruser", "operator", "viewer"].contains(&max_role.as_str()) {
+        if !crate::perms::BUILTIN_ROLES.contains(&max_role.as_str()) {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": "max_role must be admin, poweruser, operator, or viewer"})),
@@ -6879,7 +6892,7 @@ pub async fn admin_create_user_token(
         };
 
     if let Some(ref max_role) = req.max_role {
-        if role_level(max_role) > role_level(&user.role) {
+        if !crate::perms::role_perms(max_role).is_subset(crate::perms::role_perms(&user.role)) {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": format!("max_role '{}' exceeds user's role '{}'", max_role, user.role)})),
@@ -6971,7 +6984,7 @@ pub async fn admin_list_user_tokens(
     Extension(database): Extension<Db>,
 ) -> impl IntoResponse {
     if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
+        if !id.has_perm(Perm::AdminUsers) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "admin role required"})),
@@ -7019,7 +7032,7 @@ pub async fn admin_revoke_user_token(
     Path(token_id): Path<i64>,
 ) -> impl IntoResponse {
     let admin_name = match identity {
-        Some(Extension(ref id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(ref id)) if id.has_perm(Perm::AdminUsers) => id.display_name().to_string(),
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -7077,7 +7090,7 @@ pub async fn admin_token_audit(
     Query(query): Query<AuditLogQuery>,
 ) -> impl IntoResponse {
     if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
+        if !id.has_perm(Perm::AdminAudit) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "admin role required"})),
@@ -7110,7 +7123,7 @@ pub async fn admin_addressbook_audit(
     Query(query): Query<AuditLogQuery>,
 ) -> impl IntoResponse {
     if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
+        if !id.has_perm(Perm::AdminAudit) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "admin role required"})),
@@ -7210,7 +7223,7 @@ pub async fn quick_connect(
         query.folder.as_ref(),
         query.entry.as_ref(),
     ) {
-        if !id.has_role("operator") {
+        if !id.has_perm(Perm::ConnectionsConnect) {
             return quick_connect_error(
                 StatusCode::FORBIDDEN,
                 "Operator role or higher required for address book connections.",
@@ -7448,7 +7461,11 @@ pub async fn quick_connect(
         wol_udp_port: None,
         wol_wait_time: None,
     };
-    crate::session::apply_adhoc_policy(&mut create_req, id.has_role("admin"), manager.config());
+    crate::session::apply_adhoc_policy(
+        &mut create_req,
+        id.has_perm(Perm::ConnectionsUnrestricted),
+        manager.config(),
+    );
 
     match manager.create_session(create_req, admin_name).await {
         Ok(info) => Redirect::temporary(&format!("/client/{}", info.session_id)).into_response(),
