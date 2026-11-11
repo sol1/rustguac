@@ -5,6 +5,22 @@
     <title>rustguac - Admin</title>
     <link rel="stylesheet" href="/rustguac.css">
     <style>
+        .access-panel { margin: 0.8em 0; padding: 0.8em 1em; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 0.9em; }
+        .access-panel h3 { margin: 0 0 0.4em 0; font-size: 1em; }
+        .access-panel .perm-row { display: flex; gap: 1em; padding: 0.15em 0; }
+        .access-panel .perm-name { min-width: 14em; font-family: monospace; }
+        .access-panel .muted, .role-perms { color: var(--text-muted); }
+        .role-perms { font-family: monospace; font-size: 0.85em; }
+        .role-builtin { font-size: 0.75em; color: var(--text-dim); margin-left: 0.4em; }
+        .role-form { margin: 0.8em 0; padding: 0.8em 1em; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); max-width: 60em; }
+        .role-form h3 { margin: 0 0 0.6em 0; font-size: 1em; }
+        .role-form label { display: block; margin: 0.4em 0; }
+        .role-form input[type=text] { width: 100%; max-width: 30em; }
+        .rf-perms { display: grid; grid-template-columns: repeat(auto-fill, minmax(26em, 1fr)); gap: 0.3em 1.2em; margin: 0.6em 0; }
+        .rf-perm { display: flex; gap: 0.5em; align-items: flex-start; font-size: 0.88em; }
+        .rf-perm input { width: auto; margin-top: 0.2em; }
+        .rf-perm code { font-size: 0.95em; }
+        .rf-perm .warn { color: var(--primary); }
         .audit-row td { padding: var(--s-2) var(--s-3); font-size: var(--fz-sm); }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
@@ -16,16 +32,17 @@
     </div>
     <nav>
         <a href="/connections.html">Connections</a>
-        <a href="/sessions.html" id="sessions-link" data-min-role="poweruser">Sessions</a>
-        <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" id="reports-link" data-min-role="poweruser">Reports</a>
+        <a href="/sessions.html" id="sessions-link" data-perm="connections.adhoc">Sessions</a>
+        <a href="/recordings.html" data-perm="recordings.view">Recordings</a>
+        <a href="/reports.html" id="reports-link" data-perm="reports.view">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
-        <a href="/admin.html" class="active" id="admin-link" data-min-role="admin">Admin</a>
+        <a href="/tokens.html" id="tokens-link" data-perm="tokens.self">Tokens</a>
+        <a href="/admin.html" class="active" id="admin-link" data-perm="admin.users">Admin</a>
         <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
 
+    <section data-perm="admin.system">
     <h2>System Status</h2>
     <div id="system-status" class="status-grid">
         <div class="status-card"><div class="label">Version</div><div class="value" id="ss-version">—</div></div>
@@ -38,6 +55,9 @@
         <div class="status-card"><div class="label">Features</div><div class="value" id="ss-features" style="font-size:1em"></div></div>
     </div>
 
+    </section>
+
+    <section data-perm="admin.users">
     <h2>Users</h2>
     <table id="users-table">
         <thead><tr>
@@ -48,17 +68,15 @@
     <div class="add-form">
         <input type="text" id="new-user-email" placeholder="user@example.com" style="width:200px;">
         <input type="text" id="new-user-name" placeholder="Name (optional)">
-        <select id="new-user-role">
-            <option value="viewer">viewer</option>
-            <option value="operator" selected>operator</option>
-            <option value="poweruser">poweruser</option>
-            <option value="admin">admin</option>
-        </select>
+        <select id="new-user-role"></select>
         <button class="btn-primary" id="add-user-btn">Add User</button>
     </div>
+    <div id="access-panel" class="access-panel" style="display:none"></div>
+    </section>
 
+    <section data-perm="admin.roles">
     <h2>Group-to-Role Mappings</h2>
-    <p style="color:#888;font-size:0.85em;margin:0.3em 0;">OIDC groups are matched to roles on every login. The highest matching role wins.</p>
+    <p style="color:#888;font-size:0.85em;margin:0.3em 0;">A user gets every role their OIDC groups map to, and those replace the role set on the user. With no matching mapping, the user's own role applies. Groups are as of each user's last login.</p>
     <table id="mappings-table">
         <thead><tr>
             <th>Group</th><th>Role</th><th>Created</th><th></th>
@@ -67,14 +85,37 @@
     </table>
     <div class="add-form">
         <input type="text" id="new-group" placeholder="OIDC group name">
-        <select id="new-role">
-            <option value="viewer">viewer</option>
-            <option value="operator">operator</option>
-            <option value="poweruser">poweruser</option>
-            <option value="admin">admin</option>
-        </select>
+        <select id="new-role"></select>
         <button class="btn-primary" id="add-mapping-btn">Add Mapping</button>
     </div>
+
+    <h2>Roles</h2>
+    <p style="color:#888;font-size:0.85em;margin:0.3em 0;">A role is a set of permissions. The four built-in roles can't be changed. Custom roles can be assigned to users, mapped from groups, and used to cap API tokens.</p>
+    <table id="roles-table">
+        <thead><tr><th>Role</th><th>Permissions</th><th></th></tr></thead>
+        <tbody id="roles-body"></tbody>
+    </table>
+    <div class="add-form" style="flex-wrap:wrap;gap:0.4em;">
+        <button class="btn-primary" id="new-role-btn">New role</button>
+        <button class="btn-small btn-action" data-template="editor">From template: connection editor</button>
+        <button class="btn-small btn-action" data-template="connect-only">From template: connect-only</button>
+    </div>
+    <div id="role-form" class="role-form" style="display:none">
+        <h3 id="role-form-title">New role</h3>
+        <label>Name <span class="hint">(lowercase letters, digits, - and _; can't be changed later)</span>
+            <input type="text" id="rf-name" maxlength="32" autocomplete="off" spellcheck="false">
+        </label>
+        <label>Display name <input type="text" id="rf-display" maxlength="80"></label>
+        <label>Description <input type="text" id="rf-desc" maxlength="200"></label>
+        <div id="rf-perms" class="rf-perms"></div>
+        <div class="add-form">
+            <button class="btn-primary" id="rf-save">Save role</button>
+            <button class="btn-small" id="rf-cancel">Cancel</button>
+        </div>
+    </div>
+    </section>
+
+    <section data-perm="admin.users">
     <h2>User API Tokens</h2>
     <p style="color:#888;font-size:0.85em;margin:0.3em 0;">Tokens issued to OIDC users for API access. Admins can create tokens for operators and revoke any token.</p>
     <table id="tokens-table">
@@ -90,10 +131,6 @@
         <input type="text" id="token-name" placeholder="Token name">
         <select id="token-max-role">
             <option value="">No role cap</option>
-            <option value="viewer">viewer</option>
-            <option value="operator">operator</option>
-            <option value="poweruser">poweruser</option>
-            <option value="admin">admin</option>
         </select>
         <input type="date" id="token-expires" title="Expiry date (optional)">
         <button class="btn-primary" id="admin-create-token-btn">Create</button>
@@ -107,6 +144,17 @@
         </div>
         <div class="warning">This token will not be shown again. Copy it now and give it to the user securely.</div>
     </div>
+
+    </section>
+
+    <section data-perm="admin.audit">
+    <h2>Role and User Changes</h2>
+    <div style="margin-bottom:0.5em;color:var(--text-muted);font-size:0.9em;">Roles, role assignments, group mappings and user accounts changed through the web UI or API. CLI changes are in the CLI audit log.</div>
+    <table id="admin-audit-table">
+        <thead><tr><th>Time</th><th>By</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
+        <tbody id="admin-audit-body"></tbody>
+    </table>
+    <div id="no-admin-audit" style="display:none;color:var(--text-muted);margin-top:0.5em;font-size:0.9em;">No changes recorded.</div>
 
     <h2>Token Audit Log</h2>
     <div style="margin-bottom:0.5em;">
@@ -136,6 +184,7 @@
         <tbody id="ab-audit-body"></tbody>
     </table>
     <div id="no-ab-audit" style="display:none;color:var(--text-muted);margin-top:0.5em;font-size:0.9em;">No connections audit events.</div>
+    </section>
 
     <div id="error"></div>
 
@@ -159,6 +208,324 @@
             return h;
         }
 
+        // What the caller may do (#294), from /api/me.
+        var myPerms = [], myName = '', myRoles = [];
+        function can(p) { return myPerms.indexOf(p) >= 0; }
+
+        // ── Roles (#294) ──
+
+        var allRoles = [];       // built-in and custom, from /api/admin/roles
+        var allPermissions = []; // every permission, with descriptions
+
+        function loadRoles(done) {
+            Promise.all([
+                fetch('/api/admin/roles', { headers: apiHeaders(), credentials: 'same-origin' }).then(function(r) { return r.ok ? r.json() : []; }),
+                fetch('/api/admin/permissions', { headers: apiHeaders(), credentials: 'same-origin' }).then(function(r) { return r.ok ? r.json() : []; })
+            ]).then(function(res) {
+                allRoles = res[0] || [];
+                allPermissions = res[1] || [];
+                fillRoleSelect(document.getElementById('new-user-role'), 'operator');
+                fillRoleSelect(document.getElementById('new-role'), 'operator');
+                var cap = document.getElementById('token-max-role');
+                while (cap.options.length > 1) cap.remove(1);
+                allRoles.forEach(function(r) { cap.appendChild(roleOption(r, false)); });
+                if (done) done();
+            });
+        }
+
+        function roleLabel(name) {
+            var r = allRoles.find(function(x) { return x.name === name; });
+            return r ? (r.display_name || r.name) : name;
+        }
+
+        function roleOption(r, selected) {
+            var opt = document.createElement('option');
+            opt.value = r.name;
+            opt.textContent = r.builtin || r.display_name === r.name ? r.name : r.display_name + ' (' + r.name + ')';
+            if (selected) opt.selected = true;
+            return opt;
+        }
+
+        // Fill a role dropdown with every role. A value that isn't a role any
+        // more (deleted elsewhere) stays selectable so the row shows the truth.
+        function fillRoleSelect(sel, selected) {
+            sel.innerHTML = '';
+            var found = false;
+            allRoles.forEach(function(r) {
+                if (r.name === selected) found = true;
+                sel.appendChild(roleOption(r, r.name === selected));
+            });
+            if (selected && !found) {
+                var opt = document.createElement('option');
+                opt.value = selected; opt.textContent = selected + ' (no such role)'; opt.selected = true;
+                sel.appendChild(opt);
+            }
+        }
+
+        function renderRoles() {
+            var tbody = document.getElementById('roles-body');
+            tbody.innerHTML = '';
+            allRoles.forEach(function(r) {
+                var tr = document.createElement('tr');
+                var nameTd = document.createElement('td');
+                var strong = document.createElement('strong');
+                strong.textContent = r.display_name || r.name;
+                nameTd.appendChild(strong);
+                if (r.display_name && r.display_name !== r.name) {
+                    var code = document.createElement('div');
+                    code.className = 'role-perms';
+                    code.textContent = r.name;
+                    nameTd.appendChild(code);
+                }
+                if (r.builtin) {
+                    var b = document.createElement('span');
+                    b.className = 'role-builtin';
+                    b.textContent = 'built-in';
+                    nameTd.appendChild(b);
+                }
+                if (r.description) {
+                    var d = document.createElement('div');
+                    d.className = 'muted';
+                    d.style.fontSize = '0.85em';
+                    d.textContent = r.description;
+                    nameTd.appendChild(d);
+                }
+                tr.appendChild(nameTd);
+                var permTd = document.createElement('td');
+                permTd.className = 'role-perms';
+                permTd.textContent = r.name === 'admin' ? 'everything' : ((r.permissions || []).join(' ') || '(none)');
+                tr.appendChild(permTd);
+                var act = document.createElement('td');
+                if (!r.builtin) {
+                    var inUse = myRoles.indexOf(r.name) >= 0;
+                    var edit = document.createElement('button');
+                    edit.className = 'btn-small btn-action';
+                    edit.textContent = 'edit';
+                    edit.disabled = inUse;
+                    if (inUse) edit.title = "You're using this role, so you can't change it.";
+                    edit.addEventListener('click', function() { openRoleForm(r); });
+                    act.appendChild(edit);
+                    act.appendChild(document.createTextNode(' '));
+                    var del = document.createElement('button');
+                    del.className = 'btn-small';
+                    del.textContent = 'delete';
+                    del.disabled = inUse;
+                    del.addEventListener('click', function() { deleteRole(r); });
+                    act.appendChild(del);
+                }
+                tr.appendChild(act);
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Two starting points from #293, as editable roles.
+        var ROLE_TEMPLATES = {
+            'editor': { name: 'connection-editor', display_name: 'Connection editor',
+                description: 'Add, edit and organise connections across every folder, without folder access settings, reports, recordings or admin.',
+                permissions: ['connections.connect', 'connections.edit', 'credentials.self', 'docs.view'] },
+            'connect-only': { name: 'connect-only', display_name: 'Connect only',
+                description: 'See the folders they are given and connect. No credentials, recordings, tokens or docs.',
+                permissions: ['connections.connect'] }
+        };
+
+        var editingRole = null; // name of the role being edited, or null for a new one
+
+        function openRoleForm(role) {
+            editingRole = role && !role.template ? role.name : null;
+            document.getElementById('role-form-title').textContent = editingRole ? 'Edit role ' + (role.display_name || role.name) : 'New role';
+            var nameEl = document.getElementById('rf-name');
+            nameEl.value = role ? role.name : '';
+            nameEl.disabled = !!editingRole;
+            document.getElementById('rf-display').value = role ? (role.display_name || '') : '';
+            document.getElementById('rf-desc').value = role ? (role.description || '') : '';
+            var box = document.getElementById('rf-perms');
+            box.innerHTML = '';
+            var have = (role && role.permissions) || [];
+            allPermissions.forEach(function(p) {
+                var lab = document.createElement('label');
+                lab.className = 'rf-perm';
+                var cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.value = p.name;
+                cb.checked = have.indexOf(p.name) >= 0;
+                // Nobody grants what they don't hold; the server refuses it too.
+                if (!can(p.name)) { cb.disabled = true; lab.title = "You don't hold this permission, so you can't grant it."; }
+                lab.appendChild(cb);
+                var text = document.createElement('span');
+                var code = document.createElement('code');
+                code.textContent = p.name;
+                text.appendChild(code);
+                text.appendChild(document.createTextNode(' ' + p.description));
+                if (p.sensitive) {
+                    var w = document.createElement('div');
+                    w.className = 'warn';
+                    w.textContent = p.name === 'folders.manage_access'
+                        ? 'Anyone with this can give themselves any folder.'
+                        : 'Close to full admin: grant with care.';
+                    text.appendChild(w);
+                }
+                lab.appendChild(text);
+                box.appendChild(lab);
+            });
+            document.getElementById('role-form').style.display = '';
+            document.getElementById('role-form').scrollIntoView({ block: 'nearest' });
+        }
+
+        document.getElementById('new-role-btn').addEventListener('click', function() { openRoleForm(null); });
+        document.querySelectorAll('[data-template]').forEach(function(b) {
+            b.addEventListener('click', function() {
+                var t = ROLE_TEMPLATES[b.getAttribute('data-template')];
+                openRoleForm({ template: true, name: t.name, display_name: t.display_name, description: t.description, permissions: t.permissions });
+            });
+        });
+        document.getElementById('rf-cancel').addEventListener('click', function() {
+            document.getElementById('role-form').style.display = 'none';
+        });
+        document.getElementById('rf-save').addEventListener('click', function() {
+            var perms = Array.prototype.map.call(document.querySelectorAll('#rf-perms input:checked'), function(cb) { return cb.value; });
+            var body = {
+                name: document.getElementById('rf-name').value.trim(),
+                display_name: document.getElementById('rf-display').value.trim(),
+                description: document.getElementById('rf-desc').value.trim(),
+                permissions: perms
+            };
+            var url = editingRole ? '/api/admin/roles/' + encodeURIComponent(editingRole) : '/api/admin/roles';
+            fetch(url, {
+                method: editingRole ? 'PUT' : 'POST',
+                headers: apiHeaders({ 'Content-Type': 'application/json' }),
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            }).then(function(res) {
+                if (!res.ok) return res.json().then(function(d) { showError(d.error || 'Failed to save role'); });
+                document.getElementById('role-form').style.display = 'none';
+                refreshRoles();
+            });
+        });
+
+        function refreshRoles() {
+            loadRoles(function() {
+                renderRoles();
+                if (can('admin.users')) { loadUsers(); loadAllTokens(); }
+                if (can('admin.roles')) loadMappings();
+                if (can('admin.audit')) loadAdminAudit();
+            });
+        }
+
+        function deleteRole(r, reassignTo) {
+            var label = r.display_name || r.name;
+            var go = reassignTo ? Promise.resolve(true)
+                : rgConfirm('Delete role ' + label + '?', { danger: true, confirmText: 'Delete' });
+            go.then(function(ok) {
+                if (!ok) return;
+                var url = '/api/admin/roles/' + encodeURIComponent(r.name) + (reassignTo ? '?reassign_to=' + encodeURIComponent(reassignTo) : '');
+                fetch(url, { method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(res) {
+                    if (res.ok) { refreshRoles(); return; }
+                    return res.json().then(function(d) {
+                        if (res.status === 409 && d.usage && !d.usage.default_role) {
+                            // In use: offer to move its users, mappings and token caps.
+                            pickReassign(r, d.usage);
+                        } else {
+                            showError(d.error || 'Failed to delete role');
+                        }
+                    });
+                });
+            });
+        }
+
+        function pickReassign(r, usage) {
+            var panel = document.getElementById('role-form');
+            panel.style.display = '';
+            document.getElementById('role-form-title').textContent = 'Role ' + (r.display_name || r.name) + ' is in use';
+            var box = document.getElementById('rf-perms');
+            box.innerHTML = '';
+            var p = document.createElement('div');
+            p.style.gridColumn = '1 / -1';
+            p.textContent = 'Used by ' + usage.users.length + ' user(s), ' + usage.mappings.length + ' group mapping(s) and ' +
+                usage.token_caps + ' token cap(s). Move them to another role, then delete it:';
+            box.appendChild(p);
+            var sel = document.createElement('select');
+            allRoles.forEach(function(x) { if (x.name !== r.name) sel.appendChild(roleOption(x, x.name === 'viewer')); });
+            box.appendChild(sel);
+            var go = document.createElement('button');
+            go.className = 'btn-small';
+            go.textContent = 'Move and delete';
+            go.addEventListener('click', function() { panel.style.display = 'none'; deleteRole(r, sel.value); });
+            box.appendChild(go);
+            ['rf-name', 'rf-display', 'rf-desc'].forEach(function(id) { document.getElementById(id).parentNode.style.display = 'none'; });
+            document.getElementById('rf-save').style.display = 'none';
+            var restore = function() {
+                ['rf-name', 'rf-display', 'rf-desc'].forEach(function(id) { document.getElementById(id).parentNode.style.display = ''; });
+                document.getElementById('rf-save').style.display = '';
+            };
+            go.addEventListener('click', restore);
+            document.getElementById('rf-cancel').addEventListener('click', restore, { once: true });
+        }
+
+        // A user's effective access: their roles, where each comes from, and
+        // which role grants each permission.
+        function showAccess(email) {
+            var panel = document.getElementById('access-panel');
+            fetch('/api/users/' + encodeURIComponent(email) + '/access', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.json(); })
+            .then(function(a) {
+                panel.innerHTML = '';
+                var h = document.createElement('h3');
+                h.textContent = 'Effective access: ' + a.email + (a.disabled ? ' (disabled)' : '');
+                panel.appendChild(h);
+                var line = function(text, cls) {
+                    var d = document.createElement('div');
+                    if (cls) d.className = cls;
+                    d.textContent = text;
+                    panel.appendChild(d);
+                };
+                line('Own role: ' + roleLabel(a.direct_role) + (a.direct_role_in_effect ? '' : ' (not in effect: a group mapping applies)'));
+                if (a.group_roles.length) {
+                    line('From groups' + (a.groups_as_of ? ' (as of last login, ' + localTime(a.groups_as_of) + ')' : '') + ':');
+                    a.group_roles.forEach(function(g) { line('  ' + g.group + ' \u2192 ' + roleLabel(g.role), 'muted'); });
+                }
+                line('Roles in effect: ' + a.roles.map(roleLabel).join(', '));
+                if (!a.permissions.length) line('No permissions.', 'muted');
+                a.permissions.forEach(function(p) {
+                    var row = document.createElement('div');
+                    row.className = 'perm-row';
+                    var n = document.createElement('span');
+                    n.className = 'perm-name';
+                    n.textContent = p.permission;
+                    var by = document.createElement('span');
+                    by.className = 'muted';
+                    by.textContent = 'from ' + p.roles.map(roleLabel).join(', ');
+                    row.appendChild(n);
+                    row.appendChild(by);
+                    panel.appendChild(row);
+                });
+                var close = document.createElement('button');
+                close.className = 'btn-small';
+                close.textContent = 'close';
+                close.style.marginTop = '0.5em';
+                close.addEventListener('click', function() { panel.style.display = 'none'; });
+                panel.appendChild(close);
+                panel.style.display = '';
+                panel.scrollIntoView({ block: 'nearest' });
+            })
+            .catch(function() { showError('Failed to read access'); });
+        }
+
+        function loadAdminAudit() {
+            fetch('/api/admin/admin-audit?limit=200', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(rows) {
+                var tbody = document.getElementById('admin-audit-body');
+                tbody.innerHTML = '';
+                document.getElementById('no-admin-audit').style.display = rows.length ? 'none' : '';
+                rows.forEach(function(e) {
+                    var tr = document.createElement('tr');
+                    [localTime(e.created_at), e.actor, e.action, e.target, e.details || ''].forEach(function(v) { tr.appendChild(td(v)); });
+                    tbody.appendChild(tr);
+                });
+            });
+        }
+
         function checkAdmin() {
             fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
@@ -168,17 +535,24 @@
             })
             .then(function(data) {
                 if (data && data.role) document.documentElement.setAttribute('data-role-level', String({admin:4,poweruser:3,operator:2,viewer:1}[data.role] || 0));
-                if (!data || data.role !== 'admin') {
+                if (data && data.permissions) document.documentElement.setAttribute('data-perms', data.permissions.join(' '));
+                // The page shows what the caller's admin.* permissions cover
+                // (#294); anyone holding none of them goes back to Connections.
+                myPerms = (data && data.permissions) || [];
+                myName = (data && data.name) || '';
+                myRoles = (data && data.roles) || [];
+                if (!can('admin.users') && !can('admin.roles') && !can('admin.audit') && !can('admin.system')) {
                     window.location.href = '/connections.html';
                     return;
                 }
-                document.getElementById('reports-link').style.display = '';
-                loadUsers();
-                loadMappings();
-                loadAllTokens();
-                loadAuditLog();
-                loadAbAuditLog();
-                loadSystemStatus();
+                if (can('admin.system')) loadSystemStatus();
+                if (can('admin.audit')) { loadAuditLog(); loadAbAuditLog(); loadAdminAudit(); }
+                if (can('admin.users') || can('admin.roles')) {
+                    loadRoles(function() {
+                        if (can('admin.users')) { loadUsers(); loadAllTokens(); }
+                        if (can('admin.roles')) { loadMappings(); renderRoles(); }
+                    });
+                }
             })
             .catch(function() {});
         }
@@ -236,12 +610,9 @@
                     // Role dropdown
                     var roleTd = document.createElement('td');
                     var sel = document.createElement('select');
-                    ['viewer','operator','poweruser','admin'].forEach(function(r) {
-                        var opt = document.createElement('option');
-                        opt.value = r; opt.textContent = r;
-                        if (r === u.role) opt.selected = true;
-                        sel.appendChild(opt);
-                    });
+                    fillRoleSelect(sel, u.role);
+                    // Only admin.roles changes a role; nobody changes their own.
+                    if (!can('admin.roles') || u.email.toLowerCase() === myName.toLowerCase()) sel.disabled = true;
                     sel.addEventListener('change', function() {
                         fetch('/api/users/' + encodeURIComponent(u.email) + '/role', {
                             method: 'PUT',
@@ -249,7 +620,8 @@
                             credentials: 'same-origin',
                             body: JSON.stringify({role: sel.value})
                         }).then(function(res) {
-                            if (!res.ok) return res.json().then(function(d){ showError(d.error); });
+                            if (!res.ok) return res.json().then(function(d){ showError(d.error); loadUsers(); });
+                            if (can('admin.audit')) loadAdminAudit();
                         });
                     });
                     roleTd.appendChild(sel);
@@ -275,6 +647,14 @@
                     // Actions
                     var actTd = document.createElement('td');
 
+                    var accessBtn = document.createElement('button');
+                    accessBtn.className = 'btn-small btn-action';
+                    accessBtn.textContent = 'access';
+                    accessBtn.title = 'What this user can do, and why';
+                    accessBtn.addEventListener('click', (function(email) { return function() { showAccess(email); }; })(u.email));
+                    actTd.appendChild(accessBtn);
+                    actTd.appendChild(document.createTextNode(' '));
+
                     var toggleBtn = document.createElement('button');
                     toggleBtn.className = 'btn-small btn-action';
                     toggleBtn.textContent = u.disabled ? 'enable' : 'disable';
@@ -283,6 +663,8 @@
                             var action = disabled ? 'enable' : 'disable';
                             fetch('/api/users/' + encodeURIComponent(email) + '/' + action, {
                                 method: 'POST', headers: apiHeaders(), credentials: 'same-origin'
+                            }).then(function(res) {
+                                if (!res.ok) return res.json().then(function(d) { showError(d.error); });
                             }).then(function() { loadUsers(); });
                         };
                     })(u.email, u.disabled));
@@ -313,6 +695,8 @@
                                 if (!ok) return;
                                 fetch('/api/users/' + encodeURIComponent(email), {
                                     method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin'
+                                }).then(function(res) {
+                                    if (!res.ok) return res.json().then(function(d) { showError(d.error); });
                                 }).then(function() { loadUsers(); });
                             });
                         };
@@ -382,12 +766,7 @@
 
                     var roleTd = document.createElement('td');
                     var sel = document.createElement('select');
-                    ['viewer','operator','poweruser','admin'].forEach(function(r) {
-                        var opt = document.createElement('option');
-                        opt.value = r; opt.textContent = r;
-                        if (r === m.role) opt.selected = true;
-                        sel.appendChild(opt);
-                    });
+                    fillRoleSelect(sel, m.role);
                     sel.addEventListener('change', (function(id, group) {
                         return function() {
                             fetch('/api/admin/group-mappings/' + id, {
@@ -396,7 +775,7 @@
                                 credentials: 'same-origin',
                                 body: JSON.stringify({group: group, role: sel.value})
                             }).then(function(res) {
-                                if (!res.ok) return res.json().then(function(d){ showError(d.error); });
+                                if (!res.ok) return res.json().then(function(d){ showError(d.error); loadMappings(); });
                             });
                         };
                     })(m.id, m.oidc_group));
@@ -413,6 +792,8 @@
                         return function() {
                             fetch('/api/admin/group-mappings/' + id, {
                                 method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin'
+                            }).then(function(res) {
+                                if (!res.ok) return res.json().then(function(d) { showError(d.error); });
                             }).then(function() { loadMappings(); });
                         };
                     })(m.id));

@@ -265,7 +265,33 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             details    TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
-        CREATE INDEX IF NOT EXISTS idx_cli_audit_created ON cli_audit_log(created_at DESC);",
+        CREATE INDEX IF NOT EXISTS idx_cli_audit_created ON cli_audit_log(created_at DESC);
+
+        -- Custom roles (#294). Built-in roles are defined in code, never here.
+        CREATE TABLE IF NOT EXISTS roles (
+            name         TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            description  TEXT NOT NULL DEFAULT '',
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role       TEXT NOT NULL REFERENCES roles(name) ON DELETE CASCADE,
+            permission TEXT NOT NULL,
+            PRIMARY KEY (role, permission)
+        );
+
+        -- Role, user and mapping changes made through the API (#294).
+        CREATE TABLE IF NOT EXISTS admin_audit_log (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor      TEXT NOT NULL,
+            action     TEXT NOT NULL,
+            target     TEXT NOT NULL,
+            details    TEXT,
+            ip_addr    TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC);",
     )?;
 
     // Migration: add oidc_groups column if it doesn't exist
@@ -318,7 +344,7 @@ fn generate_key() -> String {
 /// so callers can **fail closed** (treat an unparseable expiry as expired)
 /// rather than the previous behaviour of silently ignoring it, which let a
 /// malformed value authenticate forever.
-fn parse_expires_at(s: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn parse_expires_at(s: &str) -> Option<DateTime<Utc>> {
     let s = s.trim();
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Some(dt.with_timezone(&Utc));
@@ -1285,7 +1311,11 @@ pub fn cleanup_old_audit_log(db: &Db, retain_days: u32) -> rusqlite::Result<usiz
         "DELETE FROM cli_audit_log WHERE created_at < datetime('now', ?1)",
         params![&modifier],
     )?;
-    Ok(tok + ab + cli)
+    let admin = conn.execute(
+        "DELETE FROM admin_audit_log WHERE created_at < datetime('now', ?1)",
+        params![&modifier],
+    )?;
+    Ok(tok + ab + cli + admin)
 }
 
 // ── Connections (address book) audit log ──
@@ -1637,43 +1667,25 @@ pub fn cleanup_session_history(db: &Db, retain_days: u32) -> rusqlite::Result<us
     )
 }
 
-/// Resolve the best role for a user based on their OIDC groups and the group-to-role mappings.
-/// Returns `Some(role)` if at least one group matched a mapping (highest wins),
-/// or `None` if no mappings matched (caller chooses its fallback policy).
+/// The role to record for a user at login from their OIDC groups and the
+/// group-to-role mappings. Returns `Some(role)` if at least one group matched
+/// a mapping, or `None` if none did (the caller chooses its fallback policy).
+///
+/// Permissions come from every matching mapping (`roles::user_access`); this
+/// is only the single role written to `users.role`, as before: the highest
+/// matching built-in, or failing that the first matching custom role by name
+/// (see `roles::login_role_for`).
+
 pub fn resolve_role_from_groups(db: &Db, groups: &[String]) -> rusqlite::Result<Option<String>> {
     if groups.is_empty() {
         return Ok(None);
     }
-
-    let mappings = list_group_mappings(db)?;
-    if mappings.is_empty() {
-        return Ok(None);
-    }
-
-    fn role_level(role: &str) -> u8 {
-        match role {
-            "admin" => 4,
-            "poweruser" => 3,
-            "operator" => 2,
-            "viewer" => 1,
-            _ => 0,
-        }
-    }
-
-    let mut best_level = 0u8;
-    let mut best_role: Option<String> = None;
-
-    for mapping in &mappings {
-        if groups.iter().any(|g| g == &mapping.oidc_group) {
-            let level = role_level(&mapping.role);
-            if level > best_level {
-                best_level = level;
-                best_role = Some(mapping.role.clone());
-            }
-        }
-    }
-
-    Ok(best_role)
+    let matched: Vec<String> = list_group_mappings(db)?
+        .into_iter()
+        .filter(|m| groups.iter().any(|g| g == &m.oidc_group))
+        .map(|m| m.role)
+        .collect();
+    Ok(crate::roles::login_role_for(&matched))
 }
 
 #[cfg(test)]

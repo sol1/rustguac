@@ -95,12 +95,12 @@
     </div>
     <nav>
             <a href="/connections.html">Connections</a>
-            <a href="/sessions.html" id="sessions-link" data-min-role="poweruser">Sessions</a>
-            <a href="/recordings.html">Recordings</a>
-            <a href="/reports.html" id="reports-link" data-min-role="poweruser">Reports</a>
+            <a href="/sessions.html" id="sessions-link" data-perm="connections.adhoc">Sessions</a>
+            <a href="/recordings.html" data-perm="recordings.view">Recordings</a>
+            <a href="/reports.html" id="reports-link" data-perm="reports.view">Reports</a>
             <a href="/docs.html" class="active">Docs</a>
-            <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
-            <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
+            <a href="/tokens.html" id="tokens-link" data-perm="tokens.self">Tokens</a>
+            <a href="/admin.html" id="admin-link" data-perm="admin.users">Admin</a>
             <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
             <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
         </nav>
@@ -142,10 +142,21 @@
             return location.hash ? location.hash.substring(1) : '';
         }
 
-        // Load docs from API
-        fetch('/api/docs')
-            .then(function(r) { return r.json(); })
+        // Load docs from API. Reading them needs docs.view (#294).
+        var docsKey = null;
+        try { docsKey = sessionStorage.getItem('rustguac_api_key'); } catch (e) {}
+        fetch('/api/docs', { credentials: 'same-origin', headers: docsKey ? { 'Authorization': 'Bearer ' + docsKey } : {} })
+            .then(function(r) {
+                if (r.status === 401 || r.status === 403) {
+                    content.textContent = r.status === 401
+                        ? 'Sign in to read the documentation.'
+                        : 'Your role does not include the documentation.';
+                    return null;
+                }
+                return r.json();
+            })
             .then(function(data) {
+                if (!data) return;
                 docs = data;
 
                 // Build sidebar
@@ -209,6 +220,7 @@
                 // Reconcile the server-written nav gate (see rustguac.css): the page
                 // GET carried no API key, so key users arrive on the anonymous variant.
                 document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
+                if (data && data.permissions) document.documentElement.setAttribute('data-perms', data.permissions.join(' '));
                 if (level >= 2) document.getElementById('tokens-link').style.display = '';
                 if (level >= 3) {
                     document.getElementById('reports-link').style.display = '';

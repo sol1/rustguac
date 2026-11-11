@@ -1359,9 +1359,7 @@ impl Default for Config {
 /// is unambiguous when multiple paths are searched.
 fn load_from_file(path: &str) -> Result<Config, String> {
     let contents = std::fs::read_to_string(path).map_err(|e| format!("  {}: {}", path, e))?;
-    let config = toml::from_str::<Config>(&contents).map_err(|e| format!("{}", e))?;
-    config.validate_oidc_role()?;
-    Ok(config)
+    toml::from_str::<Config>(&contents).map_err(|e| format!("{}", e))
 }
 
 impl Config {
@@ -1419,11 +1417,13 @@ impl Config {
         config
     }
 
-    pub fn validate_oidc_role(&self) -> Result<(), String> {
+    pub fn validate_oidc_role(&self, database: &crate::db::Db) -> Result<(), String> {
         if let Some(ref oidc) = self.oidc {
-            if crate::auth::role_level(&oidc.default_role) == 0 {
+            if !crate::roles::role_exists(database, &oidc.default_role)
+                .map_err(|error| error.to_string())?
+            {
                 return Err(
-                    "[oidc].default_role must be admin, poweruser, operator or viewer".into(),
+                    "[oidc].default_role must name an existing built-in or custom role".into(),
                 );
             }
         }
@@ -1749,7 +1749,18 @@ mod tests {
     fn config_file_rejects_unknown_oidc_default_role() {
         let path =
             std::env::temp_dir().join(format!("rustguac-role-{}.toml", uuid::Uuid::new_v4()));
-        for role in ["admin", "poweruser", "operator", "viewer", "operatr", ""] {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        crate::roles::create_custom_role(&db, "auditor", "Auditor", "", Default::default())
+            .unwrap();
+        for role in [
+            "admin",
+            "poweruser",
+            "operator",
+            "viewer",
+            "auditor",
+            "operatr",
+            "",
+        ] {
             std::fs::write(
                 &path,
                 format!(
@@ -1764,10 +1775,12 @@ mod tests {
                 ),
             )
             .unwrap();
-            let result = super::load_from_file(path.to_str().unwrap());
+            let result = super::load_from_file(path.to_str().unwrap())
+                .unwrap()
+                .validate_oidc_role(&db);
             assert_eq!(
                 result.is_ok(),
-                ["admin", "poweruser", "operator", "viewer"].contains(&role)
+                ["admin", "poweruser", "operator", "viewer", "auditor"].contains(&role)
             );
             if let Err(error) = result {
                 assert!(error.contains("default_role"));

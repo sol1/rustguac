@@ -697,7 +697,7 @@ fn reconcile_login_role(
         None if config.sync_role_on_login => config.default_role.clone(),
         None => return Ok(user.role.clone()),
     };
-    if crate::auth::role_level(&role) == 0 {
+    if !crate::roles::role_exists(database, &role).map_err(|e| e.to_string())? {
         return Err("invalid OIDC role".into());
     }
     if !db::set_user_role(database, &user.email, &role).map_err(|e| e.to_string())? {
@@ -801,10 +801,7 @@ fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
 fn extract_optional_groups_from_jwt(token_str: &str, groups_claim: &str) -> Option<Vec<String>> {
     use base64::Engine;
     let parts: Vec<&str> = token_str.split('.').collect();
-    let payload = match parts.get(1) {
-        Some(p) => p,
-        None => return None,
-    };
+    let payload = parts.get(1)?;
 
     let bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload) {
         Ok(b) => b,
@@ -840,17 +837,10 @@ fn extract_optional_groups_from_jwt(token_str: &str, groups_claim: &str) -> Opti
 /// Collect the names of cookies present in the request (values omitted, so we
 /// never log secrets). Used for diagnosing missing-cookie failures.
 fn cookie_names(headers: &axum::http::HeaderMap) -> Vec<String> {
-    headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .map(|cookies| {
-            cookies
-                .split(';')
-                .filter_map(|c| c.trim().split('=').next().map(|n| n.trim().to_string()))
-                .filter(|n| !n.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
+    crate::auth::cookie_pairs(headers)
+        .map(|(n, _)| n.to_string())
+        .filter(|n| !n.is_empty())
+        .collect()
 }
 
 /// Read a request header as a string for diagnostic logging.
@@ -896,19 +886,7 @@ fn safe_next(next: &str) -> Option<&str> {
 }
 
 fn extract_cookie_from_headers(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                let c = c.trim();
-                if let Some(val) = c.strip_prefix(name) {
-                    val.strip_prefix('=').map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+    crate::auth::cookie_value(headers, name)
 }
 
 /// Reshape the openidconnect crate's discovery error into something an
@@ -1052,6 +1030,29 @@ mod tests {
             "operator"
         );
         assert_eq!(login_user(&db, &[]).role, "operator");
+    }
+
+    #[test]
+    fn role_sync_accepts_custom_group_mapping_and_default() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        crate::roles::create_custom_role(&db, "auditor", "Auditor", "", Default::default())
+            .unwrap();
+        crate::db::create_group_mapping(&db, "audit-team", "auditor").unwrap();
+        let user = login_user(&db, &[]);
+        assert_eq!(
+            super::reconcile_login_role(
+                &db,
+                &user,
+                &["audit-team".into()],
+                &role_config(true, "viewer")
+            )
+            .unwrap(),
+            "auditor"
+        );
+        assert_eq!(
+            super::reconcile_login_role(&db, &user, &[], &role_config(true, "auditor")).unwrap(),
+            "auditor"
+        );
     }
 
     #[test]

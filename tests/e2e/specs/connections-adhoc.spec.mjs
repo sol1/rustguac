@@ -5,7 +5,7 @@
 // /api/sessions. Non-admins do not see the options only a saved entry may
 // set; admins can save what they filled in as an entry.
 import { test, expect } from '@playwright/test';
-import { installApi, settle } from '../lib/api.mjs';
+import { installApi, settle, ROLE_PERMS } from '../lib/api.mjs';
 
 const MY_CREDS = {
     credentials: {
@@ -190,7 +190,7 @@ test('without Vault the button and #adhoc still work', async ({ page }) => {
     const api = await installApi(page, {
         role: 'poweruser',
         routes: {
-            'GET /api/me': { name: 'pu@example.com', role: 'poweruser', groups: [], vault_enabled: false, vault_configured: false }
+            'GET /api/me': { name: 'pu@example.com', role: 'poweruser', permissions: ROLE_PERMS.poweruser, groups: [], vault_enabled: false, vault_configured: false }
         }
     });
     await page.goto('/connections.html#adhoc');

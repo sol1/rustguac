@@ -30,12 +30,12 @@
     </div>
     <nav>
         <a href="/connections.html">Connections</a>
-        <a href="/sessions.html" class="active" id="sessions-link" data-min-role="poweruser">Sessions</a>
-        <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" id="reports-link" data-min-role="poweruser">Reports</a>
+        <a href="/sessions.html" class="active" id="sessions-link" data-perm="connections.adhoc">Sessions</a>
+        <a href="/recordings.html" data-perm="recordings.view">Recordings</a>
+        <a href="/reports.html" id="reports-link" data-perm="reports.view">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
-        <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
+        <a href="/tokens.html" id="tokens-link" data-perm="tokens.self">Tokens</a>
+        <a href="/admin.html" id="admin-link" data-perm="admin.users">Admin</a>
         <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
@@ -76,7 +76,9 @@
         // Check auth and role
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
         var myName = null;
-        var myRole = null;
+        // What the caller may do (#294), from /api/me.
+        var myPerms = [];
+        function can(p) { return myPerms.indexOf(p) >= 0; }
         function checkRole() {
             fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
@@ -87,23 +89,15 @@
             .then(function(data) {
                 if (!data) return;
                 myName = data.name || null;
-                myRole = data.role || null;
+                myPerms = data.permissions || [];
                 var level = roleLevel[data.role] || 0;
                 // Reconcile the server-written nav gate (see rustguac.css): the page
                 // GET carried no API key, so key users arrive on the anonymous variant.
                 document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
-                if (level < 3) {
+                if (data && data.permissions) document.documentElement.setAttribute('data-perms', data.permissions.join(' '));
+                if (!can('connections.adhoc') && !can('sessions.view_all')) {
                     window.location.href = '/connections.html';
                     return;
-                }
-                if (data.role === 'admin') {
-                    document.getElementById('admin-link').style.display = '';
-                }
-                if (level >= 2) {
-                    document.getElementById('tokens-link').style.display = '';
-                }
-                if (level >= 3) {
-                    document.getElementById('reports-link').style.display = '';
                 }
             })
             .catch(function() {});
@@ -111,15 +105,14 @@
         if (apiKey) {
             // A key is never on the page GET, so the server served the anonymous variant.
             document.documentElement.setAttribute('data-role-level', '4');
-            // API key users are always admin
-            myRole = 'admin';
-            document.getElementById('admin-link').style.display = '';
-            document.getElementById('tokens-link').style.display = '';
-            document.getElementById('reports-link').style.display = '';
-            // Fetch /api/me anyway to learn our display_name for own-session checks.
+            // Fetch /api/me to learn our display_name for own-session checks,
+            // and what this key may do.
             fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
                 .then(function(r) { return r.ok ? r.json() : null; })
-                .then(function(d) { if (d && d.name) myName = d.name; })
+                .then(function(d) {
+                    if (d && d.name) myName = d.name;
+                    if (d && d.permissions) myPerms = d.permissions;
+                })
                 .catch(function() {});
         } else {
             checkRole();
@@ -210,7 +203,7 @@
                     var hostCol = s.session_type === 'web' ? (s.url || '') : s.hostname;
                     var isActive = s.status === 'active';
                     var isOwn = myName && s.created_by === myName;
-                    var canShadow = isActive && !isOwn && myRole === 'admin';
+                    var canShadow = isActive && !isOwn && can('sessions.shadow');
 
                     if (isActive) activeCount++;
                     if (isActive && isOwn) ownActiveCount++;
@@ -252,7 +245,7 @@
                     tr.appendChild(tdOpen);
 
                     // Delete: owner can always delete own; admin can delete any.
-                    var canDelete = isOwn || myRole === 'admin';
+                    var canDelete = isOwn || can('sessions.view_all');
                     var tdDel = document.createElement('td');
                     if (canDelete) {
                         tdDel.appendChild(h('button', 'delete', { 'class': 'btn-small', 'data-delete': s.session_id }));
@@ -269,7 +262,7 @@
                     empty.textContent = 'No sessions match the current filters.';
                 } else if (activeCount === 0) {
                     empty.style.display = '';
-                    empty.textContent = myRole === 'admin'
+                    empty.textContent = can('sessions.view_all')
                         ? 'No active sessions.'
                         : 'No active sessions. Use Connections to connect to a saved entry, or Connect to a host for an ad-hoc connection.';
                 } else {
@@ -284,7 +277,7 @@
                 });
                 if (totalActive === 0) {
                     counts.textContent = '';
-                } else if (myRole === 'admin' && totalActive !== ownActive) {
+                } else if (can('sessions.view_all') && totalActive !== ownActive) {
                     counts.textContent = totalActive + ' active · ' + ownActive + ' yours' + (sessionFilters.active() ? ' · ' + sessions.length + ' shown' : '');
                 } else {
                     counts.textContent = totalActive + ' active' + (sessionFilters.active() ? ' · ' + sessions.length + ' shown' : '');
