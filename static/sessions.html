@@ -76,14 +76,29 @@
         // Check auth and role
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
         var myName = null;
-        // What the caller may do (#294), from /api/me.
+        // Permissions come from /api/me, including custom roles and scoped keys.
         var myPerms = [];
         function can(p) { return myPerms.indexOf(p) >= 0; }
+        var sessionIdentityReady = false;
+        var sessionIdentityLoading = false;
+        function sessionIdentityLoaded() {
+            sessionIdentityReady = true;
+            var error = document.getElementById('error');
+            if (error.textContent === 'Failed to load session permissions. Retrying...') error.textContent = '';
+            // Sessions and identity load independently. Paint cached sessions
+            // immediately once ownership/permissions are known.
+            if (lastSessionList) renderSessionList(lastSessionList);
+        }
+        function sessionIdentityFailed() {
+            document.getElementById('error').textContent = 'Failed to load session permissions. Retrying...';
+        }
         function checkRole() {
+            if (sessionIdentityReady || sessionIdentityLoading) return;
+            sessionIdentityLoading = true;
             fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
-                if (!res.ok) return;
+                if (!res.ok) throw new Error('identity request failed');
                 return res.json();
             })
             .then(function(data) {
@@ -91,32 +106,22 @@
                 myName = data.name || null;
                 myPerms = data.permissions || [];
                 var level = roleLevel[data.role] || 0;
-                // Reconcile the server-written nav gate (see rustguac.css): the page
-                // GET carried no API key, so key users arrive on the anonymous variant.
-                document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
-                if (data && data.permissions) document.documentElement.setAttribute('data-perms', data.permissions.join(' '));
+                document.documentElement.setAttribute('data-role-level', String(apiKey ? 4 : level));
+                document.documentElement.setAttribute('data-perms', myPerms.join(' '));
                 if (!can('connections.adhoc') && !can('sessions.view_all')) {
                     window.location.href = '/connections.html';
                     return;
                 }
+                sessionIdentityLoaded();
             })
-            .catch(function() {});
+            .catch(sessionIdentityFailed)
+            .finally(function() { sessionIdentityLoading = false; });
         }
         if (apiKey) {
-            // A key is never on the page GET, so the server served the anonymous variant.
+            // The key is absent on the page GET; /api/me supplies its permissions.
             document.documentElement.setAttribute('data-role-level', '4');
-            // Fetch /api/me to learn our display_name for own-session checks,
-            // and what this key may do.
-            fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
-                .then(function(r) { return r.ok ? r.json() : null; })
-                .then(function(d) {
-                    if (d && d.name) myName = d.name;
-                    if (d && d.permissions) myPerms = d.permissions;
-                })
-                .catch(function() {});
-        } else {
-            checkRole();
         }
+        checkRole();
 
         document.getElementById('logout-item').addEventListener('click', function() {
             sessionStorage.removeItem('rustguac_api_key');
@@ -140,6 +145,7 @@
         }
 
         function refreshSessions() {
+            checkRole();
             // Admins get everyone's sessions; non-admins see only their own (see #102).
             fetch('/api/sessions?all=true', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
@@ -176,6 +182,7 @@
         });
 
         function renderSessionList(allSessions) {
+                if (!sessionIdentityReady) return;
                 sessionFilters.update(allSessions);
                 var sessions = sessionFilters.apply(allSessions);
                 var q = sessionSearchQuery();
