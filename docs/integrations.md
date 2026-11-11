@@ -574,6 +574,11 @@ token_file = "/run/vault-agent/token"
 ```
 
 Omit `role_id` and `jwt_auth`; combining either with `token_file` is rejected.
+On connection, rustguac validates the current token with `GET /v1/auth/token/lookup-self`.
+The token policy must permit that call (normally included in the default policy).
+An invalid token leaves the backend disconnected while the existing reconnect loop
+retries, allowing an agent's replacement token to restore access. On Unix, startup
+also warns if the sink file is group or world readable.
 No `VAULT_SECRET_ID` is needed. The same option works independently in
 `[vault_shared]` and `[vault_local]`, for example when each backend has its own
 agent, token and least-privilege policy:
