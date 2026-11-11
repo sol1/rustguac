@@ -66,6 +66,10 @@ sync_role_on_login = true
 
 The highest matching group-to-role mapping wins (`viewer < operator < poweruser < admin`).
 When no group matches, the user receives `default_role`, including existing users.
+Synchronization requires the configured groups claim to be present in the validated
+ID token. A missing or unusable claim preserves the stored role and logs a warning;
+an explicit empty array synchronizes to the default. Check the provider's claim
+mapping and group-overage settings if that warning appears.
 The default is a fallback, not a minimum: a matching `viewer` mapping still yields
 `viewer` when the default is `operator`. Manual assignments are overwritten at the
 next login. This also applies to pre-provisioned users with `auto_create_users = false`;

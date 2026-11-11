@@ -507,7 +507,9 @@ pub async fn callback(
         .unwrap_or_default();
 
     // Extract group memberships from ID token JWT payload
-    let groups = extract_groups_from_jwt(&id_token.to_string(), &oidc.config.groups_claim);
+    let groups_claim =
+        extract_optional_groups_from_jwt(&id_token.to_string(), &oidc.config.groups_claim);
+    let groups = groups_claim.clone().unwrap_or_default();
     if !groups.is_empty() {
         tracing::info!(email = %email, groups = ?groups, "OIDC groups extracted");
         let db_for_seen = database.clone();
@@ -593,13 +595,13 @@ pub async fn callback(
     // failure must not let a login keep stale privileges.
     let db_for_role = database.clone();
     let user_for_role = user.clone();
-    let groups_for_role = groups.clone();
+    let groups_for_role = groups_claim;
     let config_for_role = oidc.config.clone();
     let effective_role = match tokio::task::spawn_blocking(move || {
-        reconcile_login_role(
+        reconcile_claim_role(
             &db_for_role,
             &user_for_role,
-            &groups_for_role,
+            groups_for_role.as_deref(),
             &config_for_role,
         )
     })
@@ -666,6 +668,23 @@ pub async fn callback(
 
 /// Group mappings are authoritative when matched. With synchronization enabled,
 /// the default is authoritative too; otherwise preserve an unmatched user's role.
+fn reconcile_claim_role(
+    database: &Db,
+    user: &db::User,
+    groups: Option<&[String]>,
+    config: &OidcConfig,
+) -> Result<String, String> {
+    match groups {
+        Some(groups) => reconcile_login_role(database, user, groups, config),
+        None => {
+            if config.sync_role_on_login {
+                tracing::warn!("OIDC groups claim missing or unusable; preserving stored role");
+            }
+            Ok(user.role.clone())
+        }
+    }
+}
+
 fn reconcile_login_role(
     database: &Db,
     user: &db::User,
@@ -683,6 +702,9 @@ fn reconcile_login_role(
     }
     if !db::set_user_role(database, &user.email, &role).map_err(|e| e.to_string())? {
         return Err("OIDC user no longer exists".into());
+    }
+    if role != user.role {
+        tracing::info!(old_role = %user.role, new_role = %role, "OIDC login role changed");
     }
     Ok(role)
 }
@@ -771,22 +793,27 @@ fn jwt_header_alg_kid(token_str: &str) -> (Option<String>, Option<String>) {
     (field("alg"), field("kid"))
 }
 
+#[cfg(test)]
 fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
+    extract_optional_groups_from_jwt(token_str, groups_claim).unwrap_or_default()
+}
+
+fn extract_optional_groups_from_jwt(token_str: &str, groups_claim: &str) -> Option<Vec<String>> {
     use base64::Engine;
     let parts: Vec<&str> = token_str.split('.').collect();
     let payload = match parts.get(1) {
         Some(p) => p,
-        None => return Vec::new(),
+        None => return None,
     };
 
     let bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload) {
         Ok(b) => b,
-        Err(_) => return Vec::new(),
+        Err(_) => return None,
     };
 
     let claims: serde_json::Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
-        Err(_) => return Vec::new(),
+        Err(_) => return None,
     };
 
     let mut groups: Vec<String> = match claims.get(groups_claim) {
@@ -796,7 +823,7 @@ fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
             .collect(),
         // Some OIDC providers send a plain string instead of an array when user is in one group
         Some(serde_json::Value::String(s)) => vec![truncate_group_name(s)],
-        _ => Vec::new(),
+        _ => return None,
     };
 
     if groups.len() > MAX_OIDC_GROUPS {
@@ -807,7 +834,7 @@ fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
         );
         groups.truncate(MAX_OIDC_GROUPS);
     }
-    groups
+    Some(groups)
 }
 
 /// Collect the names of cookies present in the request (values omitted, so we
@@ -990,6 +1017,41 @@ mod tests {
             crate::db::OidcLogin::User(user) => user,
             result => panic!("unexpected login result: {result:?}"),
         }
+    }
+
+    #[test]
+    fn role_sync_preserves_role_when_groups_claim_is_missing_but_syncs_empty_claim() {
+        use base64::Engine;
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let config = role_config(true, "operator");
+        let user = login_user(&db, &[]);
+        crate::db::set_user_role(&db, &user.email, "admin").unwrap();
+        let user = login_user(&db, &[]);
+        for claims in [
+            serde_json::json!({}),
+            serde_json::json!({"roles": []}),
+            serde_json::json!({"groups": null}),
+        ] {
+            let payload =
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string());
+            let groups =
+                super::extract_optional_groups_from_jwt(&format!("header.{payload}.sig"), "groups");
+            assert!(groups.is_none());
+            assert_eq!(
+                super::reconcile_claim_role(&db, &user, groups.as_deref(), &config).unwrap(),
+                "admin"
+            );
+            assert_eq!(login_user(&db, &[]).role, "admin");
+        }
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"groups":[]}"#);
+        let groups =
+            super::extract_optional_groups_from_jwt(&format!("header.{payload}.sig"), "groups");
+        assert_eq!(groups, Some(vec![]));
+        assert_eq!(
+            super::reconcile_claim_role(&db, &user, groups.as_deref(), &config).unwrap(),
+            "operator"
+        );
+        assert_eq!(login_user(&db, &[]).role, "operator");
     }
 
     #[test]

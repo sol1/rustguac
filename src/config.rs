@@ -1359,7 +1359,9 @@ impl Default for Config {
 /// is unambiguous when multiple paths are searched.
 fn load_from_file(path: &str) -> Result<Config, String> {
     let contents = std::fs::read_to_string(path).map_err(|e| format!("  {}: {}", path, e))?;
-    toml::from_str::<Config>(&contents).map_err(|e| format!("{}", e))
+    let config = toml::from_str::<Config>(&contents).map_err(|e| format!("{}", e))?;
+    config.validate_oidc_role()?;
+    Ok(config)
 }
 
 impl Config {
@@ -1415,6 +1417,17 @@ impl Config {
         }
 
         config
+    }
+
+    pub fn validate_oidc_role(&self) -> Result<(), String> {
+        if let Some(ref oidc) = self.oidc {
+            if crate::auth::role_level(&oidc.default_role) == 0 {
+                return Err(
+                    "[oidc].default_role must be admin, poweruser, operator or viewer".into(),
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Check that `[oidc]`, when present, has a usable client secret from
@@ -1730,6 +1743,37 @@ mod tests {
         let dbg = format!("{:?}", config);
         assert!(!dbg.contains("sensitive-value"), "got: {}", dbg);
         assert!(dbg.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn config_file_rejects_unknown_oidc_default_role() {
+        let path =
+            std::env::temp_dir().join(format!("rustguac-role-{}.toml", uuid::Uuid::new_v4()));
+        for role in ["admin", "poweruser", "operator", "viewer", "operatr", ""] {
+            std::fs::write(
+                &path,
+                format!(
+                    r#"
+                [oidc]
+                issuer_url = "https://idp.example.com"
+                client_id = "console"
+                redirect_uri = "https://console.example.com/auth/callback"
+                default_role = "{role}"
+                sync_role_on_login = true
+            "#
+                ),
+            )
+            .unwrap();
+            let result = super::load_from_file(path.to_str().unwrap());
+            assert_eq!(
+                result.is_ok(),
+                ["admin", "poweruser", "operator", "viewer"].contains(&role)
+            );
+            if let Err(error) = result {
+                assert!(error.contains("default_role"));
+            }
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

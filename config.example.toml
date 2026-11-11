@@ -150,6 +150,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # # Recompute roles on every OIDC login, including downgrades. The highest
 # # matching group mapping wins; no match uses default_role. Manual role
 # # assignments are overwritten on the next login. Default: false.
+# # A missing groups claim preserves the stored role; an empty array syncs.
 # sync_role_on_login = false
 #
 # # Create an account automatically on first OIDC login (default: true).
