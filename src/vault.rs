@@ -993,13 +993,10 @@ impl VaultClient {
 
         // Perform initial login
         let (token, _ttl) = client.login().await?;
-        if client.token_file.is_none() {
-            *client.token.write().await = token;
-        } else {
+        if let Some(ref path) = client.token_file {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let path = client.token_file.as_ref().unwrap();
                 let metadata = tokio::fs::metadata(path).await.map_err(|e| {
                     VaultError::Auth(format!(
                         "cannot inspect external token file {}: {}",
@@ -1022,6 +1019,8 @@ impl VaultClient {
                     response.status()
                 )));
             }
+        } else {
+            *client.token.write().await = token;
         }
 
         Ok(client)
