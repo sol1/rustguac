@@ -78,17 +78,22 @@
         var myName = null;
         var myRole = null;
         var sessionIdentityReady = false;
+        var sessionIdentityLoading = false;
         function sessionIdentityLoaded() {
             sessionIdentityReady = true;
+            var error = document.getElementById('error');
+            if (error.textContent === 'Failed to load session permissions. Retrying...') error.textContent = '';
             // Sessions and identity load independently. Paint cached sessions
             // immediately once ownership/permissions are known, not at the
             // next five-second poll.
             if (lastSessionList) renderSessionList(lastSessionList);
         }
         function sessionIdentityFailed() {
-            document.getElementById('error').textContent = 'Failed to load session permissions. Please reload the page.';
+            document.getElementById('error').textContent = 'Failed to load session permissions. Retrying...';
         }
         function checkRole() {
+            if (sessionIdentityReady || sessionIdentityLoading) return;
+            sessionIdentityLoading = true;
             fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
@@ -98,8 +103,8 @@
             .then(function(data) {
                 if (!data) return;
                 myName = data.name || null;
-                myRole = data.role || null;
-                var level = roleLevel[data.role] || 0;
+                myRole = apiKey ? 'admin' : (data.role || null);
+                var level = roleLevel[myRole] || 0;
                 // Reconcile the server-written nav gate (see rustguac.css): the page
                 // GET carried no API key, so key users arrive on the anonymous variant.
                 document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
@@ -107,7 +112,7 @@
                     window.location.href = '/connections.html';
                     return;
                 }
-                if (data.role === 'admin') {
+                if (myRole === 'admin') {
                     document.getElementById('admin-link').style.display = '';
                 }
                 if (level >= 2) {
@@ -118,7 +123,8 @@
                 }
                 sessionIdentityLoaded();
             })
-            .catch(sessionIdentityFailed);
+            .catch(sessionIdentityFailed)
+            .finally(function() { sessionIdentityLoading = false; });
         }
         if (apiKey) {
             // A key is never on the page GET, so the server served the anonymous variant.
@@ -128,18 +134,9 @@
             document.getElementById('admin-link').style.display = '';
             document.getElementById('tokens-link').style.display = '';
             document.getElementById('reports-link').style.display = '';
-            // Fetch /api/me anyway to learn our display_name for own-session checks.
-            fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
-                .then(function(r) { if (!r.ok) throw new Error('identity request failed'); return r.json(); })
-                .then(function(d) {
-                    if (!d) return;
-                    myName = d.name || null;
-                    sessionIdentityLoaded();
-                })
-                .catch(sessionIdentityFailed);
-        } else {
-            checkRole();
         }
+        // API-key users also need identity for ownership checks.
+        checkRole();
 
         document.getElementById('logout-item').addEventListener('click', function() {
             sessionStorage.removeItem('rustguac_api_key');
@@ -163,6 +160,7 @@
         }
 
         function refreshSessions() {
+            checkRole();
             // Admins get everyone's sessions; non-admins see only their own (see #102).
             fetch('/api/sessions?all=true', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {

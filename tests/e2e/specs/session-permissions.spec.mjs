@@ -73,9 +73,27 @@ test('failed identity lookup does not paint guessed permissions', async ({ page 
         'GET /api/me': { status: 500, body: '{}' }
     } });
     await page.goto('/sessions.html');
-    await expect(page.locator('#error')).toHaveText('Failed to load session permissions. Please reload the page.');
+    await expect(page.locator('#error')).toHaveText('Failed to load session permissions. Retrying...');
     await expect(page.locator('#session-list tr')).toHaveCount(0);
 });
+
+for (const apiKey of [false, true]) {
+    test(`identity recovers on the next poll without reloading (${apiKey ? 'API key' : 'OIDC'})`, async ({ page }) => {
+        if (apiKey) await page.addInitScript(() => sessionStorage.setItem('rustguac_api_key', 'test-key'));
+        let attempts = 0;
+        await installApi(page, { sessions: [own, other], routes: {
+            'GET /api/me': () => ++attempts === 1 ? { status: 500, body: '{}' } : me
+        } });
+        await page.goto('/sessions.html');
+        await expect(page.locator('#error')).toHaveText('Failed to load session permissions. Retrying...');
+        await expect(page.locator('#session-list tr')).toHaveCount(0);
+        await page.evaluate(() => refreshSessions());
+        await expect(page.locator('#session-list tr')).toHaveCount(2);
+        await expect(page.locator('#error')).toHaveText('');
+        await expect(page.locator('[data-shadow]')).toHaveCount(2);
+        expect(attempts).toBeGreaterThan(1);
+    });
+}
 
 // Connections already loads its folders after identity. Keep that ordering
 // covered too, including a slow credential lookup that re-renders the entries.
