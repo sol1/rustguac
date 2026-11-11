@@ -134,31 +134,15 @@
                 document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
                 if (data && data.permissions) document.documentElement.setAttribute('data-perms', data.permissions.join(' '));
 
-                if (data.role === 'admin') {
-                    document.getElementById('admin-link').style.display = '';
-                }
-                if (level >= 3) {
-                    document.getElementById('reports-link').style.display = '';
-                } else {
-                    // Sessions is for poweruser+ only; hide for operator/viewer
-                    document.getElementById('sessions-link').style.display = 'none';
-                }
-
-                if (level < 2) {
-                    // viewer — no token access
-                    document.getElementById('no-permission').style.display = '';
-                    return;
-                }
-
-                // operator+ can see their tokens
+                // Navigation follows data-perms (rustguac.css). Anyone can
+                // see their own tokens; creating and revoking them needs
+                // tokens.self (#294).
+                var perms = data.permissions || [];
                 document.getElementById('tokens-section').style.display = '';
-
-                if (level >= 3) {
-                    // poweruser+ can create and revoke tokens
+                if (perms.indexOf('tokens.self') >= 0) {
                     canCreate = true;
                     document.getElementById('create-section').style.display = '';
-                    document.getElementById('reports-link').style.display = '';
-                    populateMaxRoles(data.role);
+                    populateMaxRoles();
                 }
 
                 loadTokens();
@@ -166,18 +150,21 @@
             .catch(function() {});
         }
 
-        function populateMaxRoles(userRole) {
+        // The roles a token can be capped at: those granting nothing the
+        // caller doesn't hold, built-in or custom (#294).
+        function populateMaxRoles() {
             var sel = document.getElementById('token-max-role');
-            var roles = ['viewer', 'operator', 'poweruser', 'admin'];
-            var userLevel = roleLevel[userRole] || 0;
-            for (var i = 0; i < roles.length; i++) {
-                if (roleLevel[roles[i]] <= userLevel) {
-                    var opt = document.createElement('option');
-                    opt.value = roles[i];
-                    opt.textContent = roles[i];
-                    sel.appendChild(opt);
-                }
-            }
+            fetch('/api/me/token-roles', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(roles) {
+                    roles.forEach(function(r) {
+                        var opt = document.createElement('option');
+                        opt.value = r.name;
+                        opt.textContent = r.display_name || r.name;
+                        sel.appendChild(opt);
+                    });
+                })
+                .catch(function() {});
         }
 
         function loadTokens() {

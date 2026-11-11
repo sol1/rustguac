@@ -561,7 +561,7 @@
                     '<td><button class="btn-small" data-play="' + escapeAttr(r.name) + '">play</button></td>' +
                     '<td><a class="btn-small" href="/api/recordings/' + encodeURIComponent(r.name) + '" download="' + escapeAttr(r.name) + '">download</a></td>' +
                     (mp4Available ? '<td>' + mp4Button(r.name) + '</td>' : '') +
-                    '<td><button class="btn-small btn-delete" data-delete-rec="' + escapeAttr(r.name) + '">delete</button></td>' +
+                    '<td><button class="btn-small btn-delete" data-perm="recordings.delete" data-delete-rec="' + escapeAttr(r.name) + '">delete</button></td>' +
                     '</tr>';
             });
             html += '</tbody></table>';

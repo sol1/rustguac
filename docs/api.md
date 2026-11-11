@@ -909,6 +909,7 @@ Returns current user info. Requires authentication. `permissions` lists what the
   "name": "User Name",
   "email": "user@example.com",
   "role": "operator",
+  "roles": ["operator"],
   "permissions": ["connections.connect", "credentials.self", "docs.view"],
   "groups": ["engineering"],
   "auth_type": "oidc",
@@ -916,6 +917,21 @@ Returns current user info. Requires authentication. `permissions` lists what the
   "vault_configured": true
 }
 ```
+
+### Roles and permissions
+
+All need an admin API key or a user holding the permission named. Changes are recorded in the admin audit log. See [Roles and permissions](roles-and-access-control.md#roles-and-permissions) for the rules (nobody grants what they don't hold, the last way to manage roles is kept, and so on).
+
+| Endpoint | Needs | |
+|---|---|---|
+| `GET /api/admin/permissions` | `admin.roles` or `admin.users` | Every permission: `name`, `description`, `sensitive` |
+| `GET /api/admin/roles` | `admin.roles` or `admin.users` | Built-in and custom roles with their permissions |
+| `POST /api/admin/roles` | `admin.roles` | Create a custom role: `{"name", "display_name", "description", "permissions": [...]}` |
+| `PUT /api/admin/roles/{name}` | `admin.roles` | Change a custom role's display name, description and permissions |
+| `DELETE /api/admin/roles/{name}?reassign_to=ROLE` | `admin.roles` | Delete a custom role. If it's in use, `reassign_to` is required; without it the answer is `409` with `usage` listing the users, mappings and token caps |
+| `GET /api/users/{email}/access` | `admin.users` | A user's own role, the group mappings that apply, the roles in effect, and each permission with the roles granting it |
+| `GET /api/admin/admin-audit?limit=N` | `admin.audit` | Role, user and mapping changes, newest first |
+| `GET /api/me/token-roles` | logged in | Roles the caller can cap their own tokens at |
 
 ### `GET /auth/login`
 

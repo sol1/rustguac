@@ -7945,6 +7945,41 @@ fn roles_in_use_by(id: &AuthIdentity) -> Vec<String> {
     }
 }
 
+/// GET /api/me/token-roles — the roles the caller may cap their own API
+/// tokens at: every built-in or custom role granting nothing they don't hold.
+pub async fn my_token_roles(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> Response {
+    let Some(Extension(id)) = identity else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let held = id.permissions();
+    let db = database.clone();
+    let roles = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<serde_json::Value>> {
+        let mut out: Vec<serde_json::Value> = crate::perms::BUILTIN_ROLES
+            .iter()
+            .filter(|r| crate::perms::role_perms(r).is_subset(held))
+            .map(|r| json!({ "name": r, "display_name": r }))
+            .collect();
+        for r in crate::roles::list_custom_roles(&db)? {
+            if crate::roles::parse_permissions(&r.permissions).is_ok_and(|p| p.is_subset(held)) {
+                out.push(json!({ "name": r.name, "display_name": r.display_name }));
+            }
+        }
+        Ok(out)
+    })
+    .await;
+    match roles {
+        Ok(Ok(r)) => Json(r).into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to list roles"})),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/admin/permissions — every permission, with what it allows.
 pub async fn list_permissions(identity: Option<Extension<AuthIdentity>>) -> Response {
     if caller_holds(&identity, &[Perm::AdminRoles, Perm::AdminUsers]).is_none() {

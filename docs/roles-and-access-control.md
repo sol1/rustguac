@@ -33,7 +33,33 @@ The permissions and what they allow:
 | `admin.system` | Detailed system status |
 | `docs.view` | Documentation |
 
-`GET /api/me` returns the caller's `permissions`. Custom roles, built from these permissions, are planned ([#294](https://github.com/sol1/rustguac/issues/294)).
+`GET /api/me` returns the caller's `roles` and `permissions`.
+
+### Custom roles
+
+Admins can build their own roles from these permissions: **Admin > Roles**, the API, or the CLI. A custom role can be assigned to users, mapped from OIDC groups, and used to cap API tokens, just like a built-in. The Roles section offers two starting points, both editable before saving:
+
+| Template | Permissions | For |
+|---|---|---|
+| Connection editor | `connections.connect`, `connections.edit`, `credentials.self`, `docs.view` | Managing connections site wide, without folder access settings, reports, recordings or admin |
+| Connect only | `connections.connect` | Contractors who only see the folders they're given and connect. Entries they use need stored or prompted credentials, since they can't save their own. |
+
+Rules that keep this safe:
+
+- **Nobody can grant what they don't hold.** A role, a role assignment, a group mapping or a token cap is refused if it would grant a permission the person making the change doesn't have.
+- **Nobody changes their own role**, or edits or deletes a role they're using.
+- **Nobody disables or deletes a user who holds more than they do.**
+- **The last way to manage roles is kept.** A change that would leave no enabled admin API key and no enabled user holding `admin.roles` is refused.
+- **Built-in roles can't be changed**, and their names (in any case) can't be used for custom roles.
+- **A role in use can't simply be deleted.** Its users, group mappings and token caps have to move to another role first (the Admin page offers this; the CLI has `--reassign-to`). The role set as `[oidc] default_role` can't be deleted.
+- **New permissions are off for custom roles.** A permission added in a later release isn't granted to any custom role until an admin adds it. `admin` gets every permission automatically.
+
+Role names are lowercase letters, digits, `-` and `_`, and can't be changed after creation; the display name can.
+
+### Seeing what someone can do
+
+**Admin > Users > access** shows a user's own role, which group mappings apply to them (with their groups as of their last login), the roles in effect, and which role grants each permission. The same is available as `GET /api/users/{email}/access` and `rustguac show-user --email ...`.
+
 
 ## Authentication paths
 
@@ -182,6 +208,7 @@ Operators can view their tokens (created by an admin on their behalf) but cannot
 | `GET /api/health` | None | Always returns 200 |
 | `GET /api/auth/status` | None | Returns OIDC enabled status |
 | `GET /api/me` | Any authenticated | Returns current user info |
+| `GET /api/docs` | `docs.view` | The documentation shown on the Docs page. Needed no login before 1.14 |
 
 ## Folder access control
 
@@ -192,9 +219,10 @@ Each Connections folder decides who can see it, in its `.config` entry in Vault:
 
 A user can see a folder if any of their groups is in `allowed_groups` **or** their email is in `allowed_users`.
 
-- **Admins** bypass these checks and see all folders.
-- **Operators and powerusers** see only folders that grant them access.
-- If both lists are empty, the folder is **admin-only**.
+- **Admins**, and anyone with `connections.edit`, bypass these checks and see all folders.
+- **Everyone else** sees only folders that grant them access.
+- If both lists are empty, the folder is visible only to admins and connection editors.
+- Changing `allowed_groups`, `allowed_users` or `inherit_from_parent` needs `folders.manage_access`. Without it, a new top-level folder starts with both lists empty and a new subfolder inherits its parent's access.
 - Folders the user cannot access are **hidden** from the tree, not shown-then-denied. This applies at every level, including subfolders.
 - A folder the user cannot access is still shown if it leads to a subfolder they can, so a deeper grant is never orphaned out of the tree. Its own entries stay hidden; the user opens the subfolder. For example, a folder `users/jsmith` shared with `jsmith@example.com` shows `users` in jsmith's tree even if `users` itself is admin-only.
 - The list of allowed users is only shown to admins. A user who can open a folder does not see who else can.
@@ -226,10 +254,12 @@ Admins can configure automatic role assignment based on OIDC group membership. T
 
 ### How it works
 
-1. When a user logs in via OIDC, their group memberships are extracted from the JWT
-2. Each group is checked against the `group_role_mappings` table
-3. If any groups match, the **highest role** among all matches is applied
-4. If no groups match, the user's existing role is preserved
+1. When a user logs in via OIDC, their group memberships are extracted from the JWT and recorded.
+2. Their groups are checked against the `group_role_mappings` table.
+3. If any groups match, the user gets **every role** their groups map to (the union of those roles' permissions), and those replace the role set on the user.
+4. If no groups match, the user's own role applies.
+
+For the built-in roles, the union is the same as the highest matching role, which is how mappings have always resolved. Permissions are worked out on each request from the groups recorded at the user's last login and the current mappings, so a mapping change applies straight away; a change to someone's groups at the identity provider applies at their next login. At login rustguac still records a single role on the user (the highest matching built-in, or the first matching custom role by name), which is what an older release would read after a downgrade.
 
 ### Example
 
@@ -239,7 +269,7 @@ Admins can configure automatic role assignment based on OIDC group membership. T
 | `engineering` | poweruser |
 | `support` | operator |
 
-A user with groups `["engineering", "support"]` would get `poweruser` (the higher of the two matching roles).
+A user with groups `["engineering", "support"]` gets everything `poweruser` and `operator` grant, which is `poweruser`. With custom roles the union adds up: a user in both a `reporter` group and a `recordings` group gets both roles' permissions.
 
 ### Managing mappings from the CLI
 
@@ -283,16 +313,16 @@ The primary use case is powerusers creating tokens for service account automatio
 
 ### Effective role
 
-Each token has an optional `max_role` cap. When the token is used to authenticate, the effective role is:
+Each token has an optional `max_role` cap, a built-in or custom role. A token gets only the permissions both its owner and its cap allow:
 
 ```
-effective_role = min(user_current_role, token_max_role)
+token permissions = user's current permissions ∩ permissions of max_role
 ```
 
 This means:
 - A poweruser who creates a token with `max_role: operator` gets operator-level access when using that token
 - If an admin later demotes the user to operator, the token's effective access drops accordingly
-- The `max_role` can never grant more access than the user currently has
+- The `max_role` can never grant more access than the user currently has, and a cap can only be a role granting nothing beyond what its owner holds
 
 ### Token management UI
 
@@ -324,6 +354,25 @@ rustguac delete-user --email user@example.com
 ```
 
 Re-enabling a disabled user is done from the Admin page or the API (`POST /api/users/{email}/enable`); there is no `enable-user` subcommand. Bear that in mind before disabling your own account from the shell.
+
+## Role management CLI
+
+```bash
+# List built-in and custom roles with their permissions
+rustguac list-roles
+
+# Create a custom role (repeat --perm for each permission)
+rustguac add-role --name connection-editor --display-name "Connection editor" \
+    --perm connections.connect --perm connections.edit --perm credentials.self --perm docs.view
+
+# Show what a user can do and why
+rustguac show-user --email jsmith@example.com
+
+# Delete a role, moving its users, group mappings and token caps first
+rustguac delete-role --name connection-editor --reassign-to operator
+```
+
+`add-user`, `set-role` and `map-group` accept custom role names too. The CLI is the recovery path, so the rules about granting only what you hold don't apply to it; it's audited in the CLI audit log.
 
 ## Admin (API key) management CLI
 
