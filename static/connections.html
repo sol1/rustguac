@@ -655,13 +655,13 @@
     </div>
     <nav>
         <a href="/connections.html" class="active">Connections</a>
-        <a href="/sessions.html" id="sessions-link" data-min-role="poweruser">Sessions</a>
-        <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" id="reports-link" data-min-role="poweruser">Reports</a>
+        <a href="/sessions.html" id="sessions-link" data-perm="connections.adhoc">Sessions</a>
+        <a href="/recordings.html" data-perm="recordings.view">Recordings</a>
+        <a href="/reports.html" id="reports-link" data-perm="reports.view">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
-        <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
-        <a href="#" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
+        <a href="/tokens.html" id="tokens-link" data-perm="tokens.self">Tokens</a>
+        <a href="/admin.html" id="admin-link" data-perm="admin.users">Admin</a>
+        <a href="#" id="my-creds-nav" data-perm="credentials.self" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
         <span id="user-menu-wrapper">
             <a href="#" id="logout-item">Logout</a>
             <span id="user-menu-btn" title="Preferences">&#9881; Settings</span>
@@ -675,7 +675,7 @@
                     <div class="um-kb-hint">For RDP and desktop connections that don't set their own. Remembered in this browser.</div>
                 </div>
                 <div class="um-divider"></div>
-                <div class="um-item" id="my-creds-item">&#128273; My Credentials</div>
+                <div class="um-item" id="my-creds-item" data-perm="credentials.self">&#128273; My Credentials</div>
                 <div class="um-item" id="show-tour-item">&#9432; Welcome Tour</div>
             </div>
         </span>
@@ -719,7 +719,7 @@
                 <div class="sidebar-pin">
                     <div class="sidebar-header">
                         <strong>Folders</strong>
-                        <button class="btn-add admin-only" id="btn-new-folder" style="display:none" title="Create new folder">+ folder</button>
+                        <button class="btn-add" data-perm="connections.edit" id="btn-new-folder" style="display:none" title="Create new folder">+ folder</button>
                     </div>
                     <!-- Slot for sidebar tools (folder filter box etc.); stays pinned with the header -->
                     <div id="sidebar-tools"></div>
@@ -740,10 +740,10 @@
                     <div class="entries-toolbar">
                         <div id="entries-filters" class="list-tools"></div>
                         <div class="folder-actions-btns">
-                            <button class="btn-add admin-only" id="btn-new-entry" style="display:none">+ add entry</button>
-                            <button class="btn-add admin-only" id="btn-new-subfolder" style="display:none" title="Create subfolder under this folder">+ subfolder</button>
-                            <button class="btn-small admin-only" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
-                            <button class="btn-small admin-only" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
+                            <button class="btn-add" data-perm="connections.edit" id="btn-new-entry" style="display:none">+ add entry</button>
+                            <button class="btn-add" data-perm="connections.edit" id="btn-new-subfolder" style="display:none" title="Create subfolder under this folder">+ subfolder</button>
+                            <button class="btn-small" data-perm="connections.edit" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
+                            <button class="btn-small" data-perm="connections.edit" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
                         </div>
                     </div>
                 </div>
@@ -776,6 +776,8 @@
             <label>Description
                 <input type="text" id="fm-desc" placeholder="e.g. Infrastructure servers">
             </label>
+            <div id="fm-access-note" class="field-hint" style="display:none">Who can open this folder is set by an administrator (it needs the <code>folders.manage_access</code> permission). A new folder you create is visible to administrators and connection editors; a new subfolder inherits its parent's access.</div>
+            <div id="fm-access" data-perm="folders.manage_access">
             <label>Allowed groups</label>
             <div class="chip-picker" id="fm-groups-picker">
                 <div class="chip-list" id="fm-groups-chips"></div>
@@ -790,12 +792,13 @@
             <div class="field-hint">OIDC groups that can see this folder. Type to filter known groups or enter a custom one; Enter or Add to attach; &times; on a chip to remove.</div>
             <label for="fm-users">Allowed users</label>
             <textarea id="fm-users" rows="3" placeholder="jsmith@example.com" spellcheck="false" autocomplete="off"></textarea>
-            <div class="field-hint">Individual users who can see this folder, by login email, one per line. They don't need to have logged in yet. Leave both lists empty for admin-only access.</div>
+            <div class="field-hint">Individual users who can see this folder, by login email, one per line. They don't need to have logged in yet. Leave both lists empty for administrators and connection editors only.</div>
             <label style="display:flex;align-items:center;gap:0.5em;cursor:pointer">
                 <input type="checkbox" id="fm-inherit" style="width:auto">
                 Inherit permissions from parent folder
             </label>
             <div class="field-hint">When ticked, if this folder's own groups list doesn't grant a user access, the check walks up to the parent (and further ancestors if they also inherit). Uncheck to enforce this folder's groups list on its own. Top-level folders have no parent so this has no effect.</div>
+            </div>
             <details class="fm-defaults" id="fm-defaults">
                 <summary>Default credentials</summary>
                 <div class="field-hint">Lent to entries in this folder that have no password or key of their own, per session type, so an entry created without secrets (a NetBox webhook, an import) connects straight away. An entry's own credentials always win; subfolders inherit per type, but only those that inherit permissions from this folder and share it with nobody extra. A web entry's default password is typed into the page, where the user can read it. Secrets are write-only: leave a field blank to keep what is stored, tick clear to drop a type.</div>
@@ -869,6 +872,14 @@
                     <input type="number" id="em-ssh-font-size" min="6" max="72" placeholder="12">
                 </label>
                 <div class="field-hint">Points. Leave blank for the default (12). Increase or decrease to tune readability — the terminal size no longer scales with display DPI.</div>
+                <label id="em-ssh-color-row">Terminal colours
+                    <select id="em-ssh-color-scheme">
+                        <option value="">Default (grey on black)</option>
+                        <option value="white-black">White on black</option>
+                        <option value="green-black">Green on black</option>
+                        <option value="black-white">Black on white</option>
+                    </select>
+                </label>
                 <div class="entry-only">
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-ssh-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
@@ -1535,7 +1546,11 @@
         }
 
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
-        var isAdmin = false;
+        // What the caller may do (#294), from /api/me.
+        var myPerms = [];
+        function can(p) { return myPerms.indexOf(p) >= 0; }
+        // Holds connections.edit: create, edit, move and delete entries and folders.
+        var canEdit = false;
         var currentUserRole = 'viewer';
         var selectedFolder = null; // { name, scope, description, path, has_children }
         var folders = []; // top-level folders from batch load
@@ -1889,30 +1904,26 @@
             })
             .then(function(data) {
                 if (!data) return;
-                isAdmin = data.role === 'admin';
+                myPerms = data.permissions || [];
+                canEdit = can('connections.edit');
                 currentUserRole = data.role || 'viewer';
                 var level = roleLevel[data.role] || 0;
                 // Reconcile the server-written nav gate (see rustguac.css): the page
                 // GET carried no API key, so key users arrive on the anonymous variant.
                 document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
-                if (level < 3) {
-                    document.getElementById('sessions-link').style.display = 'none';
-                }
-                if (level >= 3) {
-                    document.getElementById('reports-link').style.display = '';
-                }
-                if (isAdmin) {
-                    document.getElementById('admin-link').style.display = '';
-                    var els = document.querySelectorAll('.admin-only');
+                if (data && data.permissions) document.documentElement.setAttribute('data-perms', data.permissions.join(' '));
+                // Navigation links follow data-perms (rustguac.css). The
+                // editing controls start hidden and show for connections.edit.
+                if (canEdit) {
+                    var els = document.querySelectorAll('[data-perm="connections.edit"]');
                     for (var i = 0; i < els.length; i++) els[i].style.display = '';
                 }
-                if (level >= 2) {
-                    document.getElementById('tokens-link').style.display = '';
-                }
+                // Changing who can open a folder needs folders.manage_access;
+                // without it the folder form says so in place of those fields.
+                document.getElementById('fm-access-note').style.display = can('folders.manage_access') ? 'none' : '';
                 // Ad-hoc connections need no Vault, so this is settled before
-                // the no-Vault return below. Poweruser and up; an API key is
-                // always admin. The button itself is search.js's.
-                canAdhoc = level >= 3 || !!apiKey;
+                // the no-Vault return below. The button itself is search.js's.
+                canAdhoc = can('connections.adhoc');
                 vaultReady = !!data.vault_enabled;
                 if (apiKey) {
                     // A key is never on the page GET, so the server served the anonymous variant.
@@ -1943,7 +1954,7 @@
                 loadCredStatus();
                 loadActiveSessions();
                 setInterval(loadActiveSessions, 10000);
-                startOnboarding(currentUserRole);
+                startOnboarding();
             })
             .catch(function(err) {
                 showError('Failed to check authentication: ' + err.message);
@@ -2189,7 +2200,7 @@
                     folderEntries[key] = f.entries || [];
                     folderEntryCounts[key] = (f.entries || []).length;
                 });
-                if (folders.length === 0 && unavailableScopes.length === 0 && isAdmin) {
+                if (folders.length === 0 && unavailableScopes.length === 0 && canEdit) {
                     document.getElementById('empty-state').style.display = '';
                     document.getElementById('main-content').style.display = 'none';
                 } else if (folders.length === 0) {
@@ -2677,7 +2688,7 @@
                 });
                 var emptyEl = document.getElementById('empty-state');
                 var mainEl = document.getElementById('main-content');
-                if (folders.length === 0 && unavailableScopes.length === 0 && isAdmin) {
+                if (folders.length === 0 && unavailableScopes.length === 0 && canEdit) {
                     emptyEl.style.display = '';
                     mainEl.style.display = 'none';
                 } else {
@@ -3012,7 +3023,7 @@
             }
             if (entries.length === 0) {
                 updateBulkBar();
-                if (isAdmin) {
+                if (canEdit) {
                     content.innerHTML = '<div class="empty-state" style="padding:2em;margin:1em 0">' +
                         '<p style="color:#888;margin:0 0 1em 0">No entries in this folder.</p>' +
                         '<button class="btn-add" id="btn-empty-add-entry" style="font-size:1em;padding:0.5em 1.2em">+ Add First Entry</button>' +
@@ -3027,9 +3038,9 @@
             }
 
             var html = '<table class="entries-table"><thead><tr>';
-            if (isAdmin) html += '<th class="sel-cell"><input type="checkbox" id="sel-all" title="Select all"></th>';
+            if (canEdit) html += '<th class="sel-cell"><input type="checkbox" id="sel-all" title="Select all"></th>';
             html += '<th>Name</th><th>Type</th><th>Host</th><th>User</th><th></th>';
-            if (isAdmin) html += '<th></th>';
+            if (canEdit) html += '<th></th>';
             html += '</tr></thead><tbody>';
 
             entries.forEach(function(e, idx) {
@@ -3046,9 +3057,9 @@
                 }
                 var typeCls = 'type-' + e.session_type;
 
-                var isSel = isAdmin && bulkSel.names.has(e.name);
+                var isSel = canEdit && bulkSel.names.has(e.name);
                 html += isSel ? '<tr class="selected">' : '<tr>';
-                if (isAdmin) {
+                if (canEdit) {
                     html += '<td class="sel-cell"><input type="checkbox" class="sel-entry" data-sel-index="' + idx + '" data-sel-name="' + escapeAttr(e.name) + '"' + (isSel ? ' checked' : '') + ' title="Select"></td>';
                 }
                 var unsetVars = entryUnsetVars(e);
@@ -3070,7 +3081,7 @@
                 var connectLabel = needsPrompt ? 'Login...' : 'Connect';
                 html += '<td class="connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">' + connectLabel + '</button>'
                     + '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">&#x29c9;</button></td>';
-                if (isAdmin) {
+                if (canEdit) {
                     // One cell for the three admin actions: three cells cost
                     // two extra runs of cell padding on every row, which is
                     // what pushed "delete" off the right edge at 1710px wide.
@@ -3122,7 +3133,7 @@
         function updateBulkBar() {
             var n = bulkSel.names.size;
             var bar = document.getElementById('bulk-bar');
-            bar.classList.toggle('active', isAdmin && n > 0);
+            bar.classList.toggle('active', canEdit && n > 0);
             document.getElementById('bulk-count').textContent = n + (n === 1 ? ' entry selected' : ' entries selected');
             var all = document.getElementById('sel-all');
             if (all) {
@@ -4028,6 +4039,7 @@
             document.getElementById('em-typescript-row').style.display = val === 'ssh' ? '' : 'none';
             // SSH terminal font size is SSH-only
             document.getElementById('em-ssh-font-size').parentElement.style.display = val === 'ssh' ? '' : 'none';
+            document.getElementById('em-ssh-color-row').style.display = val === 'ssh' ? '' : 'none';
             // Wake-on-LAN applies to SSH/RDP/VNC (guacd passes the magic packet)
             document.getElementById('em-wol-section').style.display = (val === 'ssh' || val === 'rdp' || val === 'vnc') ? '' : 'none';
         });
@@ -4489,6 +4501,7 @@
             document.getElementById('em-proxmox-monitors').value = '1';
             document.getElementById('em-proxmox-verify-tls').checked = false;
             document.getElementById('em-ssh-font-size').value = '';
+            document.getElementById('em-ssh-color-scheme').value = '';
             document.getElementById('em-wol-enabled').checked = false;
             document.getElementById('em-wol-mac').value = '';
             document.getElementById('em-wol-broadcast').value = '';
@@ -4608,6 +4621,7 @@
                     document.getElementById('em-port').value = entryData.port || '22';
                     document.getElementById('em-username').value = entryData.username || '';
                     document.getElementById('em-ssh-font-size').value = entryData.ssh_font_size || '';
+                    document.getElementById('em-ssh-color-scheme').value = entryData.ssh_color_scheme || '';
                     document.getElementById('em-ssh-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'rdp') {
                     document.getElementById('em-rdp-hostname').value = entryData.hostname || '';
@@ -4820,6 +4834,8 @@
                 if (pk) entry.private_key = pk;
                 var fs = parseInt(document.getElementById('em-ssh-font-size').value);
                 if (fs > 0) entry.ssh_font_size = fs;
+                var cs = document.getElementById('em-ssh-color-scheme').value;
+                if (cs) entry.ssh_color_scheme = cs;
                 if (document.getElementById('em-ssh-prompt-creds').checked) entry.prompt_credentials = true;
             } else if (type === 'rdp') {
                 var h = document.getElementById('em-rdp-hostname').value.trim();
@@ -5160,7 +5176,7 @@
         function setAdhocMode(on) {
             var modal = document.getElementById('entry-modal');
             modal.classList.toggle('adhoc', !!on);
-            modal.classList.toggle('adhoc-restricted', !!on && !isAdmin);
+            modal.classList.toggle('adhoc-restricted', !!on && !can('connections.unrestricted'));
             ADHOC_VAR_LIST_FIELDS.forEach(function(id) {
                 var el = document.getElementById(id);
                 if (on) el.setAttribute('list', 'em-cred-vars'); else el.removeAttribute('list');
@@ -5251,8 +5267,8 @@
             syncAdhocKeypair();
             document.getElementById('em-error').textContent = '';
 
-            // Admins can keep what they filled in as a saved entry.
-            var targets = isAdmin && vaultReady ? adhocSaveAsTargets() : [];
+            // Editors can keep what they filled in as a saved entry.
+            var targets = canEdit && vaultReady ? adhocSaveAsTargets() : [];
             var sel = document.getElementById('em-saveas-folder');
             sel.innerHTML = '';
             targets.forEach(function(f) {
@@ -5712,11 +5728,11 @@
 
         // ── Onboarding Wizard ──
         var onboardSteps = [
-            { title: 'Welcome to rustguac', minRole: 1, body:
+            { title: 'Welcome to rustguac', perm: null, body:
                 'This is your remote access gateway. Browse connection entries organised by folder, then click <span class="onboard-hl">Connect</span> to launch a session in a new browser tab.' +
                 '<br><br>This quick tour covers the essentials &mdash; you can dismiss it at any time.'
             },
-            { title: 'Navigation', minRole: 1, body:
+            { title: 'Navigation', perm: null, body:
                 'The nav bar at the top links to:' +
                 '<br>&bull; <span class="onboard-hl">Connections</span> &mdash; your connection entries' +
                 '<br>&bull; <span class="onboard-hl">Sessions</span> &mdash; active and recent sessions' +
@@ -5724,29 +5740,29 @@
                 '<br>&bull; <span class="onboard-hl">Docs</span> &mdash; built-in documentation' +
                 '<br><br>The <span class="onboard-hl">Settings</span> menu (top right) has theme selection, credential management, and this tour.'
             },
-            { title: 'My Credentials', minRole: 2, body:
+            { title: 'My Credentials', perm: 'credentials.self', body:
                 'Some entries use credential variables like <code>$domain_username</code>. Before connecting, set your personal credentials:' +
                 '<br><br>Click <span class="onboard-hl">Settings</span> &rarr; <span class="onboard-hl">My Credentials</span> to fill in your values. They are stored securely in Vault and applied automatically when you connect.'
             },
-            { title: 'Connect vs Login', minRole: 2, body:
+            { title: 'Connect vs Login', perm: 'connections.connect', body:
                 'Connections entries have two connection modes:' +
                 '<br><br>&bull; <span class="onboard-hl">Connect</span> &mdash; launches the session directly using the saved settings.' +
                 '<br>&bull; <span class="onboard-hl">Login</span> &mdash; runs an automated login script after connecting (e.g. filling in a web login form). If an entry shows Login, the admin has configured an auto-login workflow for it.'
             },
-            { title: 'Clipboard', minRole: 2, body:
+            { title: 'Clipboard', perm: 'connections.connect', body:
                 '<span class="onboard-key">Ctrl</span>+<span class="onboard-key">V</span> pastes from your browser clipboard into the remote session automatically.' +
                 '<br><br>For advanced use (copy from remote, send arbitrary text), press <span class="onboard-key">Ctrl</span>+<span class="onboard-key">Alt</span>+<span class="onboard-key">Shift</span> or click the <span class="onboard-hl">Clipboard</span> tab on the left edge of the session window.'
             },
-            { title: 'File Transfer', minRole: 2, body:
+            { title: 'File Transfer', perm: 'connections.connect', body:
                 'RDP sessions with drive redirection enabled show a <span class="onboard-hl">Files</span> tab on the right edge of the session window.' +
                 '<br><br>Use it to upload and download files via a shared virtual drive. SSH sessions support SFTP file transfer instead.' +
                 '<br><br>Toggle the file panel with <span class="onboard-key">Ctrl</span>+<span class="onboard-key">Alt</span>+<span class="onboard-key">F</span>.'
             },
-            { title: 'Connect to a host', minRole: 3, body:
+            { title: 'Connect to a host', perm: 'connections.adhoc', body:
                 'As a power user, you can connect to a host that isn\'t a saved entry with <span class="onboard-hl">Connect to a host</span>, next to the search box on every page.' +
                 '<br><br>It opens the entry editor with every option an entry has. Nothing is saved, and credential fields accept your own credential variables, such as <code>$my_ssh_key</code>.'
             },
-            { title: 'Managing the Connections', minRole: 4, body:
+            { title: 'Managing the Connections', perm: 'connections.edit', body:
                 'As an admin, you can:' +
                 '<br>&bull; Create and edit <span class="onboard-hl">folders</span> with OIDC group permissions' +
                 '<br>&bull; Add, edit, clone, and delete <span class="onboard-hl">entries</span>' +
@@ -5757,10 +5773,9 @@
         var onboardCurrent = 0;
         var onboardFiltered = [];
 
-        function startOnboarding(role) {
+        function startOnboarding() {
             if (localStorage.getItem('rustguac_onboarding_dismissed')) return;
-            var level = roleLevel[role] || 1;
-            onboardFiltered = onboardSteps.filter(function(s) { return s.minRole <= level; });
+            onboardFiltered = onboardSteps.filter(function(s) { return !s.perm || can(s.perm); });
             if (onboardFiltered.length === 0) return;
             onboardCurrent = 0;
             renderOnboardStep();
@@ -5813,7 +5828,7 @@
         document.getElementById('show-tour-item').addEventListener('click', function() {
             document.getElementById('user-menu').style.display = 'none';
             localStorage.removeItem('rustguac_onboarding_dismissed');
-            startOnboarding(currentUserRole);
+            startOnboarding();
         });
 
         // ── UX (#254): selection feedback & sidebar render hygiene ──────────
@@ -5915,19 +5930,19 @@
         function entriesSkeletonHtml() {
             var cols = ['Name', 'Type', 'Host', 'User', ''];
             var html = '<table class="entries-table skeleton" aria-busy="true" aria-label="Loading entries"><thead><tr>';
-            if (isAdmin) html += '<th class="sel-cell"><span class="sk-bar sk-check"></span></th>';
+            if (canEdit) html += '<th class="sel-cell"><span class="sk-bar sk-check"></span></th>';
             cols.forEach(function(c) { html += '<th>' + c + '</th>'; });
-            if (isAdmin) html += '<th></th><th></th><th></th>';
+            if (canEdit) html += '<th></th><th></th><th></th>';
             html += '</tr></thead><tbody>';
             for (var i = 0; i < 4; i++) {
                 html += '<tr>';
-                if (isAdmin) html += '<td class="sel-cell"><span class="sk-bar sk-check"></span></td>';
+                if (canEdit) html += '<td class="sel-cell"><span class="sk-bar sk-check"></span></td>';
                 html += '<td><span class="sk-bar"></span></td>' +
                         '<td><span class="sk-bar sk-badge"></span></td>' +
                         '<td><span class="sk-bar"></span></td>' +
                         '<td><span class="sk-bar"></span></td>' +
                         '<td class="connect-cell"><span class="sk-bar sk-btn"></span></td>';
-                if (isAdmin) html += '<td></td><td></td><td></td>';
+                if (canEdit) html += '<td></td><td></td><td></td>';
                 html += '</tr>';
             }
             return html + '</tbody></table>';

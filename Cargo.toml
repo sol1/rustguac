@@ -1,6 +1,6 @@
 [package]
 name = "rustguac"
-version = "1.13.4"
+version = "1.14.0"
 edition = "2021"
 description = "Lightweight Rust replacement for Apache Guacamole client"
 
@@ -42,7 +42,7 @@ hmac = "0.13"
 sha1 = "0.11"
 
 # Database
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -63,7 +63,6 @@ url = "2"
 tower-cookies = "0.11"
 
 # SSH key generation
-ssh-key = { version = "0.6", features = ["ed25519"] }
 
 # Rate limiting
 tower_governor = "0.8"
@@ -76,7 +75,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots"], de
 webpki-roots = "1"
 
 # SSH tunneling (jump host / bastion)
-russh = "0.64"
+russh = "0.65"
 
 # Docker (VDI container management)
 bollard = "0.21"
@@ -98,4 +97,4 @@ pulldown-cmark = "0.13"
 assert_cmd = "2.2.2"
 # Integration tests read the SQLite the CLI wrote. Already a runtime
 # dependency, so this adds nothing new to the tree.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }

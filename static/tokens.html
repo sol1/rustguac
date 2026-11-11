@@ -24,12 +24,12 @@
     </div>
     <nav>
         <a href="/connections.html">Connections</a>
-        <a href="/sessions.html" id="sessions-link" data-min-role="poweruser">Sessions</a>
-        <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" id="reports-link" data-min-role="poweruser">Reports</a>
+        <a href="/sessions.html" id="sessions-link" data-perm="connections.adhoc">Sessions</a>
+        <a href="/recordings.html" data-perm="recordings.view">Recordings</a>
+        <a href="/reports.html" id="reports-link" data-perm="reports.view">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html" class="active" id="tokens-link" data-min-role="operator">Tokens</a>
-        <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
+        <a href="/tokens.html" class="active" id="tokens-link" data-perm="tokens.self">Tokens</a>
+        <a href="/admin.html" id="admin-link" data-perm="admin.users">Admin</a>
         <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
@@ -132,32 +132,17 @@
                 // Reconcile the server-written nav gate (see rustguac.css): the page
                 // GET carried no API key, so key users arrive on the anonymous variant.
                 document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
+                if (data && data.permissions) document.documentElement.setAttribute('data-perms', data.permissions.join(' '));
 
-                if (data.role === 'admin') {
-                    document.getElementById('admin-link').style.display = '';
-                }
-                if (level >= 3) {
-                    document.getElementById('reports-link').style.display = '';
-                } else {
-                    // Sessions is for poweruser+ only; hide for operator/viewer
-                    document.getElementById('sessions-link').style.display = 'none';
-                }
-
-                if (level < 2) {
-                    // viewer — no token access
-                    document.getElementById('no-permission').style.display = '';
-                    return;
-                }
-
-                // operator+ can see their tokens
+                // Navigation follows data-perms (rustguac.css). Anyone can
+                // see their own tokens; creating and revoking them needs
+                // tokens.self (#294).
+                var perms = data.permissions || [];
                 document.getElementById('tokens-section').style.display = '';
-
-                if (level >= 3) {
-                    // poweruser+ can create and revoke tokens
+                if (perms.indexOf('tokens.self') >= 0) {
                     canCreate = true;
                     document.getElementById('create-section').style.display = '';
-                    document.getElementById('reports-link').style.display = '';
-                    populateMaxRoles(data.role);
+                    populateMaxRoles();
                 }
 
                 loadTokens();
@@ -165,18 +150,21 @@
             .catch(function() {});
         }
 
-        function populateMaxRoles(userRole) {
+        // The roles a token can be capped at: those granting nothing the
+        // caller doesn't hold, built-in or custom (#294).
+        function populateMaxRoles() {
             var sel = document.getElementById('token-max-role');
-            var roles = ['viewer', 'operator', 'poweruser', 'admin'];
-            var userLevel = roleLevel[userRole] || 0;
-            for (var i = 0; i < roles.length; i++) {
-                if (roleLevel[roles[i]] <= userLevel) {
-                    var opt = document.createElement('option');
-                    opt.value = roles[i];
-                    opt.textContent = roles[i];
-                    sel.appendChild(opt);
-                }
-            }
+            fetch('/api/me/token-roles', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(roles) {
+                    roles.forEach(function(r) {
+                        var opt = document.createElement('option');
+                        opt.value = r.name;
+                        opt.textContent = r.display_name || r.name;
+                        sel.appendChild(opt);
+                    });
+                })
+                .catch(function() {});
         }
 
         function loadTokens() {

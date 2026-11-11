@@ -77,8 +77,16 @@ pub enum AuthIdentity {
     /// OIDC user with email, role, and group memberships.
     User {
         email: String,
+        /// The role shown for the user: their recorded role, or for an API
+        /// token the lower of that and the token's cap.
         role: String,
         groups: Vec<String>,
+        /// The roles in effect (#294): every role their groups map to, or
+        /// their directly assigned role when no mapping matches.
+        roles: Vec<String>,
+        /// The union of those roles' permissions, cut down to the token's
+        /// cap for an API token.
+        perms: crate::perms::PermSet,
     },
 }
 
@@ -119,10 +127,18 @@ impl AuthIdentity {
         }
     }
 
-    /// Check if identity has at least the given role level.
-    /// admin > poweruser > operator > viewer
-    pub fn has_role(&self, min_role: &str) -> bool {
-        role_level(self.role()) >= role_level(min_role)
+    /// Everything this identity may do. Admin API keys hold every
+    /// permission; a user holds what their role grants (#294).
+    pub fn permissions(&self) -> crate::perms::PermSet {
+        match self {
+            AuthIdentity::ApiKey(_) => crate::perms::PermSet::all(),
+            AuthIdentity::User { perms, .. } => *perms,
+        }
+    }
+
+    /// Whether this identity holds `perm`.
+    pub fn has_perm(&self, perm: crate::perms::Perm) -> bool {
+        self.permissions().contains(perm)
     }
 }
 
@@ -134,6 +150,39 @@ pub fn role_level(role: &str) -> u8 {
         "operator" => 2,
         "viewer" => 1,
         _ => 0,
+    }
+}
+
+/// The identity of an authenticated user: their roles and permissions as the
+/// database has them now, cut down to `cap` (a token's `max_role`). A
+/// database error grants nothing.
+pub fn user_identity(db: &Db, user: db::User, cap: Option<&str>) -> AuthIdentity {
+    let access = crate::roles::user_access(db, &user).unwrap_or_else(|e| {
+        tracing::error!(error = %e, email = %user.email, "could not resolve the user's roles");
+        crate::roles::UserAccess {
+            direct_role: user.role.clone(),
+            direct_role_in_effect: true,
+            group_roles: Vec::new(),
+            roles: Vec::new(),
+            permissions: crate::perms::PermSet::EMPTY,
+        }
+    });
+    let mut perms = access.permissions;
+    let role = match cap {
+        Some(cap) => {
+            perms = perms.intersection(
+                crate::roles::role_perms(db, cap).unwrap_or(crate::perms::PermSet::EMPTY),
+            );
+            compute_effective_role(&user.role, &Some(cap.to_string()))
+        }
+        None => user.role.clone(),
+    };
+    AuthIdentity::User {
+        groups: user.groups_vec(),
+        email: user.email,
+        role,
+        roles: access.roles,
+        perms,
     }
 }
 
@@ -257,22 +306,32 @@ fn parse_forwarded_ip(raw: &[u8]) -> Option<IpAddr> {
         .and_then(|r| r.parse::<IpAddr>().ok())
 }
 
+/// Every `name=value` pair in the request's cookies. HTTP/2 lets a client
+/// split cookies over several `Cookie` headers (RFC 9113 8.2.3), and some
+/// proxies pass them on unmerged, so all of them are read, not just the
+/// first (#328).
+pub fn cookie_pairs(headers: &axum::http::HeaderMap) -> impl Iterator<Item = (&str, &str)> {
+    headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|cookies| cookies.split(';'))
+        .filter_map(|c| {
+            let (name, value) = c.trim().split_once('=')?;
+            Some((name.trim(), value))
+        })
+}
+
+/// The value of the cookie `name`, from any of the request's Cookie headers.
+pub fn cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+    cookie_pairs(headers)
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| v.to_string())
+}
+
 /// Extract session cookie value from the Cookie header.
 fn extract_cookie(request: &Request, name: &str) -> Option<String> {
-    request
-        .headers()
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                let c = c.trim();
-                if let Some(val) = c.strip_prefix(name) {
-                    val.strip_prefix('=').map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+    cookie_value(request.headers(), name)
 }
 
 /// Axum middleware that validates either API key or session cookie.
@@ -331,23 +390,20 @@ pub async fn require_auth(
             Err(AuthError::InvalidKey) => {
                 // Not found in admins table — try user API tokens
                 let db_clone = db.clone();
-                let token_result =
-                    tokio::task::spawn_blocking(move || db::validate_user_token(&db_clone, &key))
-                        .await
-                        .unwrap_or(Err(AuthError::InvalidKey));
+                let token_result = tokio::task::spawn_blocking(move || {
+                    db::validate_user_token(&db_clone, &key).map(|(user, token_meta)| {
+                        let id = user_identity(&db_clone, user, token_meta.max_role.as_deref());
+                        (id, token_meta)
+                    })
+                })
+                .await
+                .unwrap_or(Err(AuthError::InvalidKey));
 
                 match token_result {
-                    Ok((user, token_meta)) => {
-                        let effective_role =
-                            compute_effective_role(&user.role, &token_meta.max_role);
-                        tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "User token authenticated");
-                        let groups = user.groups_vec();
+                    Ok((identity, token_meta)) => {
+                        tracing::debug!(email = %identity.display_name(), role = %identity.role(), token = %token_meta.name, "User token authenticated");
                         let mut request = request;
-                        request.extensions_mut().insert(AuthIdentity::User {
-                            email: user.email,
-                            role: effective_role,
-                            groups,
-                        });
+                        request.extensions_mut().insert(identity);
                         return next.run(request).await;
                     }
                     Err(_) => {
@@ -375,21 +431,18 @@ pub async fn require_auth(
     let session_token = extract_cookie(&request, "rustguac_session");
     if let Some(token) = session_token {
         let db_clone = db.clone();
-        let result =
-            tokio::task::spawn_blocking(move || db::validate_auth_session(&db_clone, &token))
-                .await
-                .unwrap_or(Err(AuthError::InvalidSession));
+        let result = tokio::task::spawn_blocking(move || {
+            db::validate_auth_session(&db_clone, &token)
+                .map(|user| user_identity(&db_clone, user, None))
+        })
+        .await
+        .unwrap_or(Err(AuthError::InvalidSession));
 
         return match result {
-            Ok(user) => {
-                tracing::debug!(email = %user.email, role = %user.role, "Session cookie authenticated");
-                let groups = user.groups_vec();
+            Ok(identity) => {
+                tracing::debug!(email = %identity.display_name(), role = %identity.role(), "Session cookie authenticated");
                 let mut request = request;
-                request.extensions_mut().insert(AuthIdentity::User {
-                    email: user.email,
-                    role: user.role,
-                    groups,
-                });
+                request.extensions_mut().insert(identity);
                 next.run(request).await
             }
             Err(_) => {
@@ -512,23 +565,20 @@ pub async fn optional_auth(
             Err(AuthError::InvalidKey) => {
                 // Not found in admins table — try user API tokens
                 let db_clone = db.clone();
-                let token_result =
-                    tokio::task::spawn_blocking(move || db::validate_user_token(&db_clone, &key))
-                        .await
-                        .unwrap_or(Err(AuthError::InvalidKey));
+                let token_result = tokio::task::spawn_blocking(move || {
+                    db::validate_user_token(&db_clone, &key).map(|(user, token_meta)| {
+                        let id = user_identity(&db_clone, user, token_meta.max_role.as_deref());
+                        (id, token_meta)
+                    })
+                })
+                .await
+                .unwrap_or(Err(AuthError::InvalidKey));
 
                 match token_result {
-                    Ok((user, token_meta)) => {
-                        let effective_role =
-                            compute_effective_role(&user.role, &token_meta.max_role);
-                        tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "Optional auth: user token authenticated");
-                        let groups = user.groups_vec();
+                    Ok((identity, token_meta)) => {
+                        tracing::debug!(email = %identity.display_name(), role = %identity.role(), token = %token_meta.name, "Optional auth: user token authenticated");
                         let mut request = request;
-                        request.extensions_mut().insert(AuthIdentity::User {
-                            email: user.email,
-                            role: effective_role,
-                            groups,
-                        });
+                        request.extensions_mut().insert(identity);
                         return next.run(request).await;
                     }
                     Err(_) => {
@@ -548,21 +598,18 @@ pub async fn optional_auth(
     let session_token = extract_cookie(&request, "rustguac_session");
     if let Some(token) = session_token {
         let db_clone = db.clone();
-        let result =
-            tokio::task::spawn_blocking(move || db::validate_auth_session(&db_clone, &token))
-                .await
-                .unwrap_or(Err(AuthError::InvalidSession));
+        let result = tokio::task::spawn_blocking(move || {
+            db::validate_auth_session(&db_clone, &token)
+                .map(|user| user_identity(&db_clone, user, None))
+        })
+        .await
+        .unwrap_or(Err(AuthError::InvalidSession));
 
         return match result {
-            Ok(user) => {
-                tracing::debug!(email = %user.email, role = %user.role, "Optional auth: session cookie authenticated");
-                let groups = user.groups_vec();
+            Ok(identity) => {
+                tracing::debug!(email = %identity.display_name(), role = %identity.role(), "Optional auth: session cookie authenticated");
                 let mut request = request;
-                request.extensions_mut().insert(AuthIdentity::User {
-                    email: user.email,
-                    role: user.role,
-                    groups,
-                });
+                request.extensions_mut().insert(identity);
                 next.run(request).await
             }
             Err(_) => {
@@ -578,6 +625,40 @@ pub async fn optional_auth(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cookies_are_read_from_every_cookie_header() {
+        // #328: an HTTP/2 client or a proxy can split cookies over several
+        // Cookie headers; the one we want may be in any of them.
+        let mut h = axum::http::HeaderMap::new();
+        h.append(
+            axum::http::header::COOKIE,
+            "theme=dark; a=1".parse().unwrap(),
+        );
+        h.append(
+            axum::http::header::COOKIE,
+            "rustguac_oidc_state=abc; rustguac_session=xyz"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            super::cookie_value(&h, "rustguac_oidc_state").as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            super::cookie_value(&h, "rustguac_session").as_deref(),
+            Some("xyz")
+        );
+        assert_eq!(super::cookie_value(&h, "a").as_deref(), Some("1"));
+        // A name that is a prefix of another is not confused with it.
+        assert_eq!(super::cookie_value(&h, "rustguac"), None);
+        assert_eq!(super::cookie_value(&h, "missing"), None);
+        let names: Vec<_> = super::cookie_pairs(&h).map(|(n, _)| n).collect();
+        assert_eq!(
+            names,
+            ["theme", "a", "rustguac_oidc_state", "rustguac_session"]
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -738,18 +819,30 @@ mod tests {
     }
 
     #[test]
-    fn test_has_role() {
+    fn identities_hold_their_roles_permissions() {
+        use crate::perms::Perm;
         let admin = AuthIdentity::ApiKey("admin".into());
-        assert!(admin.has_role("viewer"));
-        assert!(admin.has_role("admin"));
+        assert!(admin.has_perm(Perm::DocsView));
+        assert!(admin.has_perm(Perm::AdminRoles));
 
         let viewer = AuthIdentity::User {
             email: "test@test.com".into(),
             role: "viewer".into(),
             groups: vec![],
+            roles: vec!["viewer".to_string()],
+            perms: crate::perms::role_perms("viewer"),
         };
-        assert!(viewer.has_role("viewer"));
-        assert!(!viewer.has_role("operator"));
-        assert!(!viewer.has_role("admin"));
+        assert!(viewer.has_perm(Perm::DocsView));
+        assert!(!viewer.has_perm(Perm::ConnectionsConnect));
+        assert!(!viewer.has_perm(Perm::AdminRoles));
+
+        let unknown = AuthIdentity::User {
+            email: "test@test.com".into(),
+            role: "someday-custom".into(),
+            groups: vec![],
+            roles: vec!["someday-custom".to_string()],
+            perms: crate::perms::role_perms("someday-custom"),
+        };
+        assert_eq!(unknown.permissions(), crate::perms::PermSet::EMPTY);
     }
 }

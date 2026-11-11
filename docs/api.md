@@ -233,6 +233,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `dpi` | integer | All | Display DPI |
 | `banner` | string | All | Banner message shown before session starts |
 | `ssh_font_size` | integer | SSH | Terminal font size in points (default 12, 6 to 72) |
+| `ssh_color_scheme` | string | SSH | Terminal colours: `gray-black` (default), `white-black`, `green-black` or `black-white` (text on background) |
 | `wol_send_packet` | boolean | SSH, RDP, VNC | Send a Wake-on-LAN magic packet before connecting |
 | `wol_mac_addr` | string | SSH, RDP, VNC | MAC address to wake (required with `wol_send_packet`) |
 | `wol_broadcast_addr` | string | SSH, RDP, VNC | Broadcast address for the packet (guacd default `255.255.255.255`) |
@@ -901,19 +902,36 @@ No authentication required. Returns whether OIDC is enabled and the site title.
 
 ### `GET /api/me`
 
-Returns current user info. Requires authentication.
+Returns current user info. Requires authentication. `permissions` lists what the caller may do (see [Roles and permissions](roles-and-access-control.md#roles-and-permissions)); an admin API key holds every permission.
 
 ```json
 {
   "name": "User Name",
   "email": "user@example.com",
   "role": "operator",
+  "roles": ["operator"],
+  "permissions": ["connections.connect", "credentials.self", "docs.view"],
   "groups": ["engineering"],
   "auth_type": "oidc",
   "vault_enabled": true,
   "vault_configured": true
 }
 ```
+
+### Roles and permissions
+
+All need an admin API key or a user holding the permission named. Changes are recorded in the admin audit log. See [Roles and permissions](roles-and-access-control.md#roles-and-permissions) for the rules (nobody grants what they don't hold, the last way to manage roles is kept, and so on).
+
+| Endpoint | Needs | |
+|---|---|---|
+| `GET /api/admin/permissions` | `admin.roles` or `admin.users` | Every permission: `name`, `description`, `sensitive` |
+| `GET /api/admin/roles` | `admin.roles` or `admin.users` | Built-in and custom roles with their permissions |
+| `POST /api/admin/roles` | `admin.roles` | Create a custom role: `{"name", "display_name", "description", "permissions": [...]}` |
+| `PUT /api/admin/roles/{name}` | `admin.roles` | Change a custom role's display name, description and permissions |
+| `DELETE /api/admin/roles/{name}?reassign_to=ROLE` | `admin.roles` | Delete a custom role. If it's in use, `reassign_to` is required; without it the answer is `409` with `usage` listing the users, mappings and token caps |
+| `GET /api/users/{email}/access` | `admin.users` | A user's own role, the group mappings that apply, the roles in effect, and each permission with the roles granting it |
+| `GET /api/admin/admin-audit?limit=N` | `admin.audit` | Role, user and mapping changes, newest first |
+| `GET /api/me/token-roles` | logged in | Roles the caller can cap their own tokens at |
 
 ### `GET /auth/login`
 

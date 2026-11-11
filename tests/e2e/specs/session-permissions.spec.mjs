@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installApi } from '../lib/api.mjs';
+import { installApi, ROLE_PERMS } from '../lib/api.mjs';
 
 function gate() {
     let release;
@@ -7,7 +7,7 @@ function gate() {
     return { promise, release };
 }
 
-const me = { name: 'tester@example.com', role: 'admin', groups: ['everyone'], vault_enabled: true };
+const me = { name: 'tester@example.com', role: 'admin', permissions: ROLE_PERMS.admin, groups: ['everyone'], vault_enabled: true };
 const session = (id, owner, status = 'active') => ({
     session_id: id.repeat(8), session_type: 'rdp', hostname: 'example.internal',
     username: 'rdu-example', status, created_by: owner, active_connections: status === 'active' ? 1 : 0,
@@ -28,7 +28,7 @@ for (const role of ['admin', 'poweruser']) {
             const identityGate = gate(), sessionsGate = gate();
             const sessions = role === 'admin' ? [own, other, completed] : [own];
             await installApi(page, { role, routes: {
-                'GET /api/me': async () => { await identityGate.promise; return { ...me, role }; },
+                'GET /api/me': async () => { await identityGate.promise; return { ...me, role, permissions: ROLE_PERMS[role] }; },
                 'GET /api/sessions': async () => { await sessionsGate.promise; return sessions; }
             } });
             await page.goto('/sessions.html', { waitUntil: 'domcontentloaded' });
@@ -78,6 +78,19 @@ test('failed identity lookup does not paint guessed permissions', async ({ page 
 });
 
 for (const apiKey of [false, true]) {
+    test(`session actions follow explicit permissions (${apiKey ? 'scoped key' : 'custom role'})`, async ({ page }) => {
+        if (apiKey) await page.addInitScript(() => sessionStorage.setItem('rustguac_api_key', 'scoped-key'));
+        await installApi(page, { sessions: [own, other], routes: {
+            'GET /api/me': { ...me, role: apiKey ? 'admin' : 'support', permissions: ['sessions.view_all'] }
+        } });
+        await page.goto('/sessions.html');
+        await expect(page.locator('#session-list tr')).toHaveCount(2);
+        await expect(page.locator('[data-shadow]')).toHaveCount(0);
+        await expect(page.locator('[data-delete]')).toHaveCount(2);
+    });
+}
+
+for (const apiKey of [false, true]) {
     test(`identity recovers on the next poll without reloading (${apiKey ? 'API key' : 'OIDC'})`, async ({ page }) => {
         if (apiKey) await page.addInitScript(() => sessionStorage.setItem('rustguac_api_key', 'test-key'));
         let attempts = 0;
@@ -101,7 +114,7 @@ for (const role of ['admin', 'operator', 'viewer']) {
     test(`Connections preserves ${role} actions with delayed identity and credentials`, async ({ page }) => {
         const identityGate = gate(), credentialsGate = gate();
         const api = await installApi(page, { role, routes: {
-            'GET /api/me': async () => { await identityGate.promise; return { ...me, role }; },
+            'GET /api/me': async () => { await identityGate.promise; return { ...me, role, permissions: ROLE_PERMS[role] }; },
             'GET /api/me/credentials': async () => { await credentialsGate.promise; return { credentials: {} }; }
         } });
         await page.goto('/connections.html', { waitUntil: 'domcontentloaded' });

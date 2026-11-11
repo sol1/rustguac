@@ -482,6 +482,10 @@ pub struct AddressBookEntry {
     /// sessions. Lets operators tune readability independently of display DPI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_font_size: Option<u32>,
+    /// SSH terminal colours (`gray-black`, `white-black`, `green-black`,
+    /// `black-white`). None uses guacd's default, `gray-black`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_color_scheme: Option<String>,
     /// Wake-on-LAN: send a magic packet to wake the target before connecting.
     /// Passed through to guacd's `wol-send-packet` param (SSH/RDP/VNC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -703,6 +707,9 @@ pub struct EntryInfo {
     /// SSH terminal font size in points (SSH only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_font_size: Option<u32>,
+    /// SSH terminal colour scheme (SSH only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_color_scheme: Option<String>,
     /// Wake-on-LAN: send a magic packet before connecting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wol_send_packet: Option<bool>,
@@ -825,6 +832,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
                 .is_some_and(|t| !t.is_empty()),
             max_monitors: e.max_monitors,
             ssh_font_size: e.ssh_font_size,
+            ssh_color_scheme: e.ssh_color_scheme.clone(),
             wol_send_packet: e.wol_send_packet,
             wol_mac_addr: e.wol_mac_addr.clone(),
             wol_broadcast_addr: e.wol_broadcast_addr.clone(),

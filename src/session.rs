@@ -207,6 +207,9 @@ pub struct CreateSessionRequest {
     pub fence_all_targets: bool,
     /// SSH terminal font size in points (SSH only; default 12).
     pub ssh_font_size: Option<u32>,
+    /// SSH terminal colours, one of `guacd::SSH_COLOR_SCHEMES`.
+    #[serde(default)]
+    pub ssh_color_scheme: Option<String>,
     /// Wake-on-LAN: send a magic packet before connecting (SSH/RDP/VNC).
     pub wol_send_packet: Option<bool>,
     /// Wake-on-LAN: target MAC address.
@@ -981,35 +984,18 @@ impl SessionManager {
         // Enforce session limits (only count active/pending sessions)
         {
             let sessions = self.sessions.read().await;
-            let max_global = self.config.max_sessions;
-            let max_per_user = self.config.max_sessions_per_user;
-
-            if max_global > 0 {
-                let active_count = sessions.values().count(); // includes all states still in HashMap
-                if active_count >= max_global {
-                    return Err(SessionError::ValidationError(format!(
-                        "maximum concurrent sessions reached ({})",
-                        max_global
-                    )));
-                }
+            let mut live = Vec::with_capacity(sessions.len());
+            for session in sessions.values() {
+                let s = session.lock().await;
+                live.push((s.created_by.clone(), s.status.clone()));
             }
-
-            if max_per_user > 0 {
-                let mut user_count = 0usize;
-                for session in sessions.values() {
-                    let s = session.lock().await;
-                    if s.created_by == created_by
-                        && matches!(s.status, SessionStatus::Pending | SessionStatus::Active)
-                    {
-                        user_count += 1;
-                    }
-                }
-                if user_count >= max_per_user {
-                    return Err(SessionError::ValidationError(format!(
-                        "maximum sessions per user reached ({})",
-                        max_per_user
-                    )));
-                }
+            if let Some(msg) = session_limit_reached(
+                &live,
+                &created_by,
+                self.config.max_sessions,
+                self.config.max_sessions_per_user,
+            ) {
+                return Err(SessionError::ValidationError(msg));
             }
         }
 
@@ -1113,27 +1099,8 @@ impl SessionManager {
                 );
 
                 let (private_key, ssh_banner) = if req.generate_keypair.unwrap_or(false) {
-                    let keypair = ssh_key::PrivateKey::random(
-                        &mut ssh_key::rand_core::OsRng,
-                        ssh_key::Algorithm::Ed25519,
-                    )
-                    .map_err(|e| {
-                        SessionError::ValidationError(format!("keypair generation failed: {}", e))
-                    })?;
-
-                    let private_pem = keypair.to_openssh(ssh_key::LineEnding::LF).map_err(|e| {
-                        SessionError::ValidationError(format!("private key export failed: {}", e))
-                    })?;
-
-                    let public_key = format!(
-                        "{} rustguac-ephemeral",
-                        keypair.public_key().to_openssh().map_err(|e| {
-                            SessionError::ValidationError(format!(
-                                "public key export failed: {}",
-                                e
-                            ))
-                        })?
-                    );
+                    let (private_pem, public_key) =
+                        ephemeral_ssh_keypair().map_err(SessionError::ValidationError)?;
 
                     let auth_keys_path = if username.is_empty() {
                         "~/.ssh/authorized_keys".to_string()
@@ -1150,7 +1117,7 @@ impl SessionManager {
                     }
 
                     tracing::info!(session_id = %session_id, "Generated ephemeral SSH keypair");
-                    (Some(private_pem.to_string()), Some(banner))
+                    (Some(private_pem), Some(banner))
                 } else {
                     (req.private_key.clone(), None)
                 };
@@ -1212,6 +1179,7 @@ impl SessionManager {
                     font_size: req
                         .ssh_font_size
                         .map(|s| s.clamp(MIN_SSH_FONT, MAX_SSH_FONT)),
+                    color_scheme: ssh_color_scheme(req.ssh_color_scheme.as_deref())?,
                     wol: wol.clone(),
                 });
                 (
@@ -2883,6 +2851,72 @@ fn checked_spice_ca(ca: Option<String>) -> Result<Option<String>, SessionError> 
 /// directory under `home_base`, so only a plain name is accepted. Letters,
 /// digits, '.', '_' and '-', at most 32 characters (the Linux limit), not
 /// starting with '.' or '-' (which rules out `.` and `..`).
+/// An SSH colour scheme from a request: unset or blank for guacd's default,
+/// otherwise one of `guacd::SSH_COLOR_SCHEMES`.
+fn ssh_color_scheme(scheme: Option<&str>) -> Result<Option<String>, SessionError> {
+    match scheme.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(s) if crate::guacd::SSH_COLOR_SCHEMES.contains(&s) => Ok(Some(s.to_string())),
+        Some(s) => Err(SessionError::ValidationError(format!(
+            "ssh_color_scheme must be one of {}, not {s:?}",
+            crate::guacd::SSH_COLOR_SCHEMES.join(", ")
+        ))),
+    }
+}
+
+/// Whether a new session for `created_by` would exceed `max_sessions` or
+/// `max_sessions_per_user` (0 = unlimited), given every session still held
+/// in memory as (owner, status). Only pending and active sessions count:
+/// finished ones stay in memory for `session_cleanup_delay_secs` and must
+/// not use up the limits meanwhile (#332).
+fn session_limit_reached(
+    sessions: &[(String, SessionStatus)],
+    created_by: &str,
+    max_global: usize,
+    max_per_user: usize,
+) -> Option<String> {
+    let live =
+        |status: &SessionStatus| matches!(status, SessionStatus::Pending | SessionStatus::Active);
+    if max_global > 0 && sessions.iter().filter(|(_, st)| live(st)).count() >= max_global {
+        return Some(format!(
+            "maximum concurrent sessions reached ({max_global})"
+        ));
+    }
+    if max_per_user > 0
+        && sessions
+            .iter()
+            .filter(|(by, st)| by == created_by && live(st))
+            .count()
+            >= max_per_user
+    {
+        return Some(format!(
+            "maximum sessions per user reached ({max_per_user})"
+        ));
+    }
+    None
+}
+
+/// A fresh Ed25519 keypair for an ad-hoc SSH session: the private key in
+/// OpenSSH format, and the public key line to put in `authorized_keys`.
+fn ephemeral_ssh_keypair() -> Result<(String, String), String> {
+    let keypair = russh::keys::PrivateKey::random(
+        &mut russh::keys::key::safe_rng(),
+        russh::keys::Algorithm::Ed25519,
+    )
+    .map_err(|e| format!("keypair generation failed: {e}"))?;
+    let private_pem = keypair
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .map_err(|e| format!("private key export failed: {e}"))?;
+    let public_key = keypair
+        .public_key()
+        .to_openssh()
+        .map_err(|e| format!("public key export failed: {e}"))?;
+    Ok((
+        private_pem.to_string(),
+        format!("{public_key} rustguac-ephemeral"),
+    ))
+}
+
 pub(crate) fn valid_vdi_username(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 32
@@ -2954,6 +2988,69 @@ pub(crate) fn check_share_token_match(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ssh_color_schemes_are_checked() {
+        assert_eq!(ssh_color_scheme(None).unwrap(), None);
+        assert_eq!(ssh_color_scheme(Some(" ")).unwrap(), None);
+        assert_eq!(
+            ssh_color_scheme(Some("white-black")).unwrap().as_deref(),
+            Some("white-black")
+        );
+        for s in crate::guacd::SSH_COLOR_SCHEMES {
+            assert!(ssh_color_scheme(Some(s)).is_ok());
+        }
+        // guacd also takes custom palettes, but only the named ones are offered.
+        assert!(ssh_color_scheme(Some("foreground:rgb:ff/ff/ff")).is_err());
+        assert!(ssh_color_scheme(Some("pink-black")).is_err());
+    }
+
+    #[test]
+    fn only_pending_and_active_sessions_count_towards_the_limits() {
+        use SessionStatus::*;
+        let held = |v: &[(&str, SessionStatus)]| -> Vec<(String, SessionStatus)> {
+            v.iter().map(|(u, s)| (u.to_string(), s.clone())).collect()
+        };
+        // #332: two finished sessions waiting for cleanup don't fill a
+        // global limit of 2.
+        let s = held(&[("a", Completed), ("b", Error), ("c", Active)]);
+        assert_eq!(session_limit_reached(&s, "d", 2, 0), None);
+        let s = held(&[("a", Active), ("b", Pending), ("c", Completed)]);
+        assert!(session_limit_reached(&s, "d", 2, 0)
+            .unwrap()
+            .contains("concurrent"));
+        // Per user, as before.
+        let s = held(&[("a", Active), ("a", Completed), ("b", Active)]);
+        assert_eq!(session_limit_reached(&s, "a", 0, 2), None);
+        let s = held(&[("a", Active), ("a", Pending)]);
+        assert!(session_limit_reached(&s, "a", 0, 2)
+            .unwrap()
+            .contains("per user"));
+        // 0 = unlimited.
+        assert_eq!(session_limit_reached(&s, "a", 0, 0), None);
+    }
+
+    #[test]
+    fn ephemeral_keypairs_are_fresh_ed25519_in_openssh_format() {
+        let (private_pem, public_key) = ephemeral_ssh_keypair().unwrap();
+        assert!(private_pem.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+        assert!(public_key.starts_with("ssh-ed25519 "));
+        assert!(public_key.ends_with(" rustguac-ephemeral"));
+        // The private key round-trips and matches the public key it came with.
+        let parsed = russh::keys::PrivateKey::from_openssh(&private_pem).unwrap();
+        assert_eq!(
+            format!(
+                "{} rustguac-ephemeral",
+                parsed.public_key().to_openssh().unwrap()
+            ),
+            public_key
+        );
+        assert_ne!(
+            ephemeral_ssh_keypair().unwrap().1,
+            public_key,
+            "each call is a new key"
+        );
+    }
+
     use super::*;
 
     #[test]
