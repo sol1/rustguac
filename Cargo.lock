@@ -3162,7 +3162,7 @@ dependencies = [
 
 [[package]]
 name = "rustguac"
-version = "1.13.5"
+version = "1.14.0"
 dependencies = [
  "aes",
  "assert_cmd",
