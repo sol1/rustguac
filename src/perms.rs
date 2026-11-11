@@ -96,6 +96,47 @@ impl Perm {
         }
     }
 
+    /// The permission with this name, if this release knows it. A name from
+    /// a newer release is unknown here and grants nothing.
+    pub fn from_name(name: &str) -> Option<Perm> {
+        Perm::ALL.into_iter().find(|p| p.name() == name)
+    }
+
+    /// What it allows, for admins choosing permissions.
+    pub fn description(self) -> &'static str {
+        match self {
+            Perm::ConnectionsConnect => "See folders and entries in Connections and connect to them; list and end own sessions and VDI containers",
+            Perm::CredentialsSelf => "Save own credential variables",
+            Perm::ConnectionsAdhoc => "Ad-hoc connections to any host (Connect to a host), ad-hoc links and the SSH host-key probe",
+            Perm::RecordingsView => "List and play recordings and typescripts",
+            Perm::ReportsView => "Reports",
+            Perm::TokensSelf => "Create and revoke own API tokens",
+            Perm::ConnectionsEdit => "Create, edit, move, copy and delete entries and folders, and folder default credentials; sees and connects to every folder",
+            Perm::FoldersManageAccess => "Change who can open a folder",
+            Perm::ConnectionsUnrestricted => "Ad-hoc and link sessions skip the ad-hoc policy (network fencing, entry-only options, site limits)",
+            Perm::SessionsViewAll => "See, thumbnail and end anyone's session",
+            Perm::SessionsShadow => "Shadow someone else's session",
+            Perm::RecordingsDelete => "Delete recordings",
+            Perm::AdminUsers => "Manage users and the API tokens issued to them",
+            Perm::AdminRoles => "Roles, role assignment and group mappings",
+            Perm::AdminAudit => "Audit logs",
+            Perm::AdminSystem => "Detailed system status",
+            Perm::DocsView => "Documentation",
+        }
+    }
+
+    /// Whether holding this is close to holding admin, so granting it
+    /// deserves a warning.
+    pub fn sensitive(self) -> bool {
+        matches!(
+            self,
+            Perm::FoldersManageAccess
+                | Perm::ConnectionsUnrestricted
+                | Perm::AdminUsers
+                | Perm::AdminRoles
+        )
+    }
+
     fn bit(self) -> u32 {
         1 << (self as u32)
     }
@@ -128,6 +169,10 @@ impl PermSet {
 
     pub fn union(self, other: PermSet) -> PermSet {
         PermSet(self.0 | other.0)
+    }
+
+    pub fn intersection(self, other: PermSet) -> PermSet {
+        PermSet(self.0 & other.0)
     }
 
     /// Whether every permission in `self` is also in `other`.

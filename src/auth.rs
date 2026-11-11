@@ -77,8 +77,16 @@ pub enum AuthIdentity {
     /// OIDC user with email, role, and group memberships.
     User {
         email: String,
+        /// The role shown for the user: their recorded role, or for an API
+        /// token the lower of that and the token's cap.
         role: String,
         groups: Vec<String>,
+        /// The roles in effect (#294): every role their groups map to, or
+        /// their directly assigned role when no mapping matches.
+        roles: Vec<String>,
+        /// The union of those roles' permissions, cut down to the token's
+        /// cap for an API token.
+        perms: crate::perms::PermSet,
     },
 }
 
@@ -124,7 +132,7 @@ impl AuthIdentity {
     pub fn permissions(&self) -> crate::perms::PermSet {
         match self {
             AuthIdentity::ApiKey(_) => crate::perms::PermSet::all(),
-            AuthIdentity::User { role, .. } => crate::perms::role_perms(role),
+            AuthIdentity::User { perms, .. } => *perms,
         }
     }
 
@@ -142,6 +150,39 @@ pub fn role_level(role: &str) -> u8 {
         "operator" => 2,
         "viewer" => 1,
         _ => 0,
+    }
+}
+
+/// The identity of an authenticated user: their roles and permissions as the
+/// database has them now, cut down to `cap` (a token's `max_role`). A
+/// database error grants nothing.
+pub fn user_identity(db: &Db, user: db::User, cap: Option<&str>) -> AuthIdentity {
+    let access = crate::roles::user_access(db, &user).unwrap_or_else(|e| {
+        tracing::error!(error = %e, email = %user.email, "could not resolve the user's roles");
+        crate::roles::UserAccess {
+            direct_role: user.role.clone(),
+            direct_role_in_effect: true,
+            group_roles: Vec::new(),
+            roles: Vec::new(),
+            permissions: crate::perms::PermSet::EMPTY,
+        }
+    });
+    let mut perms = access.permissions;
+    let role = match cap {
+        Some(cap) => {
+            perms = perms.intersection(
+                crate::roles::role_perms(db, cap).unwrap_or(crate::perms::PermSet::EMPTY),
+            );
+            compute_effective_role(&user.role, &Some(cap.to_string()))
+        }
+        None => user.role.clone(),
+    };
+    AuthIdentity::User {
+        groups: user.groups_vec(),
+        email: user.email,
+        role,
+        roles: access.roles,
+        perms,
     }
 }
 
@@ -349,23 +390,20 @@ pub async fn require_auth(
             Err(AuthError::InvalidKey) => {
                 // Not found in admins table — try user API tokens
                 let db_clone = db.clone();
-                let token_result =
-                    tokio::task::spawn_blocking(move || db::validate_user_token(&db_clone, &key))
-                        .await
-                        .unwrap_or(Err(AuthError::InvalidKey));
+                let token_result = tokio::task::spawn_blocking(move || {
+                    db::validate_user_token(&db_clone, &key).map(|(user, token_meta)| {
+                        let id = user_identity(&db_clone, user, token_meta.max_role.as_deref());
+                        (id, token_meta)
+                    })
+                })
+                .await
+                .unwrap_or(Err(AuthError::InvalidKey));
 
                 match token_result {
-                    Ok((user, token_meta)) => {
-                        let effective_role =
-                            compute_effective_role(&user.role, &token_meta.max_role);
-                        tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "User token authenticated");
-                        let groups = user.groups_vec();
+                    Ok((identity, token_meta)) => {
+                        tracing::debug!(email = %identity.display_name(), role = %identity.role(), token = %token_meta.name, "User token authenticated");
                         let mut request = request;
-                        request.extensions_mut().insert(AuthIdentity::User {
-                            email: user.email,
-                            role: effective_role,
-                            groups,
-                        });
+                        request.extensions_mut().insert(identity);
                         return next.run(request).await;
                     }
                     Err(_) => {
@@ -393,21 +431,18 @@ pub async fn require_auth(
     let session_token = extract_cookie(&request, "rustguac_session");
     if let Some(token) = session_token {
         let db_clone = db.clone();
-        let result =
-            tokio::task::spawn_blocking(move || db::validate_auth_session(&db_clone, &token))
-                .await
-                .unwrap_or(Err(AuthError::InvalidSession));
+        let result = tokio::task::spawn_blocking(move || {
+            db::validate_auth_session(&db_clone, &token)
+                .map(|user| user_identity(&db_clone, user, None))
+        })
+        .await
+        .unwrap_or(Err(AuthError::InvalidSession));
 
         return match result {
-            Ok(user) => {
-                tracing::debug!(email = %user.email, role = %user.role, "Session cookie authenticated");
-                let groups = user.groups_vec();
+            Ok(identity) => {
+                tracing::debug!(email = %identity.display_name(), role = %identity.role(), "Session cookie authenticated");
                 let mut request = request;
-                request.extensions_mut().insert(AuthIdentity::User {
-                    email: user.email,
-                    role: user.role,
-                    groups,
-                });
+                request.extensions_mut().insert(identity);
                 next.run(request).await
             }
             Err(_) => {
@@ -530,23 +565,20 @@ pub async fn optional_auth(
             Err(AuthError::InvalidKey) => {
                 // Not found in admins table — try user API tokens
                 let db_clone = db.clone();
-                let token_result =
-                    tokio::task::spawn_blocking(move || db::validate_user_token(&db_clone, &key))
-                        .await
-                        .unwrap_or(Err(AuthError::InvalidKey));
+                let token_result = tokio::task::spawn_blocking(move || {
+                    db::validate_user_token(&db_clone, &key).map(|(user, token_meta)| {
+                        let id = user_identity(&db_clone, user, token_meta.max_role.as_deref());
+                        (id, token_meta)
+                    })
+                })
+                .await
+                .unwrap_or(Err(AuthError::InvalidKey));
 
                 match token_result {
-                    Ok((user, token_meta)) => {
-                        let effective_role =
-                            compute_effective_role(&user.role, &token_meta.max_role);
-                        tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "Optional auth: user token authenticated");
-                        let groups = user.groups_vec();
+                    Ok((identity, token_meta)) => {
+                        tracing::debug!(email = %identity.display_name(), role = %identity.role(), token = %token_meta.name, "Optional auth: user token authenticated");
                         let mut request = request;
-                        request.extensions_mut().insert(AuthIdentity::User {
-                            email: user.email,
-                            role: effective_role,
-                            groups,
-                        });
+                        request.extensions_mut().insert(identity);
                         return next.run(request).await;
                     }
                     Err(_) => {
@@ -566,21 +598,18 @@ pub async fn optional_auth(
     let session_token = extract_cookie(&request, "rustguac_session");
     if let Some(token) = session_token {
         let db_clone = db.clone();
-        let result =
-            tokio::task::spawn_blocking(move || db::validate_auth_session(&db_clone, &token))
-                .await
-                .unwrap_or(Err(AuthError::InvalidSession));
+        let result = tokio::task::spawn_blocking(move || {
+            db::validate_auth_session(&db_clone, &token)
+                .map(|user| user_identity(&db_clone, user, None))
+        })
+        .await
+        .unwrap_or(Err(AuthError::InvalidSession));
 
         return match result {
-            Ok(user) => {
-                tracing::debug!(email = %user.email, role = %user.role, "Optional auth: session cookie authenticated");
-                let groups = user.groups_vec();
+            Ok(identity) => {
+                tracing::debug!(email = %identity.display_name(), role = %identity.role(), "Optional auth: session cookie authenticated");
                 let mut request = request;
-                request.extensions_mut().insert(AuthIdentity::User {
-                    email: user.email,
-                    role: user.role,
-                    groups,
-                });
+                request.extensions_mut().insert(identity);
                 next.run(request).await
             }
             Err(_) => {
@@ -800,6 +829,8 @@ mod tests {
             email: "test@test.com".into(),
             role: "viewer".into(),
             groups: vec![],
+            roles: vec!["viewer".to_string()],
+            perms: crate::perms::role_perms("viewer"),
         };
         assert!(viewer.has_perm(Perm::DocsView));
         assert!(!viewer.has_perm(Perm::ConnectionsConnect));
@@ -809,6 +840,8 @@ mod tests {
             email: "test@test.com".into(),
             role: "someday-custom".into(),
             groups: vec![],
+            roles: vec!["someday-custom".to_string()],
+            perms: crate::perms::role_perms("someday-custom"),
         };
         assert_eq!(unknown.permissions(), crate::perms::PermSet::EMPTY);
     }

@@ -1746,6 +1746,116 @@ pub struct CreateUserRequest {
 
 /// POST /api/users — Pre-provision a user for OIDC login (needed when
 /// `auto_create_users = false`). Admin only.
+/// Check a role the caller wants to hand out, as a user's role, a group
+/// mapping or a token cap (#294): it must exist, it must grant nothing the
+/// caller doesn't hold, and `change`, if given, must leave something able to
+/// manage roles.
+#[allow(clippy::result_large_err)]
+async fn check_role_grant(
+    database: &Db,
+    caller: &AuthIdentity,
+    role: Option<&str>,
+    change: Option<crate::roles::Change>,
+) -> Result<(), Response> {
+    let db = database.clone();
+    let role = role.map(str::to_string);
+    let held = caller.permissions();
+    let checked = tokio::task::spawn_blocking(
+        move || -> rusqlite::Result<Option<(StatusCode, &'static str)>> {
+            if let Some(role) = role.as_deref() {
+                if !crate::roles::role_exists(&db, role)? {
+                    return Ok(Some((StatusCode::BAD_REQUEST, "unknown role")));
+                }
+                if !crate::roles::role_perms(&db, role)?.is_subset(held) {
+                    return Ok(Some((
+                        StatusCode::FORBIDDEN,
+                        "that role grants permissions you don't hold",
+                    )));
+                }
+            }
+            if let Some(change) = change {
+                if !crate::roles::admin_roles_survives(&db, &change)? {
+                    return Ok(Some((
+                        StatusCode::CONFLICT,
+                        "this would leave nobody able to manage roles",
+                    )));
+                }
+            }
+            Ok(None)
+        },
+    )
+    .await;
+    match checked {
+        Ok(Ok(None)) => Ok(()),
+        Ok(Ok(Some((code, msg)))) => Err((code, Json(json!({ "error": msg }))).into_response()),
+        _ => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to check the role"})),
+        )
+            .into_response()),
+    }
+}
+
+/// Check the caller may disable or delete `email` (#294): not themselves,
+/// not someone holding a permission they lack, and not the last thing able
+/// to manage roles.
+#[allow(clippy::result_large_err)]
+async fn check_user_target(
+    database: &Db,
+    caller: &AuthIdentity,
+    email: &str,
+    change: crate::roles::Change,
+) -> Result<(), Response> {
+    if caller.display_name().eq_ignore_ascii_case(email.trim()) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "you can't do that to your own account"})),
+        )
+            .into_response());
+    }
+    let (db, email) = (database.clone(), email.to_string());
+    let held = caller.permissions();
+    let target = tokio::task::spawn_blocking(move || {
+        db::get_user_by_email(&db, &email)
+            .ok()
+            .and_then(|u| crate::roles::user_access(&db, &u).ok())
+            .map(|a| a.permissions)
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some(target) = target {
+        if !target.is_subset(held) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "that user holds permissions you don't"})),
+            )
+                .into_response());
+        }
+    }
+    check_role_grant(database, caller, None, Some(change)).await
+}
+
+/// Record a user, role or mapping change in the admin audit log. Headline
+/// only, never secrets.
+fn audit_admin(
+    database: &Db,
+    caller: &AuthIdentity,
+    action: &str,
+    target: &str,
+    details: Option<String>,
+) {
+    let (db, actor, action, target) = (
+        database.clone(),
+        caller.display_name().to_string(),
+        action.to_string(),
+        target.to_string(),
+    );
+    tokio::task::spawn_blocking(move || {
+        crate::roles::log_admin_event(&db, &actor, &action, &target, details.as_deref(), None)
+    });
+}
+
 pub async fn create_user(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -1768,12 +1878,11 @@ pub async fn create_user(
     if let Err(msg) = db::check_user_email(&email).and_then(|_| db::check_user_name(&name)) {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response();
     }
-    if !crate::perms::BUILTIN_ROLES.contains(&req.role.as_str()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "role must be admin, poweruser, operator, or viewer"})),
-        )
-            .into_response();
+    let Some(Extension(ref caller)) = identity else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if let Err(r) = check_role_grant(&database, caller, Some(&req.role), None).await {
+        return r;
     }
 
     let db_clone = database.clone();
@@ -1788,6 +1897,7 @@ pub async fn create_user(
     {
         Ok(Ok(user)) => {
             tracing::info!(admin = %admin, email = %log_email, role = %log_role, "user added");
+            audit_admin(&database, caller, "user.create", &log_email, Some(format!("role={log_role}")));
             (StatusCode::CREATED, Json(json!(user))).into_response()
         }
         Ok(Err(db::CreateUserError::Exists)) => (
@@ -1825,18 +1935,44 @@ pub async fn set_user_role(
         }
     }
 
-    if !crate::perms::BUILTIN_ROLES.contains(&req.role.as_str()) {
+    let Some(Extension(ref caller)) = identity else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    // Nobody changes the role they are using (#294).
+    if caller.display_name().eq_ignore_ascii_case(email.trim()) {
         return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "role must be admin, poweruser, operator, or viewer"})),
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "you can't change your own role"})),
         )
             .into_response();
     }
+    let change = crate::roles::Change::UserRole(email.clone(), req.role.clone());
+    if let Err(r) = check_role_grant(&database, caller, Some(&req.role), Some(change)).await {
+        return r;
+    }
+    let old_role = {
+        let (db, e) = (database.clone(), email.clone());
+        tokio::task::spawn_blocking(move || db::get_user_by_email(&db, &e).ok().map(|u| u.role))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    };
 
     let db_clone = database.clone();
     let role = req.role.clone();
+    let target = email.clone();
     match tokio::task::spawn_blocking(move || db::set_user_role(&db_clone, &email, &role)).await {
-        Ok(Ok(true)) => Json(json!({"ok": true})).into_response(),
+        Ok(Ok(true)) => {
+            audit_admin(
+                &database,
+                caller,
+                "user.role",
+                &target,
+                Some(format!("{old_role} -> {}", req.role)),
+            );
+            Json(json!({"ok": true})).into_response()
+        }
         Ok(Ok(false)) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "user not found"})),
@@ -1866,9 +2002,20 @@ pub async fn delete_user(
         }
     }
 
+    let Some(Extension(ref caller)) = identity else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let change = crate::roles::Change::UserDeleted(email.clone());
+    if let Err(r) = check_user_target(&database, caller, &email, change).await {
+        return r;
+    }
     let db_clone = database.clone();
+    let target = email.clone();
     match tokio::task::spawn_blocking(move || db::delete_user(&db_clone, &email)).await {
-        Ok(Ok(true)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(true)) => {
+            audit_admin(&database, caller, "user.delete", &target, None);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(Ok(false)) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "user not found"})),
@@ -1944,6 +2091,10 @@ pub async fn me(
                 "name": id.display_name(),
                 "role": id.role(),
                 "permissions": id.permissions().names(),
+                "roles": match &id {
+                    AuthIdentity::User { roles, .. } => roles.clone(),
+                    AuthIdentity::ApiKey(_) => vec!["admin".to_string()],
+                },
                 "groups": id.groups(),
                 "vault_enabled": vault_available,
                 "vault_configured": vault_configured.0,
@@ -2011,9 +2162,20 @@ pub async fn disable_user(
             .into_response();
     }
 
+    let Some(Extension(ref caller)) = identity else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let change = crate::roles::Change::UserDisabled(email.clone());
+    if let Err(r) = check_user_target(&database, caller, &email, change).await {
+        return r;
+    }
     let db_clone = database.clone();
+    let target = email.clone();
     match tokio::task::spawn_blocking(move || db::disable_user(&db_clone, &email)).await {
-        Ok(Ok(true)) => Json(json!({"ok": true})).into_response(),
+        Ok(Ok(true)) => {
+            audit_admin(&database, caller, "user.disable", &target, None);
+            Json(json!({"ok": true})).into_response()
+        }
         Ok(Ok(false)) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "user not found"})),
@@ -2046,8 +2208,14 @@ pub async fn enable_user(
     }
 
     let db_clone = database.clone();
+    let target = email.clone();
     match tokio::task::spawn_blocking(move || db::enable_user(&db_clone, &email)).await {
-        Ok(Ok(true)) => Json(json!({"ok": true})).into_response(),
+        Ok(Ok(true)) => {
+            if let Some(Extension(ref caller)) = identity {
+                audit_admin(&database, caller, "user.enable", &target, None);
+            }
+            Json(json!({"ok": true})).into_response()
+        }
         Ok(Ok(false)) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "user not found"})),
@@ -2128,6 +2296,16 @@ pub async fn list_known_groups(
 }
 
 /// POST /api/admin/group-mappings — Create a group-to-role mapping. Admin only.
+/// The group mapping with this id, if any.
+async fn mapping_by_id(database: &Db, id: i64) -> Option<db::GroupRoleMapping> {
+    let db = database.clone();
+    tokio::task::spawn_blocking(move || db::list_group_mappings(&db).ok())
+        .await
+        .ok()
+        .flatten()
+        .and_then(|all| all.into_iter().find(|m| m.id == id))
+}
+
 pub async fn create_group_mapping(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -2145,21 +2323,30 @@ pub async fn create_group_mapping(
             .into_response();
     }
 
-    if !crate::perms::BUILTIN_ROLES.contains(&req.role.as_str()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "role must be admin, poweruser, operator, or viewer"})),
-        )
-            .into_response();
+    let Some(Extension(ref caller)) = identity else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let change = crate::roles::Change::Mappings(vec![(req.group.clone(), Some(req.role.clone()))]);
+    if let Err(r) = check_role_grant(&database, caller, Some(&req.role), Some(change)).await {
+        return r;
     }
-
     let db_clone = database.clone();
+    let (group, role) = (req.group.clone(), req.role.clone());
     match tokio::task::spawn_blocking(move || {
         db::create_group_mapping(&db_clone, &req.group, &req.role)
     })
     .await
     {
-        Ok(Ok(mapping)) => (StatusCode::CREATED, Json(json!(mapping))).into_response(),
+        Ok(Ok(mapping)) => {
+            audit_admin(
+                &database,
+                caller,
+                "mapping.create",
+                &group,
+                Some(format!("role={role}")),
+            );
+            (StatusCode::CREATED, Json(json!(mapping))).into_response()
+        }
         Ok(Err(e)) => {
             let msg = e.to_string();
             if msg.contains("UNIQUE") {
@@ -2209,21 +2396,39 @@ pub async fn update_group_mapping(
             .into_response();
     }
 
-    if !crate::perms::BUILTIN_ROLES.contains(&req.role.as_str()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "role must be admin, poweruser, operator, or viewer"})),
-        )
-            .into_response();
+    let Some(Extension(ref caller)) = identity else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let old = mapping_by_id(&database, id).await;
+    let mut changes = Vec::new();
+    if let Some(ref old) = old {
+        changes.push((old.oidc_group.clone(), None));
     }
-
+    changes.push((req.group.clone(), Some(req.role.clone())));
+    let change = crate::roles::Change::Mappings(changes);
+    if let Err(r) = check_role_grant(&database, caller, Some(&req.role), Some(change)).await {
+        return r;
+    }
     let db_clone = database.clone();
+    let (group, role) = (req.group.clone(), req.role.clone());
     match tokio::task::spawn_blocking(move || {
         db::update_group_mapping(&db_clone, id, &req.group, &req.role)
     })
     .await
     {
-        Ok(Ok(true)) => Json(json!({"ok": true})).into_response(),
+        Ok(Ok(true)) => {
+            let was = old
+                .map(|m| format!("{} {} -> ", m.oidc_group, m.role))
+                .unwrap_or_default();
+            audit_admin(
+                &database,
+                caller,
+                "mapping.update",
+                &group,
+                Some(format!("{was}{group} {role}")),
+            );
+            Json(json!({"ok": true})).into_response()
+        }
         Ok(Ok(false)) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "mapping not found"})),
@@ -2271,9 +2476,30 @@ pub async fn delete_group_mapping(
             .into_response();
     }
 
+    let Some(Extension(ref caller)) = identity else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let old = mapping_by_id(&database, id).await;
+    if let Some(ref old) = old {
+        let change = crate::roles::Change::Mappings(vec![(old.oidc_group.clone(), None)]);
+        if let Err(r) = check_role_grant(&database, caller, None, Some(change)).await {
+            return r;
+        }
+    }
     let db_clone = database.clone();
     match tokio::task::spawn_blocking(move || db::delete_group_mapping(&db_clone, id)).await {
-        Ok(Ok(true)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(true)) => {
+            if let Some(old) = old {
+                audit_admin(
+                    &database,
+                    caller,
+                    "mapping.delete",
+                    &old.oidc_group,
+                    Some(format!("role={}", old.role)),
+                );
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(Ok(false)) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "mapping not found"})),
@@ -2632,12 +2858,23 @@ pub type VaultState = Arc<VaultBackends>;
 include!(concat!(env!("OUT_DIR"), "/docs-rendered.rs"));
 
 /// GET /api/docs — Return rendered documentation sections. No auth required.
-pub async fn get_docs() -> impl IntoResponse {
+pub async fn get_docs(identity: Option<Extension<AuthIdentity>>) -> Response {
+    match identity {
+        Some(Extension(id)) if id.has_perm(Perm::DocsView) => {}
+        Some(_) => return forbidden("docs.view required"),
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "authentication required"})),
+            )
+                .into_response()
+        }
+    }
     let sections: Vec<serde_json::Value> = DOCS
         .iter()
         .map(|(slug, title, html)| json!({ "slug": slug, "title": title, "html": html }))
         .collect();
-    Json(json!(sections))
+    Json(json!(sections)).into_response()
 }
 
 /// Helper: check if the identity has group access to a folder, honouring
@@ -4591,19 +4828,35 @@ pub async fn ab_create_folder(
         }
     };
 
+    // Without folders.manage_access a new folder gets no access lists of its
+    // own: a top-level folder is then admins and editors only, a subfolder
+    // inherits its parent's access (#294).
+    let can_manage_access = identity
+        .as_ref()
+        .is_some_and(|Extension(id)| id.has_perm(Perm::FoldersManageAccess));
+    if !can_manage_access && (!req.allowed_groups.is_empty() || !req.allowed_users.is_empty()) {
+        return ab_error(
+            StatusCode::FORBIDDEN,
+            "setting who can open a folder needs folders.manage_access",
+        );
+    }
+    let inherit = if can_manage_access {
+        req.inherit_from_parent
+    } else {
+        req.name.contains('/')
+    };
     let allowed_users = match normalize_allowed_users(req.allowed_users) {
         Ok(u) => u,
         Err(msg) => return ab_error(StatusCode::BAD_REQUEST, msg),
     };
     let allowed_count = req.allowed_groups.len();
     let users_count = allowed_users.len();
-    let inherit = req.inherit_from_parent;
     let config = FolderConfig {
         allowed_groups: req.allowed_groups,
         allowed_users,
         description: req.description,
         display_name: req.display_name.trim().to_string(),
-        inherit_from_parent: req.inherit_from_parent,
+        inherit_from_parent: inherit,
     };
 
     match vault
@@ -4682,6 +4935,39 @@ pub async fn ab_update_folder(
                 .into_response()
         }
     };
+
+    // Who can open the folder only changes with folders.manage_access (#294).
+    let can_manage_access = identity
+        .as_ref()
+        .is_some_and(|Extension(id)| id.has_perm(Perm::FoldersManageAccess));
+    if !can_manage_access {
+        let current = match vault.get_folder_config(&scope, &folder).await {
+            Ok(c) => c,
+            Err(VaultError::NotFound) => {
+                return ab_error(StatusCode::NOT_FOUND, "folder not found")
+            }
+            Err(e) => return ab_error(StatusCode::BAD_GATEWAY, e.to_string()),
+        };
+        let same = |a: &[String], b: &[String]| {
+            let (mut a, mut b) = (a.to_vec(), b.to_vec());
+            a.sort();
+            b.sort();
+            a == b
+        };
+        let users_changed = req
+            .allowed_users
+            .as_deref()
+            .is_some_and(|u| !same(u, &current.allowed_users));
+        if !same(&req.allowed_groups, &current.allowed_groups)
+            || users_changed
+            || req.inherit_from_parent != current.inherit_from_parent
+        {
+            return ab_error(
+                StatusCode::FORBIDDEN,
+                "changing who can open a folder needs folders.manage_access",
+            );
+        }
+    }
 
     // Fields the request may leave out keep their stored values, so the
     // stored config is read once when any of them is missing.
@@ -6181,20 +6467,10 @@ pub async fn create_my_token(
     };
 
     // Validate max_role if provided
+    // A token can't be capped at a role granting more than its owner holds.
     if let Some(ref max_role) = req.max_role {
-        if !crate::perms::BUILTIN_ROLES.contains(&max_role.as_str()) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "max_role must be admin, poweruser, operator, or viewer"})),
-            )
-                .into_response();
-        }
-        if !crate::perms::role_perms(max_role).is_subset(id.permissions()) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "max_role cannot exceed your current role"})),
-            )
-                .into_response();
+        if let Err(r) = check_role_grant(&database, &id, Some(max_role), None).await {
+            return r;
         }
     }
 
@@ -6858,16 +7134,6 @@ pub async fn admin_create_user_token(
             .into_response();
     }
 
-    if let Some(ref max_role) = req.max_role {
-        if !crate::perms::BUILTIN_ROLES.contains(&max_role.as_str()) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "max_role must be admin, poweruser, operator, or viewer"})),
-            )
-                .into_response();
-        }
-    }
-
     let db_clone = database.clone();
     let target_email = req.email.clone();
     let user =
@@ -6892,7 +7158,26 @@ pub async fn admin_create_user_token(
         };
 
     if let Some(ref max_role) = req.max_role {
-        if !crate::perms::role_perms(max_role).is_subset(crate::perms::role_perms(&user.role)) {
+        let (db, cap, u) = (database.clone(), max_role.clone(), user.clone());
+        let fits = tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<bool>> {
+            if !crate::roles::role_exists(&db, &cap)? {
+                return Ok(None);
+            }
+            let held = crate::roles::user_access(&db, &u)?.permissions;
+            Ok(Some(crate::roles::role_perms(&db, &cap)?.is_subset(held)))
+        })
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten();
+        if fits.is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "unknown role"})),
+            )
+                .into_response();
+        }
+        if fits != Some(true) {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": format!("max_role '{}' exceeds user's role '{}'", max_role, user.role)})),
@@ -7635,8 +7920,536 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+// ── Roles and permissions (#294) ──
+
+fn forbidden(msg: &str) -> Response {
+    (StatusCode::FORBIDDEN, Json(json!({ "error": msg }))).into_response()
+}
+
+fn caller_holds(
+    identity: &Option<Extension<AuthIdentity>>,
+    any_of: &[Perm],
+) -> Option<AuthIdentity> {
+    match identity {
+        Some(Extension(id)) if any_of.iter().any(|p| id.has_perm(*p)) => Some(id.clone()),
+        _ => None,
+    }
+}
+
+/// The roles the caller is using right now, which they may not edit or
+/// delete.
+fn roles_in_use_by(id: &AuthIdentity) -> Vec<String> {
+    match id {
+        AuthIdentity::User { roles, .. } => roles.clone(),
+        AuthIdentity::ApiKey(_) => Vec::new(),
+    }
+}
+
+/// GET /api/admin/permissions — every permission, with what it allows.
+pub async fn list_permissions(identity: Option<Extension<AuthIdentity>>) -> Response {
+    if caller_holds(&identity, &[Perm::AdminRoles, Perm::AdminUsers]).is_none() {
+        return forbidden("admin.roles or admin.users required");
+    }
+    let list: Vec<_> = Perm::ALL
+        .iter()
+        .map(|p| json!({"name": p.name(), "description": p.description(), "sensitive": p.sensitive()}))
+        .collect();
+    Json(list).into_response()
+}
+
+/// GET /api/admin/roles — built-in and custom roles with their permissions.
+pub async fn list_roles(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> Response {
+    if caller_holds(&identity, &[Perm::AdminRoles, Perm::AdminUsers]).is_none() {
+        return forbidden("admin.roles or admin.users required");
+    }
+    let db = database.clone();
+    let custom =
+        match tokio::task::spawn_blocking(move || crate::roles::list_custom_roles(&db)).await {
+            Ok(Ok(c)) => c,
+            _ => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "failed to list roles"})),
+                )
+                    .into_response()
+            }
+        };
+    let mut out: Vec<serde_json::Value> = crate::perms::BUILTIN_ROLES
+        .iter()
+        .rev()
+        .map(|r| {
+            json!({
+                "name": r, "display_name": r, "description": "", "builtin": true,
+                "permissions": crate::perms::role_perms(r).names(),
+            })
+        })
+        .collect();
+    out.extend(custom.into_iter().map(|r| {
+        json!({
+            "name": r.name, "display_name": r.display_name, "description": r.description,
+            "builtin": false, "permissions": r.permissions,
+            "created_at": r.created_at, "updated_at": r.updated_at,
+        })
+    }));
+    Json(out).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct RoleRequest {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub permissions: Vec<String>,
+}
+
+fn role_error(e: crate::roles::RoleError) -> Response {
+    use crate::roles::RoleError::*;
+    let code = match e {
+        InvalidName | UnknownPermission(_) => StatusCode::BAD_REQUEST,
+        NameTaken | InUse(_) => StatusCode::CONFLICT,
+        NotFound => StatusCode::NOT_FOUND,
+        BuiltIn => StatusCode::FORBIDDEN,
+        Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let usage = match &e {
+        InUse(u) => Some(json!(u)),
+        _ => None,
+    };
+    (
+        code,
+        Json(json!({ "error": e.to_string(), "usage": usage })),
+    )
+        .into_response()
+}
+
+/// POST /api/admin/roles — create a custom role. Its permissions must all
+/// be ones the caller holds.
+pub async fn create_role(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Json(req): Json<RoleRequest>,
+) -> Response {
+    let Some(caller) = caller_holds(&identity, &[Perm::AdminRoles]) else {
+        return forbidden("admin.roles required");
+    };
+    let perms = match crate::roles::parse_permissions(&req.permissions) {
+        Ok(p) => p,
+        Err(e) => return role_error(e),
+    };
+    if !perms.is_subset(caller.permissions()) {
+        return forbidden("a role can't grant permissions you don't hold");
+    }
+    let db = database.clone();
+    let (name, display, desc) = (
+        req.name.trim().to_string(),
+        req.display_name.clone(),
+        req.description.clone(),
+    );
+    match tokio::task::spawn_blocking(move || {
+        crate::roles::create_custom_role(&db, &name, &display, &desc, perms)
+    })
+    .await
+    {
+        Ok(Ok(role)) => {
+            audit_admin(
+                &database,
+                &caller,
+                "role.create",
+                &role.name,
+                Some(role.permissions.join(" ")),
+            );
+            (StatusCode::CREATED, Json(json!(role))).into_response()
+        }
+        Ok(Err(e)) => role_error(e),
+        Err(_) => role_error(crate::roles::RoleError::Db("task failed".into())),
+    }
+}
+
+/// PUT /api/admin/roles/{name} — change a custom role's display name,
+/// description and permissions.
+pub async fn update_role(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(name): Path<String>,
+    Json(req): Json<RoleRequest>,
+) -> Response {
+    let Some(caller) = caller_holds(&identity, &[Perm::AdminRoles]) else {
+        return forbidden("admin.roles required");
+    };
+    if roles_in_use_by(&caller).contains(&name) {
+        return forbidden("you can't change a role you are using");
+    }
+    let perms = match crate::roles::parse_permissions(&req.permissions) {
+        Ok(p) => p,
+        Err(e) => return role_error(e),
+    };
+    if !perms.is_subset(caller.permissions()) {
+        return forbidden("a role can't grant permissions you don't hold");
+    }
+    let change = crate::roles::Change::RolePerms(name.clone(), perms);
+    if let Err(r) = check_role_grant(&database, &caller, None, Some(change)).await {
+        return r;
+    }
+    let db = database.clone();
+    let before = {
+        let (db, n) = (database.clone(), name.clone());
+        tokio::task::spawn_blocking(move || crate::roles::get_custom_role(&db, &n).ok().flatten())
+            .await
+            .ok()
+            .flatten()
+    };
+    let (n, display, desc) = (
+        name.clone(),
+        req.display_name.clone(),
+        req.description.clone(),
+    );
+    match tokio::task::spawn_blocking(move || {
+        crate::roles::update_custom_role(&db, &n, &display, &desc, perms)
+    })
+    .await
+    {
+        Ok(Ok(role)) => {
+            let (added, removed) = match before {
+                Some(b) => (
+                    role.permissions
+                        .iter()
+                        .filter(|p| !b.permissions.contains(p))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    b.permissions
+                        .iter()
+                        .filter(|p| !role.permissions.contains(p))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+                None => (role.permissions.clone(), Vec::new()),
+            };
+            audit_admin(
+                &database,
+                &caller,
+                "role.update",
+                &role.name,
+                Some(format!(
+                    "added: {}; removed: {}",
+                    added.join(" "),
+                    removed.join(" ")
+                )),
+            );
+            Json(json!(role)).into_response()
+        }
+        Ok(Err(e)) => role_error(e),
+        Err(_) => role_error(crate::roles::RoleError::Db("task failed".into())),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DeleteRoleQuery {
+    pub reassign_to: Option<String>,
+}
+
+/// DELETE /api/admin/roles/{name}?reassign_to=ROLE — delete a custom role.
+/// One still assigned anywhere needs `reassign_to`, which takes its place.
+pub async fn delete_role(
+    State(manager): State<AppState>,
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(name): Path<String>,
+    Query(q): Query<DeleteRoleQuery>,
+) -> Response {
+    let Some(caller) = caller_holds(&identity, &[Perm::AdminRoles]) else {
+        return forbidden("admin.roles required");
+    };
+    if roles_in_use_by(&caller).contains(&name) {
+        return forbidden("you can't delete a role you are using");
+    }
+    let reassign = q.reassign_to.filter(|r| !r.trim().is_empty());
+    if let Some(ref to) = reassign {
+        // Its holders end up with the replacement's permissions.
+        let to_perms = {
+            let (db, t) = (database.clone(), to.clone());
+            tokio::task::spawn_blocking(move || crate::roles::role_perms(&db, &t).ok())
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        };
+        let change = crate::roles::Change::RolePerms(name.clone(), to_perms);
+        if let Err(r) = check_role_grant(&database, &caller, Some(to), Some(change)).await {
+            return r;
+        }
+    } else {
+        let change = crate::roles::Change::RolePerms(name.clone(), crate::perms::PermSet::EMPTY);
+        if let Err(r) = check_role_grant(&database, &caller, None, Some(change)).await {
+            return r;
+        }
+    }
+    let default_role = manager
+        .config()
+        .oidc
+        .as_ref()
+        .map(|o| o.default_role.clone());
+    let db = database.clone();
+    let (n, to) = (name.clone(), reassign.clone());
+    match tokio::task::spawn_blocking(move || {
+        crate::roles::delete_custom_role(&db, &n, to.as_deref(), default_role.as_deref())
+    })
+    .await
+    {
+        Ok(Ok(_)) => {
+            let details = reassign.map(|t| format!("reassigned to {t}"));
+            audit_admin(&database, &caller, "role.delete", &name, details);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(Err(e)) => role_error(e),
+        Err(_) => role_error(crate::roles::RoleError::Db("task failed".into())),
+    }
+}
+
+/// GET /api/users/{email}/access — what a user can do and why: their direct
+/// role, the group mappings that apply, and each permission with the roles
+/// granting it.
+pub async fn user_access(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(email): Path<String>,
+) -> Response {
+    if caller_holds(&identity, &[Perm::AdminUsers]).is_none() {
+        return forbidden("admin.users required");
+    }
+    let db = database.clone();
+    let result =
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<serde_json::Value>> {
+            let user = match db::get_user_by_email(&db, &email) {
+                Ok(u) => u,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                Err(e) => return Err(e),
+            };
+            let access = crate::roles::user_access(&db, &user)?;
+            let mut granted_by = Vec::new();
+            for p in access.permissions.iter() {
+                let mut by = Vec::new();
+                for r in &access.roles {
+                    if crate::roles::role_perms(&db, r)?.contains(p) {
+                        by.push(r.clone());
+                    }
+                }
+                granted_by.push(json!({ "permission": p.name(), "roles": by }));
+            }
+            Ok(Some(json!({
+                "email": user.email,
+                "disabled": user.disabled,
+                "direct_role": access.direct_role,
+                "direct_role_in_effect": access.direct_role_in_effect,
+                "group_roles": access.group_roles.iter()
+                    .map(|(g, r)| json!({ "group": g, "role": r })).collect::<Vec<_>>(),
+                "groups_as_of": user.last_login_at,
+                "roles": access.roles,
+                "permissions": granted_by,
+            })))
+        })
+        .await;
+    match result {
+        Ok(Ok(Some(v))) => Json(v).into_response(),
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "user not found"})),
+        )
+            .into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to read access"})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    pub limit: Option<u32>,
+}
+
+/// GET /api/admin/admin-audit — user, role and mapping changes, newest first.
+pub async fn admin_audit(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Query(q): Query<AuditQuery>,
+) -> Response {
+    if caller_holds(&identity, &[Perm::AdminAudit]).is_none() {
+        return forbidden("admin.audit required");
+    }
+    let limit = q.limit.unwrap_or(200).min(1000);
+    let db = database.clone();
+    match tokio::task::spawn_blocking(move || crate::roles::list_admin_audit(&db, limit)).await {
+        Ok(Ok(rows)) => Json(rows).into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to read audit log"})),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// #294: an identity holding exactly `perms`, using `roles`.
+    fn holding(email: &str, roles: &[&str], perms: &[Perm]) -> Option<Extension<AuthIdentity>> {
+        Some(Extension(AuthIdentity::User {
+            email: email.into(),
+            role: roles.first().copied().unwrap_or("").into(),
+            groups: vec![],
+            roles: roles.iter().map(|r| r.to_string()).collect(),
+            perms: crate::perms::PermSet::of(perms),
+        }))
+    }
+
+    fn role_req(name: &str, perms: &[&str]) -> Json<RoleRequest> {
+        Json(RoleRequest {
+            name: name.into(),
+            display_name: String::new(),
+            description: String::new(),
+            permissions: perms.iter().map(|p| p.to_string()).collect(),
+        })
+    }
+
+    #[tokio::test]
+    async fn roles_grant_nothing_their_maker_lacks() {
+        let db = db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let manager = holding(
+            "m@example.com",
+            &["rm"],
+            &[Perm::AdminRoles, Perm::ReportsView],
+        );
+
+        // Within what the caller holds: fine.
+        let r = create_role(
+            manager.clone(),
+            Extension(db.clone()),
+            role_req("reporter", &["reports.view"]),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        // More than the caller holds: refused.
+        let r = create_role(
+            manager.clone(),
+            Extension(db.clone()),
+            role_req("boss", &["admin.users"]),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        // Unknown permission: refused.
+        let r = create_role(
+            manager.clone(),
+            Extension(db.clone()),
+            role_req("odd", &["nope"]),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+        // Without admin.roles: refused.
+        let r = create_role(
+            holding("x@example.com", &["viewer"], &[Perm::DocsView]),
+            Extension(db.clone()),
+            role_req("x", &[]),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        // The role the caller is using can't be edited by them.
+        crate::roles::create_custom_role(&db, "rm", "", "", crate::perms::PermSet::EMPTY).unwrap();
+        let r = update_role(
+            manager.clone(),
+            Extension(db.clone()),
+            Path("rm".into()),
+            role_req("", &[]),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn users_cant_be_given_more_than_the_giver_holds() {
+        let db = db::init_db(std::path::Path::new(":memory:")).unwrap();
+        db::add_admin(&db, "ops", None, None).unwrap(); // so the last-admin guard isn't what refuses
+        db::create_user(&db, "t@example.com", "", "viewer").unwrap();
+        let manager = holding(
+            "m@example.com",
+            &["rm"],
+            &[
+                Perm::AdminRoles,
+                Perm::ConnectionsConnect,
+                Perm::CredentialsSelf,
+                Perm::DocsView,
+            ],
+        );
+        let set = |role: &str| Json(SetRoleRequest { role: role.into() });
+        let r = set_user_role(
+            manager.clone(),
+            Extension(db.clone()),
+            Path("t@example.com".into()),
+            set("operator"),
+        )
+        .await
+        .into_response();
+        assert_eq!(r.status(), StatusCode::OK);
+        let r = set_user_role(
+            manager.clone(),
+            Extension(db.clone()),
+            Path("t@example.com".into()),
+            set("admin"),
+        )
+        .await
+        .into_response();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        let r = set_user_role(
+            manager.clone(),
+            Extension(db.clone()),
+            Path("t@example.com".into()),
+            set("ghost"),
+        )
+        .await
+        .into_response();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+        // Nobody changes their own role.
+        db::create_user(&db, "m@example.com", "", "operator").unwrap();
+        let r = set_user_role(
+            manager,
+            Extension(db.clone()),
+            Path("M@example.com".into()),
+            set("viewer"),
+        )
+        .await
+        .into_response();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn the_last_admin_cant_be_demoted() {
+        let db = db::init_db(std::path::Path::new(":memory:")).unwrap();
+        db::create_user(&db, "boss@example.com", "", "admin").unwrap();
+        let key = Some(Extension(AuthIdentity::ApiKey("ops".into())));
+        let r = set_user_role(
+            key,
+            Extension(db.clone()),
+            Path("boss@example.com".into()),
+            Json(SetRoleRequest {
+                role: "operator".into(),
+            }),
+        )
+        .await
+        .into_response();
+        // No enabled admin key in the database and no other admin user.
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            db::get_user_by_email(&db, "boss@example.com").unwrap().role,
+            "admin"
+        );
+    }
+
     use super::*;
     use crate::session::SessionInfo;
 
@@ -8152,6 +8965,8 @@ mod tests {
             email: email.into(),
             role: role.into(),
             groups: vec![],
+            roles: vec![role.to_string()],
+            perms: crate::perms::role_perms(role),
         }
     }
 
@@ -9832,6 +10647,8 @@ mod tests {
                 email: "u@example.com".into(),
                 role: role.into(),
                 groups: vec![],
+                roles: vec![role.to_string()],
+                perms: crate::perms::role_perms(role),
             }))
         };
         let status = |id: &Option<Extension<AuthIdentity>>, name: &str| {
@@ -9928,6 +10745,8 @@ mod tests {
                 email: "u@example.com".into(),
                 role: role.into(),
                 groups: vec![],
+                roles: vec![role.to_string()],
+                perms: crate::perms::role_perms(role),
             }))
         };
         for role in ["viewer", "operator", "poweruser"] {

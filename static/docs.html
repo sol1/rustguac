@@ -142,10 +142,21 @@
             return location.hash ? location.hash.substring(1) : '';
         }
 
-        // Load docs from API
-        fetch('/api/docs')
-            .then(function(r) { return r.json(); })
+        // Load docs from API. Reading them needs docs.view (#294).
+        var docsKey = null;
+        try { docsKey = sessionStorage.getItem('rustguac_api_key'); } catch (e) {}
+        fetch('/api/docs', { credentials: 'same-origin', headers: docsKey ? { 'Authorization': 'Bearer ' + docsKey } : {} })
+            .then(function(r) {
+                if (r.status === 401 || r.status === 403) {
+                    content.textContent = r.status === 401
+                        ? 'Sign in to read the documentation.'
+                        : 'Your role does not include the documentation.';
+                    return null;
+                }
+                return r.json();
+            })
             .then(function(data) {
+                if (!data) return;
                 docs = data;
 
                 // Build sidebar

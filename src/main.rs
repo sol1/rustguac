@@ -13,6 +13,7 @@ mod protocol;
 mod pve;
 mod recording;
 mod recording_mp4;
+mod roles;
 mod session;
 mod tunnel;
 mod vault;
@@ -25,6 +26,7 @@ use crate::api::{
 };
 use crate::config::Config;
 use crate::db::Db;
+use crate::perms::PermSet;
 use crate::session::SessionManager;
 use axum::extract::{DefaultBodyLimit, Request};
 use axum::response::Html;
@@ -95,7 +97,7 @@ enum Command {
         name: String,
     },
 
-    /// Map an OIDC group to a role (admin, poweruser, operator, viewer)
+    /// Map an OIDC group to a role (built-in or custom)
     MapGroup {
         #[arg(long)]
         group: String,
@@ -135,7 +137,7 @@ enum Command {
         /// User email, exactly as the identity provider sends it
         #[arg(long)]
         email: String,
-        /// Role: admin, poweruser, operator, or viewer
+        /// Role: admin, poweruser, operator, viewer, or a custom role
         #[arg(long)]
         role: String,
         /// Display name (replaced by the provider's name on login)
@@ -157,7 +159,7 @@ enum Command {
         /// User email
         #[arg(long)]
         email: String,
-        /// Role: admin, poweruser, operator, or viewer
+        /// Role: admin, poweruser, operator, viewer, or a custom role
         #[arg(long)]
         role: String,
     },
@@ -170,6 +172,39 @@ enum Command {
 
     /// Delete an OIDC user
     DeleteUser {
+        #[arg(long)]
+        email: String,
+    },
+
+    /// List built-in and custom roles with their permissions
+    ListRoles,
+
+    /// Create a custom role from permissions (see list-roles for the names)
+    AddRole {
+        /// Role name: lowercase letters, digits, '-' and '_'
+        #[arg(long)]
+        name: String,
+        /// A permission to grant; repeat for each
+        #[arg(long = "perm")]
+        perms: Vec<String>,
+        /// Name shown in the UI (default: the role name)
+        #[arg(long, default_value = "")]
+        display_name: String,
+        #[arg(long, default_value = "")]
+        description: String,
+    },
+
+    /// Delete a custom role
+    DeleteRole {
+        #[arg(long)]
+        name: String,
+        /// Move its users, group mappings and token caps to this role first
+        #[arg(long)]
+        reassign_to: Option<String>,
+    },
+
+    /// Show a user's roles, where they come from, and their permissions
+    ShowUser {
         #[arg(long)]
         email: String,
     },
@@ -302,6 +337,20 @@ async fn main() {
         Some(Command::SetRole { email, role }) => cmd_set_role(&database, &email, &role),
         Some(Command::DisableUser { email }) => cmd_disable_user(&database, &email),
         Some(Command::DeleteUser { email }) => cmd_delete_user(&database, &email),
+        Some(Command::ListRoles) => cmd_list_roles(&database),
+        Some(Command::AddRole {
+            name,
+            perms,
+            display_name,
+            description,
+        }) => cmd_add_role(&database, &name, &perms, &display_name, &description),
+        Some(Command::DeleteRole { name, reassign_to }) => cmd_delete_role(
+            &database,
+            &name,
+            reassign_to.as_deref(),
+            config.oidc.as_ref().map(|o| o.default_role.as_str()),
+        ),
+        Some(Command::ShowUser { email }) => cmd_show_user(&database, &email),
         Some(Command::ImportGuacamole {
             file,
             folder,
@@ -350,6 +399,167 @@ fn cli_actor() -> String {
 /// A failure to write the audit row is reported but deliberately does not fail
 /// the command: the action has already been applied, and exiting non-zero here
 /// would misreport it as having not happened.
+/// Exit unless `role` is a built-in or custom role.
+fn require_role(database: &Db, role: &str) {
+    match roles::role_exists(database, role) {
+        Ok(true) => {}
+        Ok(false) => {
+            eprintln!(
+                "No role named '{role}'. Built-in roles are admin, poweruser, operator and viewer; \
+                 `rustguac list-roles` shows the custom ones."
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Failed to read roles: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_list_roles(database: &Db) {
+    for r in perms::BUILTIN_ROLES.iter().rev() {
+        println!("{r} (built-in)");
+        println!("    {}", perms::role_perms(r).names().join(" "));
+    }
+    match roles::list_custom_roles(database) {
+        Ok(custom) => {
+            for r in custom {
+                println!("{} ({})", r.name, r.display_name);
+                if !r.description.is_empty() {
+                    println!("    {}", r.description);
+                }
+                println!("    {}", r.permissions.join(" "));
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to list roles: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_add_role(
+    database: &Db,
+    name: &str,
+    perms: &[String],
+    display_name: &str,
+    description: &str,
+) {
+    let set = match roles::parse_permissions(perms) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "{e}. Permissions are: {}",
+                perms::Perm::ALL.map(|p| p.name()).join(", ")
+            );
+            std::process::exit(1);
+        }
+    };
+    match roles::create_custom_role(database, name, display_name, description, set) {
+        Ok(r) => {
+            println!("Role '{}' created: {}", r.name, r.permissions.join(" "));
+            audit_cli(database, "add_role", name, Some(&r.permissions.join(" ")));
+        }
+        Err(e) => {
+            eprintln!("Failed to create role: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_delete_role(
+    database: &Db,
+    name: &str,
+    reassign_to: Option<&str>,
+    default_role: Option<&str>,
+) {
+    match roles::delete_custom_role(database, name, reassign_to, default_role) {
+        Ok(usage) => {
+            println!("Role '{name}' deleted.");
+            if let Some(to) = reassign_to.filter(|_| !usage.is_empty()) {
+                println!(
+                    "Reassigned to '{to}': {} user(s), {} group mapping(s), {} token cap(s).",
+                    usage.users.len(),
+                    usage.mappings.len(),
+                    usage.token_caps
+                );
+            }
+            let details = reassign_to.map(|t| format!("reassigned to {t}"));
+            audit_cli(database, "delete_role", name, details.as_deref());
+        }
+        Err(e) => {
+            eprintln!("Failed to delete role: {e}");
+            if let roles::RoleError::InUse(u) = e {
+                for email in u.users {
+                    eprintln!("  user: {email}");
+                }
+                for g in u.mappings {
+                    eprintln!("  group mapping: {g}");
+                }
+                eprintln!("Use --reassign-to ROLE to move them to another role.");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_show_user(database: &Db, email: &str) {
+    let user = match db::get_user_by_email(database, email) {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("No user '{email}'.");
+            std::process::exit(1);
+        }
+    };
+    let access = match roles::user_access(database, &user) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("Failed to read access: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!(
+        "{}{}",
+        user.email,
+        if user.disabled { " (disabled)" } else { "" }
+    );
+    println!(
+        "  direct role: {}{}",
+        access.direct_role,
+        if access.direct_role_in_effect {
+            ""
+        } else {
+            " (not in effect: a group mapping applies)"
+        }
+    );
+    if access.group_roles.is_empty() {
+        println!("  group mappings: none match");
+    } else {
+        println!(
+            "  group mappings (groups as of last login{}):",
+            user.last_login_at
+                .as_deref()
+                .map(|t| format!(", {t}"))
+                .unwrap_or_default()
+        );
+        for (g, r) in &access.group_roles {
+            println!("    {g} -> {r}");
+        }
+    }
+    println!("  roles in effect: {}", access.roles.join(", "));
+    println!("  permissions:");
+    for p in access.permissions.iter() {
+        let by: Vec<&str> = access
+            .roles
+            .iter()
+            .filter(|r| roles::role_perms(database, r).is_ok_and(|s| s.contains(p)))
+            .map(String::as_str)
+            .collect();
+        println!("    {:<26} from {}", p.name(), by.join(", "));
+    }
+}
+
 fn audit_cli(database: &Db, action: &str, target: &str, details: Option<&str>) {
     if let Err(e) = db::log_cli_event(database, &cli_actor(), action, Some(target), details) {
         eprintln!(
@@ -548,10 +758,7 @@ fn cmd_list_users(database: &Db) {
 fn cmd_add_user(database: &Db, email: &str, role: &str, name: &str) {
     let email = email.trim();
     let name = name.trim();
-    if !crate::perms::BUILTIN_ROLES.contains(&role) {
-        eprintln!("Role must be admin, poweruser, operator, or viewer.");
-        std::process::exit(1);
-    }
+    require_role(database, role);
     if let Err(msg) = db::check_user_email(email).and_then(|_| db::check_user_name(name)) {
         eprintln!("Invalid user: {msg}.");
         std::process::exit(1);
@@ -596,10 +803,7 @@ fn cmd_reset_oidc_subject(database: &Db, email: &str) {
 }
 
 fn cmd_set_role(database: &Db, email: &str, role: &str) {
-    if !crate::perms::BUILTIN_ROLES.contains(&role) {
-        eprintln!("Role must be admin, poweruser, operator, or viewer.");
-        std::process::exit(1);
-    }
+    require_role(database, role);
     match db::set_user_role(database, email, role) {
         Ok(true) => {
             println!("User '{}' role set to '{}'.", email, role);
@@ -656,10 +860,7 @@ fn cmd_delete_user(database: &Db, email: &str) {
 }
 
 fn cmd_map_group(database: &Db, group: &str, role: &str, force: bool) {
-    if !crate::perms::BUILTIN_ROLES.contains(&role) {
-        eprintln!("Role must be admin, poweruser, operator, or viewer.");
-        std::process::exit(1);
-    }
+    require_role(database, role);
 
     // `oidc_group` is UNIQUE, so a second mapping for the same group fails on
     // the constraint. Look first so an existing mapping produces an actionable
@@ -900,6 +1101,12 @@ async fn run_server(config: Config, database: Db) {
         match oidc::init_oidc(oidc_config, config.auth_session_ttl_secs).await {
             Ok(state) => {
                 tracing::info!("OIDC configured with issuer: {}", oidc_config.issuer_url);
+                if !roles::role_exists(&database, &oidc_config.default_role).unwrap_or(false) {
+                    tracing::error!(
+                        default_role = %oidc_config.default_role,
+                        "[oidc] default_role is not a role: new users will get no permissions until it names one"
+                    );
+                }
                 Some(state)
             }
             Err(e) => {
@@ -1391,6 +1598,18 @@ async fn run_server(config: Config, database: Db) {
             delete(api::delete_group_mapping),
         )
         .route("/api/me", get(api::me))
+        .route("/api/users/{email}/access", get(api::user_access))
+        .route("/api/admin/permissions", get(api::list_permissions))
+        .route(
+            "/api/admin/roles",
+            get(api::list_roles).post(api::create_role),
+        )
+        .route(
+            "/api/admin/roles/{name}",
+            put(api::update_role).delete(api::delete_role),
+        )
+        .route("/api/admin/admin-audit", get(api::admin_audit))
+        .route("/api/docs", get(api::get_docs))
         // User API token self-service
         .route("/api/me/tokens", get(api::list_my_tokens))
         .route("/api/me/tokens", post(api::create_my_token))
@@ -1546,7 +1765,6 @@ async fn run_server(config: Config, database: Db) {
     // Unauthenticated stateful routes
     let unauth_routes = Router::new()
         .route("/api/health", get(api::health))
-        .route("/api/docs", get(api::get_docs))
         .route("/api/sessions/{id}/banner", get(api::get_session_banner))
         .route("/client/{session_id}", get(serve_client_page))
         .with_state(manager);
@@ -1772,8 +1990,11 @@ fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {
 /// to, instead of hiding everything gated and showing it after `/api/me`
 /// answers, which flashed and reflowed on every navigation.
 struct BrandedPage {
-    /// Indexed by role level, 0 (anonymous) to 4 (admin).
-    variants: Vec<BrandedVariant>,
+    html: String,
+    /// One variant per (role level, permissions) served so far. The five
+    /// built-in variants (anonymous and the four roles) are made up front;
+    /// a custom role's is made on its first request and kept (#294).
+    variants: std::sync::Mutex<std::collections::HashMap<(u8, PermSet), Arc<BrandedVariant>>>,
 }
 
 struct BrandedVariant {
@@ -1781,50 +2002,80 @@ struct BrandedVariant {
     etag: String,
 }
 
-/// Highest role level, the index of the last page variant.
+/// Highest role level.
 const MAX_ROLE_LEVEL: u8 = 4;
+
+/// The role level and permissions of a built-in level: 0 is anonymous.
+fn builtin_level_perms(level: u8) -> PermSet {
+    level
+        .checked_sub(1)
+        .and_then(|i| perms::BUILTIN_ROLES.get(i as usize))
+        .map(|role| perms::role_perms(role))
+        .unwrap_or(PermSet::EMPTY)
+}
 
 impl BrandedPage {
     fn new(html: String) -> Self {
+        let page = Self {
+            html,
+            variants: Default::default(),
+        };
+        for level in 0..=MAX_ROLE_LEVEL {
+            page.variant(level, builtin_level_perms(level));
+        }
+        page
+    }
+
+    fn variant(&self, level: u8, perms: PermSet) -> Arc<BrandedVariant> {
         use sha2::{Digest, Sha256};
-        let variants = (0..=MAX_ROLE_LEVEL)
-            .map(|level| {
-                let html = role_variant_html(&html, level);
+        let key = (level.min(MAX_ROLE_LEVEL), perms);
+        let mut variants = self.variants.lock().unwrap();
+        variants
+            .entry(key)
+            .or_insert_with(|| {
+                let html = role_variant_html(&self.html, key.0, key.1);
                 // Quoted, because an ETag is a quoted-string on the wire. A
                 // bare hash tends to be ignored rather than rejected, which
                 // would look exactly like the stale-cache bug this exists to
                 // fix.
                 let etag = format!("\"{}\"", hex::encode(Sha256::digest(html.as_bytes())));
-                BrandedVariant { html, etag }
+                Arc::new(BrandedVariant { html, etag })
             })
-            .collect();
-        Self { variants }
-    }
-
-    fn variant(&self, level: u8) -> &BrandedVariant {
-        &self.variants[level.min(MAX_ROLE_LEVEL) as usize]
+            .clone()
     }
 }
 
-/// Write the caller's role level onto the page's `<html>` tag. A page that
-/// has no bare `<html>` start tag is returned unchanged. Extracted for test.
-fn role_variant_html(html: &str, level: u8) -> String {
-    // The permissions of the built-in role at this level (#294); the
-    // stylesheet hides what the caller can't use from them.
-    let perms = level
-        .checked_sub(1)
-        .and_then(|i| crate::perms::BUILTIN_ROLES.get(i as usize))
-        .map(|role| crate::perms::role_perms(role).names().join(" "))
-        .unwrap_or_default();
+/// Write the caller's role level and permissions onto the page's `<html>`
+/// tag; the stylesheet hides what the caller can't use from them (#294). A
+/// page that has no bare `<html>` start tag is returned unchanged. Extracted
+/// for test.
+fn role_variant_html(html: &str, level: u8, perms: PermSet) -> String {
     match html.find("<html>") {
         Some(i) => format!(
             "{}<html data-role-level=\"{}\" data-perms=\"{}\">{}",
             &html[..i],
             level,
-            perms,
+            perms.names().join(" "),
             &html[i + "<html>".len()..]
         ),
         None => html.to_string(),
+    }
+}
+
+/// The role level and permissions a page is served for. Level 4 means every
+/// permission (an admin); a custom role has the level of no built-in, 0.
+fn page_identity(identity: Option<&auth::AuthIdentity>) -> (u8, PermSet) {
+    match identity {
+        None => (0, PermSet::EMPTY),
+        Some(id) => {
+            let perms = id.permissions();
+            let level = if perms == PermSet::all() {
+                MAX_ROLE_LEVEL
+            } else {
+                auth::role_level(id.role())
+            };
+            (level, perms)
+        }
     }
 }
 
@@ -1852,13 +2103,13 @@ fn etag_matches(if_none_match: &str, etag: &str) -> bool {
 /// heuristically, serving a stale page long after a restart.
 fn page_response(
     page: &BrandedPage,
-    level: u8,
+    (level, perms): (u8, PermSet),
     headers: &axum::http::HeaderMap,
 ) -> axum::response::Response {
     use axum::http::{header, StatusCode};
     use axum::response::IntoResponse;
 
-    let page = page.variant(level);
+    let page = page.variant(level, perms);
     // The variant depends on who is logged in, so a cache must not hand one
     // user's copy to another: it keys on the session cookie.
     let cache_headers = [
@@ -2023,11 +2274,9 @@ async fn serve_branded_page(
     // Whoever the page is for decides which navigation it carries. An API-key
     // user sends no credential on the page GET and gets the anonymous
     // variant; the page reconciles that from /api/me.
-    let level = identity
-        .map(|Extension(id)| auth::role_level(id.role()))
-        .unwrap_or(0);
+    let who = page_identity(identity.as_ref().map(|Extension(id)| id));
     match pages.get(key) {
-        Some(page) => page_response(page, level, request.headers()),
+        Some(page) => page_response(page, who, request.headers()),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -2042,7 +2291,7 @@ async fn serve_client_page(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let mut response = match pages.get("client.html") {
-        Some(page) => page_response(page, 0, &headers),
+        Some(page) => page_response(page, (0, PermSet::EMPTY), &headers),
         // Unreachable: the map always carries the embedded copy.
         None => Html(include_str!("../static/client.html")).into_response(),
     };
@@ -2106,30 +2355,43 @@ mod tests {
     #[test]
     fn role_variant_writes_level_on_html_tag_only() {
         let page = "<!DOCTYPE html>\n<html>\n<head><title>x</title></head><body><html>text</html></body></html>";
-        let v = role_variant_html(page, 4);
+        let v = role_variant_html(page, 4, builtin_level_perms(4));
         assert!(v.starts_with("<!DOCTYPE html>\n<html data-role-level=\"4\" data-perms=\""));
         // The built-in role at each level, with its permissions (#294).
         assert!(v.contains(" admin.roles ") || v.contains("admin.roles\""));
-        let operator = role_variant_html(page, 2);
+        let operator = role_variant_html(page, 2, builtin_level_perms(2));
         assert!(
             operator.contains(r#"data-perms="connections.connect credentials.self docs.view">"#)
         );
-        let anonymous = role_variant_html(page, 0);
+        let anonymous = role_variant_html(page, 0, PermSet::EMPTY);
         assert!(anonymous.contains(r#"<html data-role-level="0" data-perms="">"#));
         // only the first bare start tag is touched; the literal later on is content
         assert_eq!(v.matches("data-role-level").count(), 1);
         assert_eq!(
-            role_variant_html("<p>no html tag</p>", 2),
+            role_variant_html("<p>no html tag</p>", 2, PermSet::EMPTY),
             "<p>no html tag</p>"
         );
         let branded = BrandedPage::new(page.to_string());
-        assert_eq!(branded.variants.len(), 5);
-        assert_ne!(branded.variant(0).etag, branded.variant(4).etag);
+        assert_eq!(branded.variants.lock().unwrap().len(), 5);
+        let all = PermSet::all();
+        assert_ne!(
+            branded.variant(0, PermSet::EMPTY).etag,
+            branded.variant(4, all).etag
+        );
         assert_eq!(
-            branded.variant(9).etag,
-            branded.variant(4).etag,
+            branded.variant(9, all).etag,
+            branded.variant(4, all).etag,
             "levels clamp to admin"
         );
+        // A custom role's permissions make a variant of their own, kept.
+        let custom = PermSet::of(&[crate::perms::Perm::ReportsView]);
+        let v = branded.variant(0, custom);
+        assert!(v
+            .html
+            .contains(r#"data-role-level="0" data-perms="reports.view""#));
+        assert_eq!(branded.variants.lock().unwrap().len(), 6);
+        branded.variant(0, custom);
+        assert_eq!(branded.variants.lock().unwrap().len(), 6);
     }
 
     #[test]
@@ -2255,16 +2517,23 @@ mod tests {
         // never hand an admin's copy to an anonymous visitor or the reverse.
         use axum::http::{header, HeaderMap, StatusCode};
         let page = BrandedPage::new("<html>x</html>".to_string());
-        let res = page_response(&page, 4, &HeaderMap::new());
+        let admin = (4, PermSet::all());
+        let res = page_response(&page, admin, &HeaderMap::new());
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.headers()[header::VARY], "Cookie");
         let mut h = HeaderMap::new();
-        h.insert(header::IF_NONE_MATCH, page.variant(4).etag.parse().unwrap());
-        let res = page_response(&page, 4, &h);
+        h.insert(
+            header::IF_NONE_MATCH,
+            page.variant(4, PermSet::all()).etag.parse().unwrap(),
+        );
+        let res = page_response(&page, admin, &h);
         assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(res.headers()[header::VARY], "Cookie");
         // Another role's tag is not this variant: full page.
-        assert_eq!(page_response(&page, 1, &h).status(), StatusCode::OK);
+        assert_eq!(
+            page_response(&page, (1, builtin_level_perms(1)), &h).status(),
+            StatusCode::OK
+        );
     }
 
     #[test]
@@ -2343,7 +2612,7 @@ mod tests {
     fn test_branded_page_etag_tracks_content() {
         let a = BrandedPage::new("<html>one</html>".to_string());
         let b = BrandedPage::new("<html>two</html>".to_string());
-        let (a, b) = (a.variant(0), b.variant(0));
+        let (a, b) = (a.variant(0, PermSet::EMPTY), b.variant(0, PermSet::EMPTY));
         assert_ne!(a.etag, b.etag);
         // Quoted, or caches ignore it.
         assert!(a.etag.starts_with('"') && a.etag.ends_with('"'));

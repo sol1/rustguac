@@ -793,6 +793,8 @@ mod tests {
             email: email.into(),
             role: role.into(),
             groups: Vec::new(),
+            roles: vec![role.to_string()],
+            perms: crate::perms::role_perms(role),
         }
     }
 
