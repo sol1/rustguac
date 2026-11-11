@@ -4599,7 +4599,7 @@
                 if (p === folder && f.scope === scope) return;
                 var opt = document.createElement('option');
                 opt.value = f.scope + '|' + p;
-                opt.textContent = (f.display_name || p) + ' (' + f.scope + ')';
+                opt.textContent = (f.display_name || p) + (f.display_name && f.display_name !== p && p.indexOf('/') !== -1 ? ' [' + p + ']' : '') + ' (' + f.scope + ')';
                 opt.title = p;
                 moveSelect.appendChild(opt);
             });
@@ -5276,7 +5276,7 @@
                 var p = folderPath(f);
                 var opt = document.createElement('option');
                 opt.value = f.scope + '|' + p;
-                opt.textContent = (f.display_name || p) + ' (' + f.scope + ')';
+                opt.textContent = (f.display_name || p) + (f.display_name && f.display_name !== p && p.indexOf('/') !== -1 ? ' [' + p + ']' : '') + ' (' + f.scope + ')';
                 opt.title = p;
                 if (selectedFolder && selectedFolder.scope === f.scope && folderPath(selectedFolder) === p) opt.selected = true;
                 sel.appendChild(opt);

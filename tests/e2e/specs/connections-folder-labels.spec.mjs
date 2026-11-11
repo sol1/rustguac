@@ -6,7 +6,9 @@ const folders = [
     folder('source', { entries: [entry('host', 'ssh')] }),
     folder(policyId, { display_name: 'Operations <Lab>' }),
     folder('legacy'),
-    folder('child', { path: 'parent/child', scope: 'instance', display_name: 'Nested destination' })
+    folder('child', { path: 'parent/child', scope: 'instance', display_name: 'Nested destination' }),
+    folder('x', { path: 'prod/x', display_name: 'Operations' }),
+    folder('x', { path: 'dev/x', display_name: 'Operations' })
 ];
 
 test('entry move uses friendly labels while retaining scope and full folder paths', async ({ page }) => {
@@ -19,7 +21,9 @@ test('entry move uses friendly labels while retaining scope and full folder path
     await expect(select.locator(`option[value="shared|${policyId}"]`)).toHaveText('Operations <Lab> (shared)');
     await expect(select.locator(`option[value="shared|${policyId}"]`)).toHaveAttribute('title', policyId);
     await expect(select.locator('option[value="shared|legacy"]')).toHaveText('legacy (shared)');
-    await expect(select.locator('option[value="instance|parent/child"]')).toHaveText('Nested destination (instance)');
+    await expect(select.locator('option[value="instance|parent/child"]')).toHaveText('Nested destination [parent/child] (instance)');
+    await expect(select.locator('option[value="shared|prod/x"]')).toHaveText('Operations [prod/x] (shared)');
+    await expect(select.locator('option[value="shared|dev/x"]')).toHaveText('Operations [dev/x] (shared)');
     await expect(select.locator('option[value="shared|source"]')).toHaveCount(0);
     await expect(select.locator('option[value=""]')).toHaveText('(keep in current folder)');
     await select.selectOption(`shared|${policyId}`);
@@ -35,7 +39,9 @@ test('ad-hoc save-as uses friendly labels and falls back to the internal path', 
     const select = page.locator('#em-saveas-folder');
     await expect(select.locator(`option[value="shared|${policyId}"]`)).toHaveText('Operations <Lab> (shared)');
     await expect(select.locator('option[value="shared|legacy"]')).toHaveText('legacy (shared)');
-    await expect(select.locator('option[value="instance|parent/child"]')).toHaveText('Nested destination (instance)');
+    await expect(select.locator('option[value="instance|parent/child"]')).toHaveText('Nested destination [parent/child] (instance)');
+    await expect(select.locator('option[value="shared|prod/x"]')).toHaveText('Operations [prod/x] (shared)');
+    await expect(select.locator('option[value="shared|dev/x"]')).toHaveText('Operations [dev/x] (shared)');
     await select.selectOption('instance|parent/child');
     await expect(select).toHaveValue('instance|parent/child');
 });
