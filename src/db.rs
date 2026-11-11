@@ -1675,7 +1675,6 @@ pub fn cleanup_session_history(db: &Db, retain_days: u32) -> rusqlite::Result<us
 /// is only the single role written to `users.role`, as before: the highest
 /// matching built-in, or failing that the first matching custom role by name
 /// (see `roles::login_role_for`).
-
 pub fn resolve_role_from_groups(db: &Db, groups: &[String]) -> rusqlite::Result<Option<String>> {
     if groups.is_empty() {
         return Ok(None);
