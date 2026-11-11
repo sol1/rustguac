@@ -78,7 +78,9 @@ jobs:
 
   e2e:
     name: Browser tests
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, which Playwright's Chromium
+    # doesn't support yet. Move back once it does.
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
