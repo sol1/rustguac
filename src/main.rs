@@ -1103,9 +1103,9 @@ async fn run_server(config: Config, database: Db) {
     // Initialize OIDC if configured
     let oidc_state = if let Some(ref oidc_config) = config.oidc {
         if oidc_config.sync_role_on_login {
-            match db::list_group_mappings(&database) {
-                Ok(mappings) if !mappings.iter().any(|mapping| mapping.role == "admin") => {
-                    tracing::warn!("OIDC role synchronization is enabled but no group mapping grants admin; existing admins may lose admin access on login");
+            match oidc::has_role_admin_mapping(&database) {
+                Ok(false) => {
+                    tracing::warn!("OIDC role synchronization is enabled but no group mapping grants admin.roles; role administration depends on a direct role or admin API key");
                 }
                 Err(error) => {
                     tracing::warn!(%error, "Cannot check OIDC admin group mappings at startup")

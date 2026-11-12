@@ -142,14 +142,15 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # client_secret = "your-client-secret"   # or set OIDC_CLIENT_SECRET env var
 # redirect_uri = "https://your-host/auth/callback"
 #
-# # Role assigned to new users on first login.
-# # Options: "admin", "poweruser", "operator", "viewer"
+# # Direct role assigned to new users on first login. Must name an existing
+# # built-in or custom role; an unknown role prevents server startup, even
+# # when sync_role_on_login is false.
 # # Default: "operator"
 # default_role = "operator"
 #
-# # Recompute roles on every OIDC login, including downgrades. The highest
-# # matching group mapping wins; no match uses default_role. Manual role
-# # assignments are overwritten on the next login. Default: false.
+# # Reset the direct role to default_role on login when no group mapping
+# # matches, including downgrades. Matching groups always grant the union
+# # of their mapped roles, replacing the direct role. Default: false.
 # # A missing groups claim preserves the stored role; an empty array syncs.
 # sync_role_on_login = false
 #

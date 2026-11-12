@@ -93,17 +93,18 @@ User API tokens authenticate as the OIDC user who owns the token, with an effect
 
 OIDC users are assigned a role through three mechanisms (in order of precedence):
 
-1. **Group-to-role mappings** — evaluated on every OIDC login. If the user's OIDC groups match any mappings, the highest matching role is applied.
+1. **Group-to-role mappings** — matching groups grant the union of all mapped roles' permissions, replacing the user's direct role. Group membership is recorded on login; current mappings are evaluated on each request.
 2. **Manual role assignment** — admins can set a user's role via CLI, API, or the Admin page.
 3. **Default role** — new users get the `default_role` from OIDC config on first login (default: `operator`).
 
 #### SSO-managed roles
 
-By default, group mappings override the stored role when they match, but an
-unmatched user keeps their existing role. `default_role` is applied only when
-creating an account.
+Group mappings always grant the union of every matching role's permissions,
+replacing the user's own direct role. With no matching mappings, the direct role
+applies. By default, an unmatched user keeps that role and `default_role` is applied
+only when creating an account.
 
-To make SSO authoritative at every login:
+To reset unmatched users' direct roles to the configured default on login:
 
 ```toml
 [oidc]
@@ -112,22 +113,28 @@ default_role = "operator"
 sync_role_on_login = true
 ```
 
-The highest matching group-to-role mapping wins (`viewer < operator < poweruser < admin`).
-When no group matches, the user receives `default_role`, including existing users.
+Synchronization adds only that reset when no group mapping matches, including for
+existing users with manually assigned roles. Matching groups continue to grant
+all their mapped roles regardless of the sync setting. For example, a user mapped
+to both a support role and an auditing role receives both sets of permissions.
+The direct role, including `default_role`, is not a minimum or an additional grant
+while any mapping matches. This also applies to pre-provisioned users with
+`auto_create_users = false`; disabled accounts and identity checks still prevent login.
+
 Synchronization requires the configured groups claim to be present in the validated
 ID token. A missing or unusable claim preserves the stored role and logs a warning;
 an explicit empty array synchronizes to the default. Check the provider's claim
 mapping and group-overage settings if that warning appears.
-The default is a fallback, not a minimum: a matching `viewer` mapping still yields
-`viewer` when the default is `operator`. Manual assignments are overwritten at the
-next login. This also applies to pre-provisioned users with `auto_create_users = false`;
-disabled accounts and identity checks still prevent login.
 
 For example, mapping `remote-admins` to `admin` promotes members on login. Removing
 that membership returns them to `operator` at the next login if no other mapping
 matches. Changing the default also updates unmatched existing users on their next
-login. A missing or empty groups claim counts as no matching groups, so choose a
-default appropriate for every user the identity provider allows to sign in.
+login. If a role change would remove the last user's `admin.roles` access and no
+usable admin API key remains, rustguac retains that user's stored role and logs a
+warning. Custom roles with `admin.roles` count as role administrators too.
+
+`default_role` must name an existing built-in or custom role. An unknown name
+prevents server startup, including when `sync_role_on_login` is false.
 
 Role lookup or persistence errors reject the login instead of issuing a session
 with stale privileges. Synchronization runs on a fresh OIDC login, not on every
@@ -137,7 +144,7 @@ Local API-key admins are unaffected.
 
 #### Only users you have added
 
-With `auto_create_users = false` in `[oidc]`, rustguac does not create accounts on login: a user must be added first with `rustguac add-user --email <email> --role <role>`, `POST /api/users`, or **Add User** on the Admin page. Anyone else who authenticates with the identity provider is sent back to the login page with "You do not have an account here". The role the admin chose is kept; `default_role` is not applied, but group-to-role mappings still are.
+With `auto_create_users = false` in `[oidc]`, rustguac does not create accounts on login: a user must be added first with `rustguac add-user --email <email> --role <role>`, `POST /api/users`, or **Add User** on the Admin page. Anyone else who authenticates with the identity provider is sent back to the login page with "You do not have an account here". By default the role the admin chose is kept, but group-to-role mappings still apply. With role synchronization enabled, unmatched pre-provisioned users also receive `default_role`, subject to the last-administrator safeguard.
 
 ```bash
 rustguac add-user --email jsmith@example.com --role operator --name "J Smith"
@@ -330,7 +337,7 @@ Group 'sysadmin' is already mapped to role 'poweruser'. Re-run with --force to c
 
 Add `--force` to change it. Mapping a group to the role it already has is a no-op and exits zero, so repeated runs of the same provisioning script are safe.
 
-Mappings are applied during OIDC login, not at the moment you create them. A user who is already signed in keeps their current role until their next login. This cuts both ways: granting a role does not take effect immediately, and neither does lowering one, so to revoke access straight away change the mapping *and* disable the user or end their sessions.
+Mapping changes affect permissions on subsequent requests using the groups recorded at the user's last login. Changes to group membership at the identity provider require another login. Existing remote sessions are not terminated by changing a mapping; end those sessions separately when revoking access.
 
 Mappings created this way are identical to those made in the Admin page or through the API, and are listed alongside them.
 

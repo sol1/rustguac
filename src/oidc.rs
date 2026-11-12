@@ -700,13 +700,41 @@ fn reconcile_login_role(
     if !crate::roles::role_exists(database, &role).map_err(|e| e.to_string())? {
         return Err("invalid OIDC role".into());
     }
+    // Avoid removing the last role manager's direct role. Do not block
+    // ordinary non-admin role changes in an installation with no admin yet.
+    if role != user.role
+        && crate::roles::role_perms(database, &user.role)
+            .map_err(|e| e.to_string())?
+            .contains(crate::perms::Perm::AdminRoles)
+        && !crate::roles::admin_roles_survives(
+            database,
+            &crate::roles::Change::UserRole(user.email.clone(), role.clone()),
+        )
+        .map_err(|e| e.to_string())?
+    {
+        tracing::warn!(email = %user.email, old_role = %user.role, proposed_role = %role,
+            "OIDC role change would remove the last role administrator; preserving stored role");
+        return Ok(user.role.clone());
+    }
     if !db::set_user_role(database, &user.email, &role).map_err(|e| e.to_string())? {
         return Err("OIDC user no longer exists".into());
     }
     if role != user.role {
-        tracing::info!(old_role = %user.role, new_role = %role, "OIDC login role changed");
+        tracing::info!(email = %user.email, old_role = %user.role, new_role = %role, "OIDC login role changed");
     }
     Ok(role)
+}
+
+/// Whether a mapped built-in or custom role can manage role assignments.
+pub fn has_role_admin_mapping(database: &Db) -> rusqlite::Result<bool> {
+    for mapping in db::list_group_mappings(database)? {
+        if crate::roles::role_perms(database, &mapping.role)?
+            .contains(crate::perms::Perm::AdminRoles)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// GET /auth/logout — clear session cookie and redirect to login.
@@ -1001,6 +1029,7 @@ mod tests {
     fn role_sync_preserves_role_when_groups_claim_is_missing_but_syncs_empty_claim() {
         use base64::Engine;
         let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        crate::db::add_admin(&db, "recovery", None, None).unwrap();
         let config = role_config(true, "operator");
         let user = login_user(&db, &[]);
         crate::db::set_user_role(&db, &user.email, "admin").unwrap();
@@ -1058,6 +1087,7 @@ mod tests {
     #[test]
     fn role_sync_promotes_and_demotes_from_current_groups() {
         let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        crate::db::add_admin(&db, "recovery", None, None).unwrap();
         crate::db::create_group_mapping(&db, "operators", "operator").unwrap();
         crate::db::create_group_mapping(&db, "admins", "admin").unwrap();
         let config = role_config(true, "viewer");
@@ -1118,6 +1148,7 @@ mod tests {
     #[test]
     fn role_sync_disabled_preserves_unmatched_manual_roles_but_applies_mappings() {
         let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        crate::db::add_admin(&db, "recovery", None, None).unwrap();
         let user = login_user(&db, &[]);
         crate::db::set_user_role(&db, &user.email, "admin").unwrap();
         let user = login_user(&db, &[]);
@@ -1133,6 +1164,134 @@ mod tests {
             "viewer"
         );
         assert_eq!(login_user(&db, &groups).role, "viewer");
+    }
+
+    #[test]
+    fn role_sync_preserves_last_builtin_or_custom_role_administrator() {
+        for role in ["admin", "role-manager"] {
+            let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+            crate::roles::create_custom_role(
+                &db,
+                "role-manager",
+                "",
+                "",
+                crate::perms::PermSet::of(&[crate::perms::Perm::AdminRoles]),
+            )
+            .unwrap();
+            let user = login_user(&db, &[]);
+            crate::db::set_user_role(&db, &user.email, role).unwrap();
+            let user = login_user(&db, &[]);
+            assert_eq!(
+                super::reconcile_login_role(&db, &user, &[], &role_config(true, "operator"))
+                    .unwrap(),
+                role
+            );
+            let stored = login_user(&db, &[]);
+            assert_eq!(stored.role, role);
+            assert!(crate::roles::user_access(&db, &stored)
+                .unwrap()
+                .permissions
+                .contains(crate::perms::Perm::AdminRoles));
+        }
+    }
+
+    #[test]
+    fn role_sync_allows_demotion_only_with_another_usable_administrator() {
+        for (backup, expected) in [
+            ("api-key", "operator"),
+            ("disabled-key", "admin"),
+            ("expired-key", "admin"),
+            ("other-user", "operator"),
+            ("disabled-user", "admin"),
+        ] {
+            let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+            let user = login_user(&db, &[]);
+            crate::db::set_user_role(&db, &user.email, "admin").unwrap();
+            if backup.ends_with("key") {
+                crate::db::add_admin(
+                    &db,
+                    "backup",
+                    None,
+                    if backup == "expired-key" {
+                        Some("2000-01-01T00:00:00Z")
+                    } else {
+                        None
+                    },
+                )
+                .unwrap();
+                if backup == "disabled-key" {
+                    crate::db::disable_admin(&db, "backup").unwrap();
+                }
+            } else {
+                crate::db::create_user(&db, "backup@example.com", "Backup", "admin").unwrap();
+                if backup == "disabled-user" {
+                    db.lock()
+                        .unwrap()
+                        .execute(
+                            "UPDATE users SET disabled = 1 WHERE email = 'backup@example.com'",
+                            [],
+                        )
+                        .unwrap();
+                }
+            }
+            let user = login_user(&db, &[]);
+            assert_eq!(
+                super::reconcile_login_role(&db, &user, &[], &role_config(true, "operator"))
+                    .unwrap(),
+                expected,
+                "backup: {backup}"
+            );
+            assert_eq!(login_user(&db, &[]).role, expected);
+        }
+    }
+
+    #[test]
+    fn admin_mapping_detection_uses_permissions_for_builtin_and_custom_roles() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        assert!(!super::has_role_admin_mapping(&db).unwrap());
+        crate::db::create_group_mapping(&db, "operators", "operator").unwrap();
+        assert!(!super::has_role_admin_mapping(&db).unwrap());
+        let mapping = crate::db::create_group_mapping(&db, "admins", "admin").unwrap();
+        assert!(super::has_role_admin_mapping(&db).unwrap());
+        crate::db::delete_group_mapping(&db, mapping.id).unwrap();
+        crate::roles::create_custom_role(
+            &db,
+            "role-manager",
+            "",
+            "",
+            crate::perms::PermSet::of(&[crate::perms::Perm::AdminRoles]),
+        )
+        .unwrap();
+        crate::db::create_group_mapping(&db, "role-managers", "role-manager").unwrap();
+        assert!(super::has_role_admin_mapping(&db).unwrap());
+    }
+
+    #[test]
+    fn role_sync_keeps_the_union_of_custom_mappings_instead_of_the_direct_role() {
+        use crate::perms::{Perm, PermSet};
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        crate::roles::create_custom_role(
+            &db,
+            "support",
+            "",
+            "",
+            PermSet::of(&[Perm::ConnectionsConnect]),
+        )
+        .unwrap();
+        crate::roles::create_custom_role(&db, "auditor", "", "", PermSet::of(&[Perm::ReportsView]))
+            .unwrap();
+        crate::db::create_group_mapping(&db, "support-team", "support").unwrap();
+        crate::db::create_group_mapping(&db, "audit-team", "auditor").unwrap();
+        let groups = vec!["support-team".into(), "audit-team".into()];
+        let user = login_user(&db, &groups);
+        super::reconcile_login_role(&db, &user, &groups, &role_config(true, "admin")).unwrap();
+        let user = login_user(&db, &groups);
+        let access = crate::roles::user_access(&db, &user).unwrap();
+        assert_eq!(access.roles, vec!["auditor", "support"]);
+        assert!(access.permissions.contains(Perm::ConnectionsConnect));
+        assert!(access.permissions.contains(Perm::ReportsView));
+        assert!(!access.permissions.contains(Perm::AdminRoles));
+        assert!(!access.direct_role_in_effect);
     }
 
     #[test]

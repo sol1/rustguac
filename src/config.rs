@@ -26,8 +26,8 @@ pub struct OidcConfig {
     pub redirect_uri: String,
     #[serde(default = "default_oidc_default_role")]
     pub default_role: String,
-    /// Recompute the role from current OIDC groups on every login, falling
-    /// back to default_role when no mapping matches. Overrides manual roles.
+    /// Reset an unmatched user's direct role to default_role on login.
+    /// Matching groups always grant the union of their mapped roles.
     #[serde(default)]
     pub sync_role_on_login: bool,
     /// Create a user account on first OIDC login (default: true). When false,
@@ -1752,38 +1752,40 @@ mod tests {
         let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
         crate::roles::create_custom_role(&db, "auditor", "Auditor", "", Default::default())
             .unwrap();
-        for role in [
-            "admin",
-            "poweruser",
-            "operator",
-            "viewer",
-            "auditor",
-            "operatr",
-            "",
-        ] {
-            std::fs::write(
-                &path,
-                format!(
-                    r#"
+        for sync in [false, true] {
+            for role in [
+                "admin",
+                "poweruser",
+                "operator",
+                "viewer",
+                "auditor",
+                "operatr",
+                "",
+            ] {
+                std::fs::write(
+                    &path,
+                    format!(
+                        r#"
                 [oidc]
                 issuer_url = "https://idp.example.com"
                 client_id = "console"
                 redirect_uri = "https://console.example.com/auth/callback"
                 default_role = "{role}"
-                sync_role_on_login = true
+                sync_role_on_login = {sync}
             "#
-                ),
-            )
-            .unwrap();
-            let result = super::load_from_file(path.to_str().unwrap())
-                .unwrap()
-                .validate_oidc_role(&db);
-            assert_eq!(
-                result.is_ok(),
-                ["admin", "poweruser", "operator", "viewer", "auditor"].contains(&role)
-            );
-            if let Err(error) = result {
-                assert!(error.contains("default_role"));
+                    ),
+                )
+                .unwrap();
+                let result = super::load_from_file(path.to_str().unwrap())
+                    .unwrap()
+                    .validate_oidc_role(&db);
+                assert_eq!(
+                    result.is_ok(),
+                    ["admin", "poweruser", "operator", "viewer", "auditor"].contains(&role)
+                );
+                if let Err(error) = result {
+                    assert!(error.contains("default_role"));
+                }
             }
         }
         std::fs::remove_file(path).unwrap();
