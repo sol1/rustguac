@@ -291,6 +291,10 @@ async fn main() {
                 eprintln!("[config] ERROR: {}", msg);
                 std::process::exit(1);
             }
+            if let Err(msg) = config.validate_oidc_role(&database) {
+                eprintln!("[config] ERROR: {}", msg);
+                std::process::exit(1);
+            }
             run_server(config, database).await
         }
         Some(Command::AddAdmin {
@@ -1098,15 +1102,20 @@ async fn run_server(config: Config, database: Db) {
 
     // Initialize OIDC if configured
     let oidc_state = if let Some(ref oidc_config) = config.oidc {
+        if oidc_config.sync_role_on_login {
+            match oidc::has_role_admin_mapping(&database) {
+                Ok(false) => {
+                    tracing::warn!("OIDC role synchronization is enabled but no group mapping grants admin.roles; role administration depends on a direct role or admin API key");
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Cannot check OIDC admin group mappings at startup")
+                }
+                _ => {}
+            }
+        }
         match oidc::init_oidc(oidc_config, config.auth_session_ttl_secs).await {
             Ok(state) => {
                 tracing::info!("OIDC configured with issuer: {}", oidc_config.issuer_url);
-                if !roles::role_exists(&database, &oidc_config.default_role).unwrap_or(false) {
-                    tracing::error!(
-                        default_role = %oidc_config.default_role,
-                        "[oidc] default_role is not a role: new users will get no permissions until it names one"
-                    );
-                }
                 Some(state)
             }
             Err(e) => {
