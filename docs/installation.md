@@ -370,6 +370,7 @@ For bare-metal installs, rustguac requires:
 - **Xvnc** (tigervnc-standalone-server) — for web browser sessions
 - **Chromium** — for web browser sessions
 - **cryptsetup** — for LUKS encrypted drive storage
+- **Ghostscript** - for optional RDP printer redirection
 - **Build libraries** for guacd: libcairo2, libjpeg, libpng, libwebp, libssh2, libssl, libvncserver, libpango, libpulse, ffmpeg, freerdp3
 
 See `install.sh` for the full package list.

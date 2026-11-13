@@ -104,6 +104,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tigervnc-standalone-server \
     chromium chromium-sandbox \
     x11-utils \
+    ghostscript \
     # Minimal runtime utilities
     ca-certificates \
     tini \

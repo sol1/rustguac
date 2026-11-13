@@ -105,7 +105,13 @@ pub fn create_session_dir(config: &DriveConfig, session_id: Uuid) -> Result<Path
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750));
+        if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750)) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(DriveError::Io(format!(
+                "failed to set permissions on session drive directory {:?}: {}",
+                dir, e
+            )));
+        }
     }
     // Canonicalize to absolute path — guacd runs as a separate systemd service
     // with a different WorkingDirectory, so relative paths won't resolve correctly.
@@ -117,6 +123,27 @@ pub fn create_session_dir(config: &DriveConfig, session_id: Uuid) -> Result<Path
     })?;
     tracing::info!(session_id = %session_id, "Created session drive directory: {:?}", abs_dir);
     Ok(abs_dir)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn session_drive_directory_has_restricted_permissions() {
+        let base = std::env::temp_dir().join(format!("rustguac-drive-test-{}", Uuid::new_v4()));
+        let config = DriveConfig {
+            drive_path: base.clone(),
+            ..DriveConfig::default()
+        };
+
+        let path = create_session_dir(&config, Uuid::new_v4()).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o750);
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
 }
 
 /// Clean up a session drive directory, optionally with a retention delay.

@@ -136,6 +136,10 @@ pub async fn cmd_import_guacamole(
             enable_drive: param_map
                 .get("enable-drive")
                 .map(|s| s.eq_ignore_ascii_case("true")),
+            enable_printing: param_map
+                .get("enable-printing")
+                .map(|s| s.eq_ignore_ascii_case("true")),
+            printer_name: param_map.get("printer-name").map(|s| s.to_string()),
             auth_pkg: None,
             kdc_url: None,
             prompt_credentials: None,
