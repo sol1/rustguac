@@ -129,6 +129,7 @@ global
     maxconn 4096
     stats socket /run/haproxy/admin.sock mode 0660 level admin
     ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
+    h2-workaround-bogus-websocket-clients   # keep WebSockets on HTTP/1.1 (see below)
 
 defaults
     log     global
@@ -153,6 +154,8 @@ backend rustguac
     option httpchk GET /api/health
     server rustguac 127.0.0.1:8089 ssl verify none check inter 30s
 ```
+
+**Keep `h2-workaround-bogus-websocket-clients`.** With HTTP/2 offered (`alpn h2,http/1.1`), Firefox carries the session's WebSocket inside its shared HTTP/2 connection, and sessions drop after anywhere from a few seconds to a few minutes. The browser shows a connection error (code 519, "interrupted while the page was loading"), rustguac logs `Connection reset without closing handshake`, and HAProxy logs the `/ws/` request with termination code `CD` and `HTTP/2.0`. This setting stops HAProxy offering WebSockets over HTTP/2, so they use a normal HTTP/1.1 upgrade on their own connection, and everything else stays on HTTP/2. See [reverse-proxies.md](reverse-proxies.md#websockets-over-http2).
 
 ### TLS certificate
 

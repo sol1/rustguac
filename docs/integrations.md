@@ -1086,7 +1086,7 @@ For nginx, Caddy, Apache, and Traefik setups, see [reverse-proxies.md](reverse-p
 - **TLS termination** at HAProxy with modern ciphersuites (TLS 1.2+, ECDHE)
 - **HTTP to HTTPS redirect**
 - **X-Forwarded-For handling** — strips incoming headers and adds the real client IP
-- **WebSocket support** — `timeout tunnel 8h` for long-lived sessions
+- **WebSocket support** — `timeout tunnel 8h` for long-lived sessions, and `h2-workaround-bogus-websocket-clients` to keep WebSockets on HTTP/1.1 (without it, Firefox sessions drop when HTTP/2 is on; see [reverse-proxies.md](reverse-proxies.md#websockets-over-http2))
 - **Health checks** against `/api/health`
 - **Slowloris protection** — `timeout http-request 10s`
 - **HSTS header** — `max-age=31536000; includeSubDomains`
