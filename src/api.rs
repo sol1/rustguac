@@ -8693,6 +8693,45 @@ mod tests {
 
     /// An entry with every field the conversion reads set to something
     /// distinct, so a field dropped or swapped shows up.
+    /// The entry editor loads an entry from `EntryInfo` and saves back what
+    /// it shows, so a stored field missing from `EntryInfo` is silently reset
+    /// on every save. That is how RDP keyboard layouts were lost (#356).
+    /// Every field of a full entry must appear, except the secrets, which
+    /// are never sent to the browser and are kept on save instead, and the
+    /// legacy single jump host fields, replaced by `jump_hosts`.
+    #[test]
+    fn the_editor_sees_every_stored_field_but_the_secrets() {
+        const NOT_SENT: &[&str] = &[
+            "password",
+            "private_key",
+            "jump_host",
+            "jump_port",
+            "jump_username",
+            "jump_password",
+            "jump_private_key",
+            "container_password",
+            "proxmox_token_secret",
+        ];
+        for session_type in ["ssh", "rdp", "vnc", "web", "vdi", "spice", "proxmox"] {
+            let entry = full_entry(session_type);
+            let stored = serde_json::to_value(&entry).unwrap();
+            let info =
+                serde_json::to_value(crate::vault::EntryInfo::from(("box", &entry))).unwrap();
+            for key in stored.as_object().unwrap().keys() {
+                if NOT_SENT.contains(&key.as_str()) || key == "type" {
+                    continue;
+                }
+                assert!(
+                    info.get(key).is_some()
+                        || info.get(key.trim_start_matches("session_")).is_some(),
+                    "{session_type}: {key} is stored but the editor never sees it"
+                );
+            }
+        }
+        let rdp = crate::vault::EntryInfo::from(("box", &full_entry("rdp")));
+        assert_eq!(rdp.server_layout.as_deref(), Some("en-gb-qwerty"));
+    }
+
     fn full_entry(session_type: &str) -> AddressBookEntry {
         // In parts: one json! literal this size exceeds the macro recursion limit.
         let mut body = serde_json::Map::new();

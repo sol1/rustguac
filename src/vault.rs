@@ -556,6 +556,10 @@ pub struct EntryInfo {
     pub display_name: Option<String>,
     pub domain: Option<String>,
     pub security: Option<String>,
+    /// RDP keyboard layout. The entry editor loads it from here, so without
+    /// it every save of an RDP entry reset the layout to the default (#356).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_layout: Option<String>,
     pub ignore_cert: Option<bool>,
     pub enable_drive: Option<bool>,
     /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
@@ -775,6 +779,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             display_name: e.display_name.clone(),
             domain: e.domain.clone(),
             security: e.security.clone(),
+            server_layout: e.server_layout.clone(),
             ignore_cert: e.ignore_cert,
             enable_drive: e.enable_drive,
             auth_pkg: e.auth_pkg.clone(),
