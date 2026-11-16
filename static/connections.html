@@ -711,6 +711,7 @@
             <div class="section-head">
                 <strong>Active Sessions</strong>
                 <span id="active-sessions-count" class="section-count"></span>
+                <button type="button" class="btn-add btn-danger section-action" id="btn-terminate-all" style="display:none" title="End every one of your sessions listed here">Terminate all</button>
             </div>
             <div id="active-sessions-grid" class="session-grid"></div>
         </div>
@@ -2020,6 +2021,32 @@
             });
         })();
 
+        var terminateAllTargets = [];
+        document.getElementById('btn-terminate-all').addEventListener('click', function() {
+            var targets = terminateAllTargets.slice();
+            if (!targets.length) return;
+            var btn = this;
+            var note = targets.length === 1 ? 'your session' : 'all ' + targets.length + ' of your sessions';
+            rgConfirm('End ' + note + '? Any unsaved work in them will be lost. Dormant VDI desktops are left running.',
+                { danger: true, confirmText: 'Terminate all' }).then(function(ok) {
+                if (!ok) return;
+                btn.disabled = true;
+                btn.textContent = 'Ending...';
+                Promise.all(targets.map(function(t) {
+                    return fetch('/api/sessions/' + encodeURIComponent(t.id), {
+                        method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin'
+                    }).then(function(res) { return res.ok || res.status === 404 ? null : t.name; })
+                      .catch(function() { return t.name; });
+                })).then(function(results) {
+                    var failed = results.filter(function(n) { return n; });
+                    btn.disabled = false;
+                    btn.textContent = 'Terminate all';
+                    if (failed.length) showError('Could not end: ' + failed.join(', '));
+                    loadActiveSessions();
+                });
+            });
+        });
+
         function loadActiveSessions() {
             // Fetch active sessions and dormant VDI containers in parallel
             var sessionsP = fetch('/api/sessions', { headers: apiHeaders(), credentials: 'same-origin' }).then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; });
@@ -2048,6 +2075,13 @@
                 var grid = document.getElementById('active-sessions-grid');
                 var section = document.getElementById('active-sessions');
                 var total = activeSessions.length + dormantContainers.length;
+                // Terminate all (#334): the list is the caller's own
+                // sessions (GET /api/sessions without ?all), so this never
+                // reaches anyone else's, admins included.
+                terminateAllTargets = activeSessions.map(function(s) {
+                    return { id: s.session_id, name: s.entry_display_name || s.hostname || s.url || s.session_id };
+                });
+                document.getElementById('btn-terminate-all').style.display = activeSessions.length >= 2 ? '' : 'none';
 
                 if (total === 0) {
                     section.style.display = 'none';
