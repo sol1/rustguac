@@ -1669,7 +1669,7 @@ pub fn cleanup_session_history(db: &Db, retain_days: u32) -> rusqlite::Result<us
 
 /// The role to record for a user at login from their OIDC groups and the
 /// group-to-role mappings. Returns `Some(role)` if at least one group matched
-/// a mapping, or `None` if none did (the caller keeps the existing role).
+/// a mapping, or `None` if none did (the caller chooses its fallback policy).
 ///
 /// Permissions come from every matching mapping (`roles::user_access`); this
 /// is only the single role written to `users.role`, as before: the highest
