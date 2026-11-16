@@ -370,6 +370,10 @@ pub struct AddressBookEntry {
     /// Enable RDP Graphics Pipeline Extension (GFX). Enables RemoteFX codec for better video.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_gfx: Option<bool>,
+    /// RDP: connect to the console (admin) session, like `mstsc /admin`.
+    /// Also bypasses RD Connection Broker load balancing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rdp_console: Option<bool>,
     /// Enable desktop composition (DWM). Improves video overlay rendering in RDP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_desktop_composition: Option<bool>,
@@ -628,6 +632,9 @@ pub struct EntryInfo {
     /// Enable RDP Graphics Pipeline Extension (GFX).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_gfx: Option<bool>,
+    /// RDP: connect to the console (admin) session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rdp_console: Option<bool>,
     /// Enable desktop composition (DWM).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_desktop_composition: Option<bool>,
@@ -805,6 +812,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             banner: e.banner.clone(),
             credential_variables: entry_credential_variables(e),
             enable_gfx: e.enable_gfx,
+            rdp_console: e.rdp_console,
             enable_desktop_composition: e.enable_desktop_composition,
             enable_wallpaper: e.enable_wallpaper,
             enable_theming: e.enable_theming,

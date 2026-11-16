@@ -161,6 +161,7 @@ pub async fn cmd_import_guacamole(
             disable_paste: None,
             banner: None,
             enable_gfx: None,
+            rdp_console: param_map.get("console").map(|v| *v == "true"),
             enable_desktop_composition: None,
             enable_wallpaper: None,
             enable_theming: None,

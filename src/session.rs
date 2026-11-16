@@ -119,6 +119,9 @@ pub struct CreateSessionRequest {
     pub disable_paste: Option<bool>,
     /// Enable RDP Graphics Pipeline Extension (GFX).
     pub enable_gfx: Option<bool>,
+    /// RDP: connect to the console (admin) session.
+    #[serde(default)]
+    pub rdp_console: Option<bool>,
     /// Enable desktop composition (DWM) for RDP.
     pub enable_desktop_composition: Option<bool>,
     /// Show the remote desktop wallpaper (RDP).
@@ -1274,6 +1277,7 @@ impl SessionManager {
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
                     enable_gfx: req.enable_gfx.unwrap_or(false),
+                    console: req.rdp_console.unwrap_or(false),
                     enable_desktop_composition: req.enable_desktop_composition.unwrap_or(false),
                     enable_wallpaper: req.enable_wallpaper.unwrap_or(false),
                     enable_theming: req.enable_theming.unwrap_or(false),
@@ -1800,6 +1804,7 @@ impl SessionManager {
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
                     enable_gfx: true,
+                    console: false,
                     enable_desktop_composition: true,
                     enable_wallpaper: false,
                     enable_theming: false,

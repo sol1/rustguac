@@ -343,6 +343,8 @@ pub struct RdpParams {
     pub disable_paste: bool,
     /// Enable Graphics Pipeline Extension (GFX/RDPGFX). Enables RemoteFX codec, 32bpp.
     pub enable_gfx: bool,
+    /// Connect to the console (admin) session, like `mstsc /admin`.
+    pub console: bool,
     /// Enable desktop composition (DWM). Required for smooth video overlay rendering.
     pub enable_desktop_composition: bool,
     /// Show the remote desktop wallpaper. Disabled by default to save bandwidth.
@@ -525,7 +527,7 @@ pub async fn connect_and_handshake(
                 "gateway-password" => String::new(),
                 "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
                 "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
-                "console" => "false".into(),
+                "console" => if p.console { "true" } else { "false" }.into(),
                 "server-layout" => p.server_layout.clone().unwrap_or_default(),
                 "timezone" => String::new(),
                 "disable-audio" => "false".into(),

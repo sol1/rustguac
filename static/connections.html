@@ -943,6 +943,10 @@
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-rdp-ignore-cert" style="display:inline;width:auto;margin-right:0.4em"> Ignore certificate errors
                 </label>
+                <label>
+                    <input type="checkbox" id="em-rdp-console" style="display:inline;width:auto;margin-right:0.4em"> Connect to the console session
+                </label>
+                <div class="field-hint">Like <code>mstsc /admin</code>: the server's console (admin) session, without RD Connection Broker load balancing. Needs an administrator account on the server.</div>
                 <label>NLA Auth Package
                     <select id="em-rdp-auth-pkg">
                         <option value="">Server default (NTLM)</option>
@@ -4468,6 +4472,7 @@
             document.getElementById('em-rdp-security').value = '';
             document.getElementById('em-rdp-layout').value = '';
             document.getElementById('em-rdp-ignore-cert').checked = false;
+            document.getElementById('em-rdp-console').checked = false;
             document.getElementById('em-rdp-auth-pkg').value = '';
             document.getElementById('em-rdp-kdc-url').value = '';
             document.getElementById('em-rdp-prompt-creds').checked = false;
@@ -4634,6 +4639,7 @@
                     }
                     document.getElementById('em-rdp-layout').value = entryData.server_layout || '';
                     document.getElementById('em-rdp-ignore-cert').checked = !!entryData.ignore_cert;
+                    document.getElementById('em-rdp-console').checked = !!entryData.rdp_console;
                     document.getElementById('em-rdp-auth-pkg').value = entryData.auth_pkg || '';
                     document.getElementById('em-rdp-kdc-url').value = entryData.kdc_url || '';
                     document.getElementById('em-rdp-monitors').value = entryData.max_monitors || 1;
@@ -4854,6 +4860,7 @@
                 var layout = document.getElementById('em-rdp-layout').value;
                 if (layout) entry.server_layout = layout;
                 entry.ignore_cert = document.getElementById('em-rdp-ignore-cert').checked;
+                if (document.getElementById('em-rdp-console').checked) entry.rdp_console = true;
                 var authPkg = document.getElementById('em-rdp-auth-pkg').value;
                 if (authPkg) entry.auth_pkg = authPkg;
                 var kdcUrl = document.getElementById('em-rdp-kdc-url').value.trim();
