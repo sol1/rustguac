@@ -20,6 +20,8 @@ pub struct AdminInfo {
     pub disabled: bool,
     pub created_at: String,
     pub last_used_at: Option<String>,
+    /// The role whose permissions the key holds. None: every permission.
+    pub role: Option<String>,
 }
 
 /// User record from OIDC login.
@@ -312,6 +314,12 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         conn.execute_batch("ALTER TABLE users ADD COLUMN oidc_groups TEXT NOT NULL DEFAULT ''")?;
     }
 
+    // Migration: a role per admin API key. NULL keeps a key a full admin.
+    let has_admin_role: bool = conn.prepare("SELECT role FROM admins LIMIT 0").is_ok();
+    if !has_admin_role {
+        conn.execute_batch("ALTER TABLE admins ADD COLUMN role TEXT")?;
+    }
+
     // Migration: auth_sessions token → token_hash (v1.0.0 security hardening)
     let has_old_token_col: bool = conn
         .prepare("SELECT token FROM auth_sessions LIMIT 0")
@@ -370,18 +378,32 @@ pub(crate) fn parse_expires_at(s: &str) -> Option<DateTime<Utc>> {
     None
 }
 
+/// Create a full admin API key.
+#[cfg(test)]
 pub fn add_admin(
     db: &Db,
     name: &str,
     allowed_ips: Option<&str>,
     expires_at: Option<&str>,
 ) -> rusqlite::Result<String> {
+    add_admin_with_role(db, name, allowed_ips, expires_at, None)
+}
+
+/// Create an admin API key holding `role`'s permissions, or every
+/// permission when `role` is None. The caller checks the role exists.
+pub fn add_admin_with_role(
+    db: &Db,
+    name: &str,
+    allowed_ips: Option<&str>,
+    expires_at: Option<&str>,
+    role: Option<&str>,
+) -> rusqlite::Result<String> {
     let key = generate_key();
     let key_hash = hash_key(&key);
     let conn = db.lock().unwrap();
     conn.execute(
-        "INSERT INTO admins (name, api_key_hash, allowed_ips, expires_at) VALUES (?1, ?2, ?3, ?4)",
-        params![name, key_hash, allowed_ips, expires_at],
+        "INSERT INTO admins (name, api_key_hash, allowed_ips, expires_at, role) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![name, key_hash, allowed_ips, expires_at, role],
     )?;
     Ok(key)
 }
@@ -390,7 +412,7 @@ pub fn add_admin(
 pub fn list_admins(db: &Db) -> rusqlite::Result<Vec<AdminInfo>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, name, allowed_ips, expires_at, disabled, created_at, last_used_at FROM admins ORDER BY id",
+        "SELECT id, name, allowed_ips, expires_at, disabled, created_at, last_used_at, role FROM admins ORDER BY id",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(AdminInfo {
@@ -401,6 +423,7 @@ pub fn list_admins(db: &Db) -> rusqlite::Result<Vec<AdminInfo>> {
             disabled: row.get::<_, i32>(4)? != 0,
             created_at: row.get(5)?,
             last_used_at: row.get(6)?,
+            role: row.get(7)?,
         })
     })?;
     rows.collect()
@@ -423,7 +446,7 @@ pub fn validate_api_key(
     // Fetch all admins and compare hashes in constant time
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, allowed_ips, expires_at, disabled, created_at, last_used_at, api_key_hash
+            "SELECT id, name, allowed_ips, expires_at, disabled, created_at, last_used_at, api_key_hash, role
              FROM admins",
         )
         .map_err(|_| AuthError::InvalidKey)?;
@@ -439,6 +462,7 @@ pub fn validate_api_key(
                     disabled: row.get::<_, i32>(4)? != 0,
                     created_at: row.get(5)?,
                     last_used_at: row.get(6)?,
+                    role: row.get(8)?,
                 },
                 stored_hash,
             ))

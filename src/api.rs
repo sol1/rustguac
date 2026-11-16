@@ -2093,7 +2093,9 @@ pub async fn me(
                 "permissions": id.permissions().names(),
                 "roles": match &id {
                     AuthIdentity::User { roles, .. } => roles.clone(),
-                    AuthIdentity::ApiKey(_) => vec!["admin".to_string()],
+                    AuthIdentity::ApiKey(key) => {
+                        vec![key.role.clone().unwrap_or_else(|| "admin".to_string())]
+                    }
                 },
                 "groups": id.groups(),
                 "vault_enabled": vault_available,
@@ -7943,7 +7945,7 @@ fn caller_holds(
 fn roles_in_use_by(id: &AuthIdentity) -> Vec<String> {
     match id {
         AuthIdentity::User { roles, .. } => roles.clone(),
-        AuthIdentity::ApiKey(_) => Vec::new(),
+        AuthIdentity::ApiKey(key) => key.role.iter().cloned().collect(),
     }
 }
 

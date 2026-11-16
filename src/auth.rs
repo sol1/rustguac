@@ -69,11 +69,56 @@ impl WsTicketStore {
 #[derive(Clone)]
 pub struct TrustedProxies(pub Vec<String>);
 
+/// An admin API key: its name, and the role it was given (`add-admin
+/// --role`), if any. A key without a role holds every permission.
+#[derive(Clone, Debug)]
+pub struct ApiKeyId {
+    pub name: String,
+    pub role: Option<String>,
+    pub perms: crate::perms::PermSet,
+}
+
+impl ApiKeyId {
+    /// The identity for an admin key row, its role resolved to permissions.
+    /// A role that no longer exists grants nothing.
+    pub fn from_admin(db: &Db, admin: db::AdminInfo) -> Self {
+        let perms = match &admin.role {
+            None => crate::perms::PermSet::all(),
+            Some(r) => crate::roles::role_perms(db, r).unwrap_or_else(|e| {
+                tracing::error!(error = %e, key = %admin.name, "could not resolve the API key's role");
+                crate::perms::PermSet::EMPTY
+            }),
+        };
+        ApiKeyId {
+            name: admin.name,
+            role: admin.role,
+            perms,
+        }
+    }
+}
+
+/// A full admin key by name.
+impl From<String> for ApiKeyId {
+    fn from(name: String) -> Self {
+        ApiKeyId {
+            name,
+            role: None,
+            perms: crate::perms::PermSet::all(),
+        }
+    }
+}
+
+impl From<&str> for ApiKeyId {
+    fn from(name: &str) -> Self {
+        name.to_string().into()
+    }
+}
+
 /// Identity of the authenticated caller.
 #[derive(Clone, Debug)]
 pub enum AuthIdentity {
-    /// API key admin — always full admin access.
-    ApiKey(String),
+    /// Admin API key: every permission, or its role's when it has one.
+    ApiKey(ApiKeyId),
     /// OIDC user with email, role, and group memberships.
     User {
         email: String,
@@ -93,14 +138,14 @@ pub enum AuthIdentity {
 impl AuthIdentity {
     pub fn display_name(&self) -> &str {
         match self {
-            AuthIdentity::ApiKey(name) => name,
+            AuthIdentity::ApiKey(key) => &key.name,
             AuthIdentity::User { email, .. } => email,
         }
     }
 
     pub fn role(&self) -> &str {
         match self {
-            AuthIdentity::ApiKey(_) => "admin",
+            AuthIdentity::ApiKey(key) => key.role.as_deref().unwrap_or("admin"),
             AuthIdentity::User { role, .. } => role,
         }
     }
@@ -127,11 +172,11 @@ impl AuthIdentity {
         }
     }
 
-    /// Everything this identity may do. Admin API keys hold every
-    /// permission; a user holds what their role grants (#294).
+    /// Everything this identity may do. An admin API key holds every
+    /// permission, or its role's; a user holds what their roles grant (#294).
     pub fn permissions(&self) -> crate::perms::PermSet {
         match self {
-            AuthIdentity::ApiKey(_) => crate::perms::PermSet::all(),
+            AuthIdentity::ApiKey(key) => key.perms,
             AuthIdentity::User { perms, .. } => *perms,
         }
     }
@@ -374,6 +419,7 @@ pub async fn require_auth(
         let key_clone = key.clone();
         let result = tokio::task::spawn_blocking(move || {
             db::validate_api_key(&db_clone, &key_clone, validate_ip)
+                .map(|admin| ApiKeyId::from_admin(&db_clone, admin))
         })
         .await
         .unwrap_or(Err(AuthError::InvalidKey));
@@ -382,9 +428,7 @@ pub async fn require_auth(
             Ok(admin) => {
                 tracing::debug!(admin = %admin.name, "API key authenticated");
                 let mut request = request;
-                request
-                    .extensions_mut()
-                    .insert(AuthIdentity::ApiKey(admin.name));
+                request.extensions_mut().insert(AuthIdentity::ApiKey(admin));
                 return next.run(request).await;
             }
             Err(AuthError::InvalidKey) => {
@@ -549,6 +593,7 @@ pub async fn optional_auth(
         let key_clone = key.clone();
         let result = tokio::task::spawn_blocking(move || {
             db::validate_api_key(&db_clone, &key_clone, validate_ip)
+                .map(|admin| ApiKeyId::from_admin(&db_clone, admin))
         })
         .await
         .unwrap_or(Err(AuthError::InvalidKey));
@@ -557,9 +602,7 @@ pub async fn optional_auth(
             Ok(admin) => {
                 tracing::debug!(admin = %admin.name, "Optional auth: API key authenticated");
                 let mut request = request;
-                request
-                    .extensions_mut()
-                    .insert(AuthIdentity::ApiKey(admin.name));
+                request.extensions_mut().insert(AuthIdentity::ApiKey(admin));
                 return next.run(request).await;
             }
             Err(AuthError::InvalidKey) => {

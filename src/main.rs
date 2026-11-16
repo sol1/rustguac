@@ -74,6 +74,10 @@ enum Command {
         /// depends on the database named by db_path, not on any fixed file.
         #[arg(long)]
         if_none: bool,
+        /// Give the key only this role's permissions (a built-in or custom
+        /// role) instead of full admin, e.g. for a reporting script.
+        #[arg(long)]
+        role: Option<String>,
     },
 
     /// List all admin accounts
@@ -302,6 +306,7 @@ async fn main() {
             allowed_ips,
             expires,
             if_none,
+            role,
         }) => {
             if if_none {
                 match db::list_admins(&database) {
@@ -316,7 +321,13 @@ async fn main() {
                     }
                 }
             }
-            cmd_add_admin(&database, &name, allowed_ips.as_deref(), expires.as_deref());
+            cmd_add_admin(
+                &database,
+                &name,
+                allowed_ips.as_deref(),
+                expires.as_deref(),
+                role.as_deref(),
+            );
         }
         Some(Command::ListAdmins) => cmd_list_admins(&database),
         Some(Command::DisableAdmin { name }) => cmd_disable_admin(&database, &name),
@@ -483,10 +494,11 @@ fn cmd_delete_role(
             println!("Role '{name}' deleted.");
             if let Some(to) = reassign_to.filter(|_| !usage.is_empty()) {
                 println!(
-                    "Reassigned to '{to}': {} user(s), {} group mapping(s), {} token cap(s).",
+                    "Reassigned to '{to}': {} user(s), {} group mapping(s), {} token cap(s), {} API key(s).",
                     usage.users.len(),
                     usage.mappings.len(),
-                    usage.token_caps
+                    usage.token_caps,
+                    usage.api_keys.len()
                 );
             }
             let details = reassign_to.map(|t| format!("reassigned to {t}"));
@@ -500,6 +512,9 @@ fn cmd_delete_role(
                 }
                 for g in u.mappings {
                     eprintln!("  group mapping: {g}");
+                }
+                for k in u.api_keys {
+                    eprintln!("  API key: {k}");
                 }
                 eprintln!("Use --reassign-to ROLE to move them to another role.");
             }
@@ -573,19 +588,42 @@ fn audit_cli(database: &Db, action: &str, target: &str, details: Option<&str>) {
     }
 }
 
-fn cmd_add_admin(database: &Db, name: &str, allowed_ips: Option<&str>, expires: Option<&str>) {
-    match db::add_admin(database, name, allowed_ips, expires) {
+fn cmd_add_admin(
+    database: &Db,
+    name: &str,
+    allowed_ips: Option<&str>,
+    expires: Option<&str>,
+    role: Option<&str>,
+) {
+    if let Some(r) = role {
+        match roles::role_exists(database, r) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("No role '{r}'. See list-roles.");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error reading roles: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    match db::add_admin_with_role(database, name, allowed_ips, expires, role) {
         Ok(key) => {
-            println!("Admin '{}' created.", name);
+            match role {
+                Some(r) => println!("Admin '{}' created with role '{}'.", name, r),
+                None => println!("Admin '{}' created.", name),
+            }
             println!("API Key: {}", key);
             println!();
             println!("Store this key securely — it cannot be retrieved again.");
             // Headline only: whether the optional restrictions were applied,
             // never the key itself.
             let details = format!(
-                "ip_allowlist={} expiry={}",
+                "ip_allowlist={} expiry={} role={}",
                 allowed_ips.is_some(),
-                expires.is_some()
+                expires.is_some(),
+                role.unwrap_or("admin (all permissions)")
             );
             audit_cli(database, "add_admin", name, Some(&details));
         }
@@ -604,18 +642,19 @@ fn cmd_list_admins(database: &Db) {
                 return;
             }
             println!(
-                "{:<4} {:<20} {:<10} {:<24} {:<24} Allowed IPs",
-                "ID", "Name", "Status", "Expires", "Last Used",
+                "{:<4} {:<20} {:<10} {:<16} {:<24} {:<24} Allowed IPs",
+                "ID", "Name", "Status", "Role", "Expires", "Last Used",
             );
-            println!("{}", "-".repeat(100));
+            println!("{}", "-".repeat(117));
             for a in admins {
                 let status = if a.disabled { "disabled" } else { "active" };
                 let expires = a.expires_at.as_deref().unwrap_or("never");
                 let last_used = a.last_used_at.as_deref().unwrap_or("never");
                 let ips = a.allowed_ips.as_deref().unwrap_or("any");
+                let role = a.role.as_deref().unwrap_or("(all)");
                 println!(
-                    "{:<4} {:<20} {:<10} {:<24} {:<24} {}",
-                    a.id, a.name, status, expires, last_used, ips
+                    "{:<4} {:<20} {:<10} {:<16} {:<24} {:<24} {}",
+                    a.id, a.name, status, role, expires, last_used, ips
                 );
             }
         }

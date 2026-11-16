@@ -442,7 +442,8 @@
             var p = document.createElement('div');
             p.style.gridColumn = '1 / -1';
             p.textContent = 'Used by ' + usage.users.length + ' user(s), ' + usage.mappings.length + ' group mapping(s) and ' +
-                usage.token_caps + ' token cap(s). Move them to another role, then delete it:';
+                usage.token_caps + ' token cap(s)' + ((usage.api_keys || []).length ? ', ' + usage.api_keys.length + ' API key(s)' : '') +
+                '. Move them to another role, then delete it:';
             box.appendChild(p);
             var sel = document.createElement('select');
             allRoles.forEach(function(x) { if (x.name !== r.name) sel.appendChild(roleOption(x, x.name === 'viewer')); });

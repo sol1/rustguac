@@ -49,9 +49,9 @@ Rules that keep this safe:
 - **Nobody can grant what they don't hold.** A role, a role assignment, a group mapping or a token cap is refused if it would grant a permission the person making the change doesn't have.
 - **Nobody changes their own role**, or edits or deletes a role they're using.
 - **Nobody disables or deletes a user who holds more than they do.**
-- **The last way to manage roles is kept.** A change that would leave no enabled admin API key and no enabled user holding `admin.roles` is refused.
+- **The last way to manage roles is kept.** A change that would leave no enabled admin API key with `admin.roles` (a key without a role has it) and no enabled user holding `admin.roles` is refused.
 - **Built-in roles can't be changed**, and their names (in any case) can't be used for custom roles.
-- **A role in use can't simply be deleted.** Its users, group mappings and token caps have to move to another role first (the Admin page offers this; the CLI has `--reassign-to`). The role set as `[oidc] default_role` can't be deleted.
+- **A role in use can't simply be deleted.** Its users, group mappings, token caps and admin API keys have to move to another role first (the Admin page offers this; the CLI has `--reassign-to`). The role set as `[oidc] default_role` can't be deleted.
 - **New permissions are off for custom roles.** A permission added in a later release isn't granted to any custom role until an admin adds it. `admin` gets every permission automatically.
 
 Role names are lowercase letters, digits, `-` and `_`, and can't be changed after creation; the display name can.
@@ -67,11 +67,15 @@ rustguac supports three authentication methods, tried in order: admin API key, u
 
 ### API key admins
 
-API key holders always have full **admin** access (level 4). There is no way to restrict an API key to a lower role. API keys are intended for automation, CI/CD, and system administration.
+An API key holds every permission unless it's given a role with `--role`, in which case it holds only that role's permissions (a built-in or custom role). Keys created before 1.14.3 have no role and keep full admin access. API keys are intended for automation, CI/CD, and system administration.
 
 ```bash
 # Create an API key admin
 rustguac add-admin --name automation
+
+# A key for a reporting script that can only read reports
+rustguac add-role --name report-reader --perm reports.view
+rustguac add-admin --name reports --role report-reader
 
 # With IP restrictions and expiry
 rustguac add-admin --name ci-bot \
@@ -430,6 +434,9 @@ rustguac add-admin --name myadmin --allowed-ips "10.0.0.0/8,192.168.1.0/24"
 
 # With expiry
 rustguac add-admin --name myadmin --expires "2026-12-31T00:00:00Z"
+
+# Limited to one role's permissions
+rustguac add-admin --name reports --role report-reader
 
 # List admins
 rustguac list-admins

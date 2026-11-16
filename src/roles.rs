@@ -77,6 +77,8 @@ pub struct RoleUsage {
     pub mappings: Vec<String>,
     /// API tokens capped at it.
     pub token_caps: usize,
+    /// Names of admin API keys given it (`add-admin --role`).
+    pub api_keys: Vec<String>,
     /// Whether it's the configured `[oidc] default_role`.
     pub default_role: bool,
 }
@@ -86,6 +88,7 @@ impl RoleUsage {
         self.users.is_empty()
             && self.mappings.is_empty()
             && self.token_caps == 0
+            && self.api_keys.is_empty()
             && !self.default_role
     }
 }
@@ -307,17 +310,23 @@ pub fn role_usage(db: &Db, name: &str, default_role: Option<&str>) -> rusqlite::
         params![name],
         |r| r.get(0),
     )?;
+    let api_keys = {
+        let mut stmt = conn.prepare("SELECT name FROM admins WHERE role = ?1 ORDER BY name")?;
+        let rows = stmt.query_map(params![name], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()?
+    };
     Ok(RoleUsage {
         users,
         mappings,
         token_caps: token_caps as usize,
+        api_keys,
         default_role: default_role == Some(name),
     })
 }
 
 /// Delete a custom role. If it's assigned anywhere, `reassign_to` (an
-/// existing role) takes its place on those users, mappings and token caps in
-/// the same transaction; without it, a role in use is refused. A role that is
+/// existing role) takes its place on those users, mappings, token caps and
+/// admin API keys in the same transaction; without it, a role in use is refused. A role that is
 /// `[oidc] default_role` can't be deleted: the config would point at nothing.
 pub fn delete_custom_role(
     db: &Db,
@@ -355,6 +364,10 @@ pub fn delete_custom_role(
         )?;
         tx.execute(
             "UPDATE user_api_tokens SET max_role = ?2 WHERE max_role = ?1",
+            params![name, to],
+        )?;
+        tx.execute(
+            "UPDATE admins SET role = ?2 WHERE role = ?1",
             params![name, to],
         )?;
     }
@@ -440,19 +453,10 @@ pub fn login_role_for(group_roles: &[String]) -> Option<String> {
 }
 
 /// Whether, after `change`, anything could still manage roles: an enabled,
-/// unexpired admin API key, or an enabled user whose permissions include
-/// `admin.roles`. Guards against locking everyone out of the Admin page.
+/// unexpired admin API key without a role or whose role includes
+/// `admin.roles`, or an enabled user whose permissions include it. Guards
+/// against locking everyone out of the Admin page.
 pub fn admin_roles_survives(db: &Db, change: &Change) -> rusqlite::Result<bool> {
-    let now = chrono::Utc::now();
-    let usable_key = db::list_admins(db)?.into_iter().any(|a| {
-        !a.disabled
-            && a.expires_at
-                .as_deref()
-                .is_none_or(|e| db::parse_expires_at(e).is_some_and(|t| now <= t))
-    });
-    if usable_key {
-        return Ok(true);
-    }
     let mut mappings: Vec<(String, String)> = db::list_group_mappings(db)?
         .into_iter()
         .map(|m| (m.oidc_group, m.role))
@@ -489,6 +493,19 @@ pub fn admin_roles_survives(db: &Db, change: &Change) -> rusqlite::Result<bool> 
             .or_else(|| custom.iter().find(|(n, _)| n == role).map(|(_, p)| *p))
             .unwrap_or(PermSet::EMPTY)
     };
+    let now = chrono::Utc::now();
+    let usable_key = db::list_admins(db)?.into_iter().any(|a| {
+        !a.disabled
+            && a.expires_at
+                .as_deref()
+                .is_none_or(|e| db::parse_expires_at(e).is_some_and(|t| now <= t))
+            && a.role
+                .as_deref()
+                .is_none_or(|r| perms_for(r).contains(Perm::AdminRoles))
+    });
+    if usable_key {
+        return Ok(true);
+    }
     for user in db::list_users(db)? {
         let (disabled, role) = match change {
             Change::UserRole(email, r) if *email == user.email => (user.disabled, r.as_str()),
@@ -791,9 +808,68 @@ mod tests {
         db::set_user_role(&db, "boss@example.com", "operator").unwrap();
         assert!(!ok(Change::RolePerms("keeper".into(), PermSet::EMPTY)));
 
-        // An enabled admin API key can always manage roles.
+        // A key whose role can't manage roles doesn't count; one whose role
+        // can counts only while the role keeps admin.roles.
+        db::add_admin_with_role(&db, "reports", None, None, Some("viewer")).unwrap();
+        assert!(!ok(Change::RolePerms("keeper".into(), PermSet::EMPTY)));
+        db::add_admin_with_role(&db, "keeper-key", None, None, Some("keeper")).unwrap();
+        db::set_user_role(&db, "k@example.com", "viewer").unwrap();
+        assert!(ok(Change::UserRole(
+            "k@example.com".into(),
+            "viewer".into()
+        )));
+        assert!(!ok(Change::RolePerms("keeper".into(), PermSet::EMPTY)));
+
+        // An enabled admin API key without a role can always manage roles.
         db::add_admin(&db, "ops", None, None).unwrap();
         assert!(ok(Change::RolePerms("keeper".into(), PermSet::EMPTY)));
+    }
+
+    #[test]
+    fn an_api_key_with_a_role_holds_only_that_roles_permissions() {
+        let db = test_db();
+        create_custom_role(&db, "report-reader", "", "", perms(&[Perm::ReportsView])).unwrap();
+        db::add_admin_with_role(&db, "reporter", None, None, Some("report-reader")).unwrap();
+        db::add_admin(&db, "full", None, None).unwrap();
+        let key = |name: &str| {
+            let a = db::list_admins(&db)
+                .unwrap()
+                .into_iter()
+                .find(|a| a.name == name)
+                .unwrap();
+            crate::auth::AuthIdentity::ApiKey(crate::auth::ApiKeyId::from_admin(&db, a))
+        };
+        let reporter = key("reporter");
+        assert_eq!(reporter.permissions(), perms(&[Perm::ReportsView]));
+        assert_eq!(reporter.role(), "report-reader");
+        assert!(!reporter.has_perm(Perm::AdminRoles));
+        let full = key("full");
+        assert_eq!(full.permissions(), PermSet::all());
+        assert_eq!(full.role(), "admin");
+
+        // The role is in use by the key: deleting it is refused, or moves
+        // the key to the role it's reassigned to.
+        let usage = role_usage(&db, "report-reader", None).unwrap();
+        assert_eq!(usage.api_keys, vec!["reporter".to_string()]);
+        assert!(matches!(
+            delete_custom_role(&db, "report-reader", None, None),
+            Err(RoleError::InUse(_))
+        ));
+        delete_custom_role(&db, "report-reader", Some("viewer"), None).unwrap();
+        assert_eq!(key("reporter").role(), "viewer");
+        assert_eq!(
+            key("reporter").permissions(),
+            crate::perms::role_perms("viewer")
+        );
+    }
+
+    #[test]
+    fn an_api_key_whose_role_is_gone_holds_nothing() {
+        let db = test_db();
+        db::add_admin_with_role(&db, "orphan", None, None, Some("no-such-role")).unwrap();
+        let a = db::list_admins(&db).unwrap().pop().unwrap();
+        let id = crate::auth::AuthIdentity::ApiKey(crate::auth::ApiKeyId::from_admin(&db, a));
+        assert_eq!(id.permissions(), PermSet::EMPTY);
     }
 
     #[test]

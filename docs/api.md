@@ -914,7 +914,7 @@ No authentication required. Returns whether OIDC is enabled and the site title.
 
 ### `GET /api/me`
 
-Returns current user info. Requires authentication. `permissions` lists what the caller may do (see [Roles and permissions](roles-and-access-control.md#roles-and-permissions)); an admin API key holds every permission.
+Returns current user info. Requires authentication. `permissions` lists what the caller may do (see [Roles and permissions](roles-and-access-control.md#roles-and-permissions)); an admin API key holds every permission, or its role's if it was created with `--role`.
 
 ```json
 {

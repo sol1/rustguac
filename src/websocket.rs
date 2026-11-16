@@ -843,7 +843,7 @@ mod tests {
     fn unknown_or_empty_creator_has_no_owner() {
         assert!(!is_session_owner(&user("a@example.com", "admin"), None));
         assert!(!is_session_owner(
-            &AuthIdentity::ApiKey(String::new()),
+            &AuthIdentity::ApiKey(String::new().into()),
             Some("")
         ));
     }

@@ -263,7 +263,7 @@ Once OIDC is working and you have an admin user, remove the initial API key:
 /opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml delete-admin --name admin
 ```
 
-API keys are powerful (full admin, no MFA). For day-to-day use, OIDC with group-based roles is more secure. If you need programmatic API access, create scoped [user API tokens](roles-and-access-control.md) instead.
+API keys are powerful (full admin unless created with `--role`, no MFA). For day-to-day use, OIDC with group-based roles is more secure. If you need programmatic API access, create scoped [user API tokens](roles-and-access-control.md) instead.
 
 ## Step 6: Set Up the Connections (Vault)
 
