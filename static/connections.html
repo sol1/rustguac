@@ -225,8 +225,32 @@
         .fm-defaults-table textarea { min-height: var(--ctl-sm); resize: vertical; }
         .fmd-clear-label { display: flex; align-items: center; gap: var(--s-1); font-size: var(--fz-xs); color: var(--text-dim); white-space: nowrap; padding-top: var(--s-2); }
 
-        /* Active sessions strip */
+        /* Active sessions (#333): a button that opens a panel over the
+           page, downwards, so nothing beneath moves as sessions come and go. */
         .active-sessions { margin-bottom: var(--s-5); }
+        .sessions-pop-wrap { position: relative; margin-bottom: var(--s-3); }
+        .sessions-pop-btn { display: inline-flex; align-items: center; gap: var(--s-2); border: 1px solid var(--border); }
+        .sessions-pop-btn[aria-expanded="true"], .sessions-pop-btn:hover { border-color: var(--accent); }
+        .sessions-pop-count {
+            background: var(--accent); color: var(--bg); border-radius: 999px;
+            min-width: 1.6em; padding: 0 0.45em; text-align: center;
+            font-size: var(--fz-xs); font-weight: bold; line-height: 1.6;
+        }
+        .sessions-pop {
+            position: absolute; top: calc(100% + var(--s-2)); left: 0; right: 0; z-index: 60;
+            background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+            box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+            padding: var(--s-3) var(--s-4) var(--s-2);
+        }
+        .sessions-pop[hidden] { display: none; }
+        .sessions-pop .section-head .section-action { margin-left: 0; }
+        .sessions-pop-spacer { flex: 1; }
+        .sessions-pop-close {
+            width: var(--ctl-sm); height: var(--ctl-sm); padding: 0;
+            background: none; border: 1px solid var(--border); border-radius: var(--radius);
+            color: var(--text-muted); font-size: 1.3em; line-height: 1; cursor: pointer;
+        }
+        .sessions-pop-close:hover, .sessions-pop-close:focus-visible { color: var(--text); border-color: var(--accent); }
         .session-grid { display: flex; gap: var(--s-3); overflow-x: auto; padding-bottom: var(--s-2); }
         .session-card {
             flex: 0 0 auto; width: 280px;
@@ -713,13 +737,19 @@
             <button class="btn-small" id="creds-banner-setup">Set up now</button>
             <span id="creds-banner-dismiss" title="Dismiss" style="cursor:pointer;color:var(--text-dim);padding:0 0.3em">&times;</span>
         </div>
-        <div id="active-sessions" class="active-sessions" style="display:none">
-            <div class="section-head">
-                <strong>Active Sessions</strong>
-                <span id="active-sessions-count" class="section-count"></span>
-                <button type="button" class="btn-add btn-danger section-action" id="btn-terminate-all" style="display:none" title="End every one of your sessions listed here">Terminate all</button>
+        <div id="active-sessions" class="sessions-pop-wrap" style="display:none">
+            <button type="button" class="btn-small sessions-pop-btn" id="btn-active-sessions" aria-expanded="false" aria-controls="active-sessions-panel">
+                Active sessions <span id="active-sessions-count" class="sessions-pop-count"></span>
+            </button>
+            <div id="active-sessions-panel" class="sessions-pop" role="dialog" aria-label="Active sessions" hidden>
+                <div class="section-head">
+                    <strong>Active Sessions</strong>
+                    <span class="sessions-pop-spacer"></span>
+                    <button type="button" class="btn-add btn-danger section-action" id="btn-terminate-all" style="display:none" title="End every one of your sessions listed here">Terminate all</button>
+                    <button type="button" class="sessions-pop-close" id="active-sessions-close" title="Close" aria-label="Close">&times;</button>
+                </div>
+                <div id="active-sessions-grid" class="session-grid"></div>
             </div>
-            <div id="active-sessions-grid" class="session-grid"></div>
         </div>
         <div id="favourites" class="active-sessions" style="display:none">
             <div class="section-head">
@@ -2119,6 +2149,35 @@
         }
         document.addEventListener('rg-search-index-ready', renderFavourites);
 
+        // Active sessions panel (#333). Clicking outside it or Escape closes
+        // it, except while a dialog it opened (confirm, Share) is up.
+        var sessionsPanel = document.getElementById('active-sessions-panel');
+        var sessionsBtn = document.getElementById('btn-active-sessions');
+        function setSessionsPanel(open) {
+            sessionsPanel.hidden = !open;
+            sessionsBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        }
+        function dialogOpen() {
+            return !!document.querySelector('.modal-overlay.active, #rg-dialog-overlay.open');
+        }
+        sessionsBtn.addEventListener('click', function() {
+            setSessionsPanel(sessionsPanel.hidden);
+        });
+        document.getElementById('active-sessions-close').addEventListener('click', function() {
+            setSessionsPanel(false);
+            sessionsBtn.focus();
+        });
+        document.addEventListener('mousedown', function(e) {
+            if (sessionsPanel.hidden || dialogOpen()) return;
+            if (document.getElementById('active-sessions').contains(e.target)) return;
+            setSessionsPanel(false);
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key !== 'Escape' || sessionsPanel.hidden || dialogOpen()) return;
+            setSessionsPanel(false);
+            sessionsBtn.focus();
+        });
+
         var terminateAllTargets = [];
         document.getElementById('btn-terminate-all').addEventListener('click', function() {
             var targets = terminateAllTargets.slice();
@@ -2183,11 +2242,14 @@
 
                 if (total === 0) {
                     section.style.display = 'none';
+                    setSessionsPanel(false);
                     return;
                 }
 
                 section.style.display = '';
-                document.getElementById('active-sessions-count').textContent = '(' + total + ')';
+                document.getElementById('active-sessions-count').textContent = String(total);
+                // Redrawn every refresh; keep the row where the user scrolled it.
+                var scrollLeft = grid.scrollLeft;
                 grid.innerHTML = '';
 
                 // Render active sessions
@@ -2287,6 +2349,7 @@
                     }
                     grid.appendChild(card);
                 });
+                grid.scrollLeft = scrollLeft;
             });
         }
 

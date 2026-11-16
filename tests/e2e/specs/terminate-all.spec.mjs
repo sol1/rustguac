@@ -18,6 +18,7 @@ test('Terminate all ends every listed session after one confirmation', async ({ 
     ] });
     await page.goto('/connections.html');
     await settle(page);
+    await page.locator('#btn-active-sessions').click();
     const btn = page.locator('#btn-terminate-all');
     await expect(btn).toBeVisible();
 
@@ -36,5 +37,7 @@ test('Terminate all is hidden with fewer than two sessions', async ({ page }) =>
     await page.goto('/connections.html');
     await settle(page);
     await expect(page.locator('#active-sessions')).toBeVisible();
+    await page.locator('#btn-active-sessions').click();
+    await expect(page.locator('#active-sessions-grid .session-card')).toHaveCount(1);
     await expect(page.locator('#btn-terminate-all')).toBeHidden();
 });
