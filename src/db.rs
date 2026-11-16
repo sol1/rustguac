@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rand::RngExt;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use std::path::Path;
@@ -291,7 +291,17 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             ip_addr    TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
-        CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC);",
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC);
+
+        -- Each user's favourite connection entries (#335).
+        CREATE TABLE IF NOT EXISTS user_favourites (
+            user_email TEXT NOT NULL,
+            scope      TEXT NOT NULL,
+            folder     TEXT NOT NULL,
+            entry      TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (user_email, scope, folder, entry)
+        );",
     )?;
 
     // Migration: add oidc_groups column if it doesn't exist
@@ -929,8 +939,79 @@ pub fn delete_user(db: &Db, email: &str) -> rusqlite::Result<bool> {
         "DELETE FROM user_api_tokens WHERE user_id IN (SELECT id FROM users WHERE email = ?1)",
         params![email],
     )?;
+    conn.execute(
+        "DELETE FROM user_favourites WHERE user_email = lower(?1)",
+        params![email],
+    )?;
     let changed = conn.execute("DELETE FROM users WHERE email = ?1", params![email])?;
     Ok(changed > 0)
+}
+
+// ── Favourites (#335) ──
+
+/// Most favourites one user may have.
+pub const MAX_FAVOURITES: usize = 500;
+
+/// One favourite: the entry it names, as (scope, folder path, entry name).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Favourite {
+    pub scope: String,
+    pub folder: String,
+    pub entry: String,
+}
+
+/// A user's favourites, oldest first. Emails are compared ignoring case.
+pub fn list_favourites(db: &Db, email: &str) -> rusqlite::Result<Vec<Favourite>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT scope, folder, entry FROM user_favourites WHERE user_email = lower(?1)
+         ORDER BY created_at, rowid",
+    )?;
+    let rows = stmt.query_map(params![email], |r| {
+        Ok(Favourite {
+            scope: r.get(0)?,
+            folder: r.get(1)?,
+            entry: r.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Add a favourite. Returns false if the user already has `MAX_FAVOURITES`.
+/// Adding one that exists is a no-op.
+pub fn add_favourite(db: &Db, email: &str, fav: &Favourite) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM user_favourites WHERE user_email = lower(?1)",
+        params![email],
+        |r| r.get(0),
+    )?;
+    if count as usize >= MAX_FAVOURITES {
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM user_favourites WHERE user_email = lower(?1) AND scope = ?2 AND folder = ?3 AND entry = ?4",
+                params![email, fav.scope, fav.folder, fav.entry],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        return Ok(exists);
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO user_favourites (user_email, scope, folder, entry)
+         VALUES (lower(?1), ?2, ?3, ?4)",
+        params![email, fav.scope, fav.folder, fav.entry],
+    )?;
+    Ok(true)
+}
+
+pub fn remove_favourite(db: &Db, email: &str, fav: &Favourite) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "DELETE FROM user_favourites WHERE user_email = lower(?1) AND scope = ?2 AND folder = ?3 AND entry = ?4",
+        params![email, fav.scope, fav.folder, fav.entry],
+    )?;
+    Ok(())
 }
 
 // ── Group-to-role mappings ──
@@ -1768,6 +1849,49 @@ mod tests {
 
     fn test_db() -> Db {
         init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn favourites_belong_to_a_user_and_are_capped() {
+        let db = test_db();
+        let fav = |e: &str| Favourite {
+            scope: "shared".into(),
+            folder: "ops/linux".into(),
+            entry: e.into(),
+        };
+        assert!(add_favourite(&db, "Jon@Example.com", &fav("web01")).unwrap());
+        assert!(
+            add_favourite(&db, "jon@example.com", &fav("web01")).unwrap(),
+            "adding twice is fine"
+        );
+        assert!(add_favourite(&db, "jon@example.com", &fav("web02")).unwrap());
+        assert_eq!(
+            list_favourites(&db, "JON@example.com").unwrap(),
+            [fav("web01"), fav("web02")]
+        );
+        assert!(list_favourites(&db, "someone@example.com")
+            .unwrap()
+            .is_empty());
+
+        remove_favourite(&db, "jon@example.com", &fav("web01")).unwrap();
+        assert_eq!(
+            list_favourites(&db, "jon@example.com").unwrap(),
+            [fav("web02")]
+        );
+
+        for i in 0..MAX_FAVOURITES {
+            add_favourite(&db, "max@example.com", &fav(&format!("e{i}"))).unwrap();
+        }
+        assert!(!add_favourite(&db, "max@example.com", &fav("one-more")).unwrap());
+        assert!(
+            add_favourite(&db, "max@example.com", &fav("e0")).unwrap(),
+            "an existing one is still fine"
+        );
+
+        // Deleting the user deletes their favourites.
+        create_user(&db, "jon@example.com", "", "operator").unwrap();
+        delete_user(&db, "jon@example.com").unwrap();
+        assert!(list_favourites(&db, "jon@example.com").unwrap().is_empty());
     }
 
     #[test]

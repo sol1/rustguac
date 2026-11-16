@@ -99,6 +99,12 @@
 
         /* Entries table */
         .entries-table { border-collapse: collapse; width: 100%; margin-top: var(--s-3); border: 1px solid var(--border); }
+        /* Favourites (#335) */
+        .entries-table .fav-cell { width: 1.6em; padding-right: 0; text-align: center; }
+        .fav-star { background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: var(--text-dim); font-size: 1.05em; line-height: 1; vertical-align: baseline; width: auto; }
+        .fav-star:hover, .fav-star.on { color: var(--accent); }
+        .fav-table { margin-top: var(--s-2); }
+        .fav-table .fav-folder { color: var(--text-muted); font-size: 0.9em; }
         .entries-table th, .entries-table td {
             text-align: left;
             padding: var(--s-3) var(--s-4);
@@ -714,6 +720,13 @@
                 <button type="button" class="btn-add btn-danger section-action" id="btn-terminate-all" style="display:none" title="End every one of your sessions listed here">Terminate all</button>
             </div>
             <div id="active-sessions-grid" class="session-grid"></div>
+        </div>
+        <div id="favourites" class="active-sessions" style="display:none">
+            <div class="section-head">
+                <strong>&#9733; Favourites</strong>
+                <span id="favourites-count" class="section-count"></span>
+            </div>
+            <div id="favourites-list"></div>
         </div>
         <div class="layout">
             <div class="sidebar">
@@ -1959,6 +1972,8 @@
                 loadCredStatus();
                 loadActiveSessions();
                 setInterval(loadActiveSessions, 10000);
+                // Favourites are a user's own; an admin API key has none.
+                if (can('connections.connect') && !apiKey) loadFavourites();
                 startOnboarding();
             })
             .catch(function(err) {
@@ -2020,6 +2035,90 @@
                 if (ev.target === overlay) closeShareModal();
             });
         })();
+
+        // ── Favourites (#335) ──
+        // Each user's starred entries, kept on the server. Shown only when
+        // the entry is among those the user can open (the search index), so
+        // one that was moved, renamed or is no longer shared with them just
+        // doesn't appear.
+        var favouritesOn = false;
+        var favourites = [];
+        function favKey(scope, folder, entry) { return scope + '|' + folder + '|' + entry; }
+        function isFavourite(scope, folder, entry) {
+            var k = favKey(scope, folder, entry);
+            return favourites.some(function(f) { return favKey(f.scope, f.folder, f.entry) === k; });
+        }
+        function favStarHtml(scope, folder, entry) {
+            if (!favouritesOn) return '';
+            var on = isFavourite(scope, folder, entry);
+            return '<button type="button" class="fav-star' + (on ? ' on' : '') + '" data-fav-toggle="' + escapeAttr(entry)
+                + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '" aria-pressed="' + on
+                + '" title="' + (on ? 'Remove from Favourites' : 'Add to Favourites') + '">' + (on ? '&#9733;' : '&#9734;') + '</button>';
+        }
+        function findIndexedEntry(scope, folder, name) {
+            var idx = window.rgSearchIndex || [];
+            for (var i = 0; i < idx.length; i++) {
+                var r = idx[i];
+                if (r.scope === scope && r.folderPath === folder && r.entry.name === name) return r;
+            }
+            return null;
+        }
+        function loadFavourites() {
+            fetch('/api/me/favourites', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(list) {
+                    if (!Array.isArray(list)) return;
+                    favouritesOn = true;
+                    favourites = list;
+                    renderFavourites();
+                    if (lastEntriesRender) renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
+                })
+                .catch(function() {});
+        }
+        function toggleFavourite(scope, folder, entry) {
+            var on = isFavourite(scope, folder, entry);
+            fetch('/api/me/favourites', {
+                method: on ? 'DELETE' : 'PUT',
+                headers: apiHeaders({ 'Content-Type': 'application/json' }),
+                credentials: 'same-origin',
+                body: JSON.stringify({ scope: scope, folder: folder, entry: entry })
+            }).then(function(res) {
+                if (!res.ok) return res.json().then(function(d) { showError(d.error || 'Failed to update favourites'); });
+                if (on) {
+                    var k = favKey(scope, folder, entry);
+                    favourites = favourites.filter(function(f) { return favKey(f.scope, f.folder, f.entry) !== k; });
+                } else {
+                    favourites.push({ scope: scope, folder: folder, entry: entry });
+                }
+                renderFavourites();
+                if (lastEntriesRender) renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
+            }).catch(function() { showError('Failed to update favourites'); });
+        }
+        function renderFavourites() {
+            var section = document.getElementById('favourites');
+            var list = document.getElementById('favourites-list');
+            // Until the search index is in, there is nothing to resolve
+            // against; it re-renders when the index arrives.
+            var shown = window.rgSearchIndex ? favourites.map(function(f) {
+                return findIndexedEntry(f.scope, f.folder, f.entry);
+            }).filter(Boolean) : [];
+            if (!favouritesOn || shown.length === 0) { section.style.display = 'none'; return; }
+            section.style.display = '';
+            document.getElementById('favourites-count').textContent = '(' + shown.length + ')';
+            var html = '<table class="entries-table fav-table"><tbody>';
+            shown.forEach(function(r) {
+                var e = r.entry;
+                var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
+                html += '<tr><td class="fav-cell">' + favStarHtml(r.scope, r.folderPath, e.name) + '</td><td>' + entryNameHtml(e.display_name || e.name) + '</td>'
+                    + '<td class="fav-folder" title="' + escapeAttr(r.folderPath) + '">' + escapeHtml(r.folderName || r.folderPath) + '</td>'
+                    + '<td><span class="type-badge type-' + escapeAttr(e.session_type) + '">' + escapeHtml(e.session_type.toUpperCase()) + '</span></td>'
+                    + '<td class="connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">' + (needsPrompt ? 'Login...' : 'Connect') + '</button>'
+                    + '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">&#x29c9;</button></td></tr>';
+            });
+            html += '</tbody></table>';
+            list.innerHTML = html;
+        }
+        document.addEventListener('rg-search-index-ready', renderFavourites);
 
         var terminateAllTargets = [];
         document.getElementById('btn-terminate-all').addEventListener('click', function() {
@@ -3077,6 +3176,7 @@
 
             var html = '<table class="entries-table"><thead><tr>';
             if (canEdit) html += '<th class="sel-cell"><input type="checkbox" id="sel-all" title="Select all"></th>';
+            if (favouritesOn) html += '<th class="fav-cell"></th>';
             html += '<th>Name</th><th>Type</th><th>Host</th><th>User</th><th></th>';
             if (canEdit) html += '<th></th>';
             html += '</tr></thead><tbody>';
@@ -3104,6 +3204,7 @@
                 var credPill = unsetVars.length > 0
                     ? ' <span title="Set these first: ' + escapeAttr(unsetVars.join(', ')) + '" style="background:var(--status-pending);color:var(--bg);border-radius:8px;padding:0.05em 0.5em;font-size:0.72em;font-weight:bold;white-space:nowrap;vertical-align:middle">credentials needed</span>'
                     : '';
+                if (favouritesOn) html += '<td class="fav-cell">' + favStarHtml(scope, folder, e.name) + '</td>';
                 html += '<td>' + entryNameHtml(label) + credPill + '</td>';
                 var typeLabel = e.session_type.toUpperCase();
                 if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
@@ -3632,6 +3733,11 @@
         function handleEntryActionsClick(e) {
             var btn = e.target;
 
+            if (btn.getAttribute && btn.getAttribute('data-fav-toggle')) {
+                toggleFavourite(btn.getAttribute('data-scope'), btn.getAttribute('data-folder'), btn.getAttribute('data-fav-toggle'));
+                return;
+            }
+
             if (btn.getAttribute('data-connect') || btn.getAttribute('data-connect-win')) {
                 var newWindow = !!btn.getAttribute('data-connect-win');
                 var name = btn.getAttribute('data-connect') || btn.getAttribute('data-connect-win');
@@ -3639,10 +3745,16 @@
                 var folder = btn.getAttribute('data-folder');
                 clearError();
 
-                // Find the entry in the current folder's entries.
+                // Find the entry: in the open folder's entries, or for a
+                // favourite from another folder, in the search index.
                 var entry = null;
-                for (var i = 0; i < currentEntries.length; i++) {
-                    if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
+                if (!btn.closest('#favourites-list')) {
+                    for (var i = 0; i < currentEntries.length; i++) {
+                        if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
+                    }
+                } else {
+                    var hit = findIndexedEntry(scope, folder, name);
+                    entry = hit ? hit.entry : null;
                 }
 
                 // Prompt for credentials if prompt_credentials is set or no stored creds
@@ -3711,6 +3823,7 @@
             }
         }
         document.getElementById('entries-content').addEventListener('click', handleEntryActionsClick);
+        document.getElementById('favourites-list').addEventListener('click', handleEntryActionsClick);
 
         // ── Folder modal ──
 

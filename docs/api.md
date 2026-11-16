@@ -843,6 +843,16 @@ Create a personal API token. Requires **poweruser** role or higher. Only availab
 
 The `token` field is the plaintext token — it is only returned once at creation and cannot be retrieved again.
 
+### Favourites
+
+The caller's favourite entries (#335), for a signed-in user who holds `connections.connect`. Admin API keys have none. Each favourite is `{"scope": "shared", "folder": "ops/linux", "entry": "web01"}`.
+
+| Endpoint | |
+|---|---|
+| `GET /api/me/favourites` | The caller's favourites, oldest first, as they starred them. Entries since moved, renamed or no longer shared are still listed; the Connections page shows only those it finds among the entries the caller can open. |
+| `PUT /api/me/favourites` | Add one (body as above). Adding one that exists is fine; at most 500, after which `409`. |
+| `DELETE /api/me/favourites` | Remove one (body as above). |
+
 ### `GET /api/me/tokens`
 
 List your own tokens. Available to any OIDC user (operator+). Returns token metadata only (never the plaintext token).

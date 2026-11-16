@@ -7947,6 +7947,115 @@ fn roles_in_use_by(id: &AuthIdentity) -> Vec<String> {
     }
 }
 
+// ── Favourites (#335) ──
+
+/// The email of a user who may keep favourites: a signed-in user who can
+/// open connections. Admin API keys have none.
+#[allow(clippy::result_large_err)]
+fn favourites_owner(identity: &Option<Extension<AuthIdentity>>) -> Result<String, Response> {
+    match identity {
+        Some(Extension(id @ AuthIdentity::User { email, .. }))
+            if id.has_perm(Perm::ConnectionsConnect) =>
+        {
+            Ok(email.clone())
+        }
+        Some(Extension(AuthIdentity::User { .. })) => {
+            Err(forbidden("connections.connect required"))
+        }
+        Some(Extension(AuthIdentity::ApiKey(_))) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "favourites belong to a user, not an admin API key"})),
+        )
+            .into_response()),
+        None => Err(StatusCode::UNAUTHORIZED.into_response()),
+    }
+}
+
+fn valid_favourite(f: &db::Favourite) -> bool {
+    matches!(f.scope.as_str(), "shared" | "instance")
+        && !f.folder.is_empty()
+        && !f.entry.is_empty()
+        && f.folder.len() <= 512
+        && f.entry.len() <= 256
+}
+
+/// GET /api/me/favourites — the caller's favourite entries, as they starred
+/// them. The page shows only those it can still find among the entries the
+/// caller can open, so one in a folder they've lost access to, or that was
+/// renamed or deleted, simply doesn't appear.
+pub async fn list_favourites(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> Response {
+    let email = match favourites_owner(&identity) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    let db = database.clone();
+    match tokio::task::spawn_blocking(move || db::list_favourites(&db, &email)).await {
+        Ok(Ok(favs)) => Json(favs).into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to read favourites"})),
+        )
+            .into_response(),
+    }
+}
+
+/// PUT /api/me/favourites — star an entry: `{"scope", "folder", "entry"}`.
+pub async fn add_favourite(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Json(fav): Json<db::Favourite>,
+) -> Response {
+    let email = match favourites_owner(&identity) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    if !valid_favourite(&fav) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "scope, folder and entry are required"})),
+        )
+            .into_response();
+    }
+    let db = database.clone();
+    match tokio::task::spawn_blocking(move || db::add_favourite(&db, &email, &fav)).await {
+        Ok(Ok(true)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(false)) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": format!("at most {} favourites", db::MAX_FAVOURITES)})),
+        )
+            .into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to save favourite"})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/me/favourites — unstar an entry, same body as PUT.
+pub async fn remove_favourite(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Json(fav): Json<db::Favourite>,
+) -> Response {
+    let email = match favourites_owner(&identity) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    let db = database.clone();
+    match tokio::task::spawn_blocking(move || db::remove_favourite(&db, &email, &fav)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "failed to remove favourite"})),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/me/token-roles — the roles the caller may cap their own API
 /// tokens at: every built-in or custom role granting nothing they don't hold.
 pub async fn my_token_roles(

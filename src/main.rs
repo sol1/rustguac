@@ -1609,6 +1609,12 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/me", get(api::me))
         .route("/api/users/{email}/access", get(api::user_access))
         .route("/api/me/token-roles", get(api::my_token_roles))
+        .route(
+            "/api/me/favourites",
+            get(api::list_favourites)
+                .put(api::add_favourite)
+                .delete(api::remove_favourite),
+        )
         .route("/api/admin/permissions", get(api::list_permissions))
         .route(
             "/api/admin/roles",
