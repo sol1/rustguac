@@ -9,6 +9,10 @@ A lightweight Rust replacement for the Apache Guacamole Java webapp. Browser-bas
 
 No Java. No Tomcat. Single binary + guacd.
 
+**Website:** [sol1.github.io/rustguac-website](https://sol1.github.io/rustguac-website/), with a tour of the web UI, a quick start and how rustguac compares with the Guacamole webapp.
+
+![Connections page](screenshots/connections.png)
+
 ## Architecture
 
 ```
@@ -38,8 +42,8 @@ guacd (C, from guacamole-server)
 | Type | Description |
 |------|-------------|
 | **SSH** | Browser-based terminal with password, private key, or ephemeral keypair auth. SFTP file transfer. |
-| **RDP** | Windows/Linux RDP with auto-fit resize, Kerberos NLA, RemoteApp/RAIL, H.264 passthrough, GFX pipeline. |
-| **VNC** | Connect to any VNC server (KVM/IPMI consoles, remote desktops, VM displays). |
+| **RDP** | Windows/Linux RDP with auto-fit resize, Kerberos NLA, RemoteApp/RAIL, H.264 passthrough, GFX pipeline, multi-monitor, console (admin) sessions, per-entry or per-browser keyboard layouts. |
+| **VNC** | Connect to any VNC server (KVM/IPMI consoles, remote desktops, VM displays), with network presets (LAN/WAN/slow link) and optional display resize. |
 | **SPICE** | Direct SPICE displays (libvirt/QEMU consoles) with TLS, CA verification, certificate-subject pinning, and SPICE-proxy support. |
 | **Proxmox VE** | VM consoles brokered through the Proxmox API. One-time SPICE tickets fetched just-in-time at connect (only the API token is stored), node auto-detected from the VM ID, and SSH-tunnel aware. |
 | **Web** | Headless Chromium on Xvnc with native autofill, domain allowlisting, login script automation. |
@@ -48,13 +52,14 @@ guacd (C, from guacamole-server)
 ### Security & authentication
 
 - **OIDC single sign-on**: Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
-- **4-tier role system**: admin, poweruser, operator, viewer with OIDC group mapping
-- **API key auth**: SHA-256 hashed keys with IP allowlists and expiry
-- **Vault-backed connections**: credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
+- **Roles and permissions**: built-in admin, poweruser, operator and viewer roles, plus custom roles built from individual permissions. OIDC groups map to roles (a user in several mapped groups gets all of them), with optional role sync at login
+- **API keys**: SHA-256 hashed admin keys with IP allowlists, expiry and an optional role, plus personal user tokens capped at a role
+- **Vault-backed connections**: credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements)). AppRole, workload JWT, mTLS or an agent-managed token, and optionally separate Vaults for shared and instance-local entries so one going down doesn't take the other with it
+- **Audit logs**: admin changes, address book changes, API token activity and CLI actions
 - **TLS everywhere**: HTTPS for clients, TLS between rustguac and guacd
 - **CIDR allowlists**: per-protocol network restrictions for session targets
 - **Per-entry clipboard control**: disable copy and/or paste for data loss prevention
-- **Rate limiting**: per-IP, per-endpoint via tower_governor
+- **Rate limiting**: optional per-IP, per-endpoint limits
 - **Session recording**: Guacamole format with playback UI, disk rotation, per-entry limits
 
 ### Connectivity
@@ -77,8 +82,10 @@ guacd (C, from guacamole-server)
 
 ### UI
 
-- **Connections** with folder-based organisation and OIDC group access control
-- **Active Sessions** section with live thumbnail previews
+- **Connections** with folder-based organisation, per-folder group and user access, search and Favourites
+- **Active Sessions** with live thumbnail previews, sharing, and Terminate all
+- **Fit or actual size** display, with scroll bars when a remote screen is larger than the window
+- **Admin page** for users, group mappings, roles and the audit log
 - **Session ended overlay** with Reconnect/Close buttons
 - **Clipboard panel controls** (Home + Fullscreen)
 - **8 built-in themes** with CSS gradient backgrounds, or configure your own
@@ -157,6 +164,7 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 ## Documentation
 
 ### Getting started
+- [Overview](docs/overview.md): what rustguac is, session types, architecture
 - [Installation](docs/installation.md): Debian packages, Docker, bare-metal, development builds
 - [Configuration](docs/configuration.md): TOML config reference with all sections
 - [Deployment Guide](docs/deployment-guide.md): step-by-step production setup
@@ -170,9 +178,11 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 - [RDP H.264 Passthrough](docs/rdp-h264.md): enabling it, and the Windows host settings it requires
 - [Credential Variables](docs/credential-variables.md): shared credentials across entries
 - [Reports](docs/reports.md): session analytics, history, CSV export
+- [Themes](docs/themes.md): built-in presets and your own branding
 
 ### Integration & reference
-- [Integrations](docs/integrations.md): Vault, LUKS drives, SSH tunnels, Kerberos, HAProxy, Knocknoc
+- [Integrations](docs/integrations.md): OIDC providers, Vault/OpenBao, LUKS drives, SSH tunnels, Kerberos, Knocknoc
+- [Reverse Proxies](docs/reverse-proxies.md): HAProxy, nginx, Caddy, Apache, Traefik, and WebSockets over HTTP/2
 - [NetBox](docs/netbox.md): connections sync via custom fields and webhooks
 - [Security](docs/security.md): TLS, rate limiting, headers, audit logging, hardening
 - [API Reference](docs/api.md): REST API endpoints, the session connection flow, and headless ws-ticket integration
