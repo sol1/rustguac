@@ -156,7 +156,7 @@ VDI sessions support persistent home directories, per-entry resource limits and 
 ## On the Connections page
 
 - **Favourites:** the star beside an entry adds it to **Favourites** at the top of the page, from any folder, so the connections you use most are one click away. Favourites are your own and follow you between browsers. One you can no longer open (moved, renamed, deleted, or no longer shared with you) isn't shown.
-- **Active Sessions:** your sessions in progress, to rejoin, share or end. **Terminate all** ends every one of them after a single confirmation; dormant VDI desktops are left running.
+- **Active Sessions:** a button with a count of your sessions in progress. It opens a panel over the page to rejoin, share or end them. **Terminate all** ends every one of them after a single confirmation; dormant VDI desktops are left running.
 
 ## SSH tunnel / jump hosts
 
