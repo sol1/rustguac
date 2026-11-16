@@ -1928,7 +1928,7 @@
                 var level = roleLevel[data.role] || 0;
                 // Reconcile the server-written nav gate (see rustguac.css): the page
                 // GET carried no API key, so key users arrive on the anonymous variant.
-                document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
+                document.documentElement.setAttribute('data-role-level', String(level));
                 if (data && data.permissions) document.documentElement.setAttribute('data-perms', data.permissions.join(' '));
                 // Navigation links follow data-perms (rustguac.css). The
                 // editing controls start hidden and show for connections.edit.
@@ -1945,7 +1945,6 @@
                 vaultReady = !!data.vault_enabled;
                 if (apiKey) {
                     // A key is never on the page GET, so the server served the anonymous variant.
-                    document.documentElement.setAttribute('data-role-level', '4');
                     document.getElementById('admin-link').style.display = '';
                     document.getElementById('tokens-link').style.display = '';
                 }

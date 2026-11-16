@@ -604,6 +604,16 @@
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (me) {
                 var perms = (me && me.permissions) || [];
+                // An API key is never sent on the page GET, so the server
+                // served the anonymous variant. Write what this key may do,
+                // so navigation and gated controls match it: an admin key
+                // gets everything, a user token only its user's (capped)
+                // permissions.
+                if (me && apiKey()) {
+                    var level = { admin: 4, poweruser: 3, operator: 2, viewer: 1 }[me.role] || 0;
+                    document.documentElement.setAttribute('data-role-level', String(level));
+                    document.documentElement.setAttribute('data-perms', perms.join(' '));
+                }
                 if (!me || perms.indexOf(SEARCH_PERM) < 0) return null;
                 confirmedPerms = perms;
                 return (me.name || '') + '|' + me.role + '|' + (me.groups || []).join(',');

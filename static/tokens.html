@@ -108,7 +108,6 @@
         function initPage() {
             if (apiKey) {
                 // A key is never on the page GET, so the server served the anonymous variant.
-                document.documentElement.setAttribute('data-role-level', '4');
                 // API key users are admins — redirect to admin page for token management
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('admin-link').style.display = '';
@@ -131,7 +130,7 @@
                 var level = roleLevel[data.role] || 0;
                 // Reconcile the server-written nav gate (see rustguac.css): the page
                 // GET carried no API key, so key users arrive on the anonymous variant.
-                document.documentElement.setAttribute('data-role-level', String((typeof apiKey !== 'undefined' && apiKey) ? 4 : level));
+                document.documentElement.setAttribute('data-role-level', String(level));
                 if (data && data.permissions) document.documentElement.setAttribute('data-perms', data.permissions.join(' '));
 
                 // Navigation follows data-perms (rustguac.css). Anyone can
