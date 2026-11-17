@@ -736,6 +736,22 @@ fn cmd_rotate_key(database: &Db, name: &str) {
     }
 }
 
+/// Write a private key readable by its owner only (0600), including when it
+/// replaces an existing file with wider permissions: the mode is set before
+/// any key material is written.
+fn write_private_key(path: &std::path::Path, pem: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    f.write_all(pem.as_bytes())
+}
+
 fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
     use rcgen::{generate_simple_self_signed, CertifiedKey};
 
@@ -757,7 +773,7 @@ fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
     let key_path = std::path::Path::new(out_dir).join("key.pem");
 
     std::fs::write(&cert_path, cert.pem()).expect("Failed to write cert.pem");
-    std::fs::write(&key_path, signing_key.serialize_pem()).expect("Failed to write key.pem");
+    write_private_key(&key_path, &signing_key.serialize_pem()).expect("Failed to write key.pem");
 
     println!("Generated self-signed certificate:");
     println!("  Certificate: {}", cert_path.display());
