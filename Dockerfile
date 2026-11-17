@@ -199,6 +199,11 @@ RUN chown rustguac:rustguac /opt/rustguac && \
 COPY entrypoint.sh /opt/rustguac/entrypoint.sh
 RUN chmod +x /opt/rustguac/entrypoint.sh
 
+# Links the ghcr.io package to the repository.
+LABEL org.opencontainers.image.source="https://github.com/sol1/rustguac" \
+      org.opencontainers.image.description="Lightweight Rust replacement for the Apache Guacamole webapp: SSH, RDP, VNC, SPICE, web and VDI sessions in the browser" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
 WORKDIR /opt/rustguac
 EXPOSE 8089
 VOLUME ["/opt/rustguac/data", "/opt/rustguac/recordings", "/opt/rustguac/drives", "/opt/rustguac/vdi-homes"]

@@ -145,6 +145,8 @@ docker run --rm --entrypoint cat sol1/rustguac:latest /opt/rustguac/seccomp-chro
 docker run -d -p 8089:8089 --security-opt seccomp=seccomp-chromium.json sol1/rustguac:latest
 ```
 
+The same image is also on the GitHub Container Registry as `ghcr.io/sol1/rustguac` (from 1.14.5), if you'd rather pull from there.
+
 The seccomp profile lets Chromium's sandbox start, which web browser sessions need. Docker's default profile blocks the namespaces the sandbox uses, so without it every web session fails; SSH, RDP and VNC sessions work either way. The profile is Docker's default with only that change. See [Web sessions: Running under Docker](web-sessions.md#running-under-docker) for what it allows and the alternatives.
 
 To build from source instead:
