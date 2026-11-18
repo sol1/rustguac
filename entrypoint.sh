@@ -27,6 +27,32 @@ case "$ADMIN_OUT" in
         ;;
 esac
 
+# TLS pair for the web UI and guacd: the one mounted at /opt/rustguac/tls or
+# made on an earlier start, otherwise this container's own. Never one baked
+# into the image (GHSA-j4r4-h9h8-fj4v).
+TLS_DIR=/opt/rustguac/tls
+if [ ! -s "$TLS_DIR/cert.pem" ] || [ ! -s "$TLS_DIR/key.pem" ]; then
+    if [ -w "$TLS_DIR" ]; then
+        echo "No TLS pair in $TLS_DIR: generating one for this container."
+        /opt/rustguac/bin/rustguac --config "$CONFIG_PATH" generate-cert --hostname localhost --out-dir "$TLS_DIR" >/dev/null
+        chmod 600 "$TLS_DIR/key.pem"
+    else
+        echo "ERROR: no TLS pair in $TLS_DIR (cert.pem, key.pem) and it is not writable."
+        echo "Mount a pair there (e.g. -v ./tls:$TLS_DIR:ro) or make it writable."
+        exit 1
+    fi
+elif [ -n "$(find "$TLS_DIR/key.pem" -perm /044 2>/dev/null)" ] \
+    && openssl x509 -in "$TLS_DIR/cert.pem" -noout -subject 2>/dev/null | grep -q "rcgen self signed cert"; then
+    # Images before 1.14.4 shipped a world-readable key, the same in every
+    # container. A named volume on $TLS_DIR keeps that key across upgrades.
+    # Only a pair rustguac generated is checked: a mounted certificate of
+    # your own may well need a key others can read.
+    echo "WARNING: $TLS_DIR/key.pem is readable by other users."
+    echo "  If it came with a rustguac image before 1.14.4 (for example kept in a"
+    echo "  volume on $TLS_DIR), it is public: delete cert.pem and key.pem there and"
+    echo "  restart to get a new pair, or mount your own. See GHSA-j4r4-h9h8-fj4v."
+fi
+
 # Start guacd in background
 echo "Starting guacd..."
 LD_LIBRARY_PATH=/opt/rustguac/lib FREERDP_ADDIN_PATH=/opt/rustguac/lib/freerdp3 \

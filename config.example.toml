@@ -142,10 +142,17 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # client_secret = "your-client-secret"   # or set OIDC_CLIENT_SECRET env var
 # redirect_uri = "https://your-host/auth/callback"
 #
-# # Role assigned to new users on first login.
-# # Options: "admin", "poweruser", "operator", "viewer"
+# # Direct role assigned to new users on first login. Must name an existing
+# # built-in or custom role; an unknown role prevents server startup, even
+# # when sync_role_on_login is false.
 # # Default: "operator"
 # default_role = "operator"
+#
+# # Reset the direct role to default_role on login when no group mapping
+# # matches, including downgrades. Matching groups always grant the union
+# # of their mapped roles, replacing the direct role. Default: false.
+# # A missing groups claim preserves the stored role; an empty array syncs.
+# sync_role_on_login = false
 #
 # # Create an account automatically on first OIDC login (default: true).
 # # Set to false to let in only users an admin has added beforehand
@@ -195,6 +202,11 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # # namespace = "my-ns"       # optional, Vault Enterprise / OpenBao namespaces
 # # instance_name = "prod-1"  # optional, enables instance-scoped entries
 # # tls_skip_verify = false   # skip TLS cert verification (dev only, default: false)
+
+# # Or omit role_id and jwt_auth and consume an externally managed Vault token:
+# # token_file = "/run/vault-agent/token" # e.g. a Vault/OpenBao Agent file sink
+# # The external manager handles login/renewal; rustguac reopens it per request.
+# # See docs/integrations.md for ownership, permissions and container examples.
 
 # # Instead of role_id/VAULT_SECRET_ID, read a projected workload JWT:
 # [vault.jwt_auth]

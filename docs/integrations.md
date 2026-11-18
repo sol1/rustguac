@@ -246,10 +246,10 @@ rustguac roles. See [Roles and Access Control](roles-and-access-control.md).
   app-specific key that the standard key set does not contain. Create
   the app as in step 1. A restart also rules out a key rotation since
   rustguac started.
-- **Login succeeds but `default_role` doesn't get applied**: `default_role`
-  only fires when no group-to-role mapping matches. Configure mappings on
-  the Admin page (or, for a single-user test, set `default_role = "admin"`
-  temporarily to bootstrap).
+- **Login succeeds but `default_role` doesn't get applied**: by default it
+  applies only when creating an account; existing users keep their stored role
+  unless a group mapping matches. Set `sync_role_on_login = true` to reconcile
+  existing users too. See [SSO-managed roles](roles-and-access-control.md#sso-managed-roles).
 
 ### Outbound HTTP proxy (egress)
 
@@ -557,14 +557,122 @@ secret ID from the rustguac host only when the platform itself vouches for the
 workload (Kubernetes, Nomad, SPIRE attestation, a cloud provider). Fetching a JWT
 with a client secret from an identity provider just moves the secret elsewhere.
 
+### Externally managed tokens (Vault/OpenBao Agent)
+
+Use `token_file` when another process already authenticates to Vault or OpenBao
+and maintains a token file. This keeps authentication plugins and bootstrap
+credentials outside rustguac. The file contains an **already-issued Vault/OpenBao
+token**, not a JWT to exchange through `jwt_auth`.
+
+```toml
+[vault]
+addr = "https://vault.example.com:8200"
+mount = "secret"
+base_path = "rustguac"
+ca_cert = "/run/pki/ca.pem"
+token_file = "/run/vault-agent/token"
+```
+
+Omit `role_id` and `jwt_auth`; combining either with `token_file` is rejected.
+On connection, rustguac validates the current token with `GET /v1/auth/token/lookup-self`.
+The token policy must permit that call (normally included in the default policy).
+An invalid token leaves the backend disconnected while the existing reconnect loop
+retries, allowing an agent's replacement token to restore access. On Unix, startup
+also warns if the sink file is group or world readable.
+No `VAULT_SECRET_ID` is needed. The same option works independently in
+`[vault_shared]` and `[vault_local]`, for example when each backend has its own
+agent, token and least-privilege policy:
+
+```toml
+[vault_shared]
+addr = "https://shared-vault.example.com:8200"
+token_file = "/run/shared-agent/token"
+
+[vault_local]
+addr = "https://local-vault.example.com:8200"
+token_file = "/run/local-agent/token"
+```
+
+**Example: a VM with certificate-based auto-auth.** Run Vault Agent or OpenBao
+Agent as a supervised host service. Provision the server's certificate-auth role
+and a suitable KV policy separately. A minimal agent configuration is:
+
+```hcl
+vault {
+  address = "https://vault.example.com:8200"
+  ca_cert = "/run/pki/ca.pem"
+}
+
+auto_auth {
+  method "cert" {
+    mount_path = "auth/cert"
+    config = {
+      name        = "rustguac"
+      ca_cert     = "/run/pki/ca.pem"
+      client_cert = "/run/agent-pki/client.pem"
+      client_key  = "/run/agent-pki/client-key.pem"
+      reload      = true
+    }
+  }
+  sink "file" {
+    config = {
+      path = "/run/vault-agent/token"
+      mode = 0600
+    }
+  }
+}
+```
+
+The agent owns login, renewal and re-authentication; rustguac needs the sink, not
+the agent's private key. `reload` rereads the certificate pair on authentication
+attempts; certificate issuance/renewal remains an external responsibility. See
+the [Vault](https://developer.hashicorp.com/vault/docs/agent-and-proxy/autoauth/methods/cert)
+and [OpenBao](https://openbao.org/docs/agent-and-proxy/autoauth/methods/cert/)
+certificate auto-auth documentation for version-specific options. Other agent
+auto-auth methods work equally well: rustguac only consumes their file sink.
+
+**Example: Docker Compose or another container runtime.** Run an agent alongside
+rustguac and share a protected token directory: read-write for the agent,
+read-only for rustguac. Mount the **directory**, not an individual token file,
+so atomic replacement remains visible. Align UIDs/GIDs and file permissions so
+rustguac can read the sink without making it world-readable. Keep the agent's
+bootstrap credentials in a separate mount inaccessible to rustguac. The TOML
+above is unchanged; no agent process is bundled into rustguac.
+
+**Example: an existing credential manager.** Any trusted process can maintain
+the same plain-text token file. Write a restricted temporary file in the same
+directory, then rename it over the sink to avoid partial reads. Supply an
+unwrapped token, not a response-wrapping envelope or JSON object.
+
+Runtime behavior and security boundaries:
+
+- The file is reopened on every Vault request, so replacements need no restart.
+  Surrounding whitespace is trimmed; empty, malformed, unreadable or oversized
+  files (more than 64 KiB) fail closed, with no fallback to another identity.
+- On a 403, rustguac rereads the file and retries once only if its token changed.
+  Unchanged denied tokens are not retried. It never logs the file contents.
+- rustguac does not renew or revoke externally managed tokens, nor call a login
+  endpoint. The manager must keep them valid and replace them when necessary.
+  A readable file alone does not prove validity: the server enforces expiry and
+  policy. If the agent stops, an existing valid token may work until it expires.
+- Use a least-privilege application token, never a root token. The token is a
+  bearer credential accessible to rustguac; a read-only mount prevents writes,
+  not theft by a compromised process. Prefer memory-backed storage and consider
+  swap/core-dump exposure. Protect the parent directory against untrusted writes.
+- This changes only backend authentication, not user SSO, folder authorization,
+  KV paths, or target credentials. Existing TLS and namespace options still apply.
+
 ### Token management
 
-rustguac manages Vault tokens automatically:
+For AppRole and workload JWT authentication, rustguac manages Vault tokens automatically:
 
 - Authenticates via AppRole (`role_id` + `secret_id`) or the configured workload JWT on startup
 - Renews tokens at 50% of their TTL
 - Falls back to full re-authentication on 403 Forbidden responses
 - Retries every 30 seconds if Vault is unavailable at startup (non-fatal)
+
+With `token_file`, the external manager owns token lifecycle instead, as described
+above. A missing sink at startup follows the same backend reconnect behavior.
 
 ### Multi-instance support
 
@@ -982,7 +1090,7 @@ For nginx, Caddy, Apache, and Traefik setups, see [reverse-proxies.md](reverse-p
 - **TLS termination** at HAProxy with modern ciphersuites (TLS 1.2+, ECDHE)
 - **HTTP to HTTPS redirect**
 - **X-Forwarded-For handling** — strips incoming headers and adds the real client IP
-- **WebSocket support** — `timeout tunnel 8h` for long-lived sessions
+- **WebSocket support** — `timeout tunnel 8h` for long-lived sessions, and `h2-workaround-bogus-websocket-clients` to keep WebSockets on HTTP/1.1 (without it, Firefox sessions drop when HTTP/2 is on; see [reverse-proxies.md](reverse-proxies.md#websockets-over-http2))
 - **Health checks** against `/api/health`
 - **Slowloris protection** — `timeout http-request 10s`
 - **HSTS header** — `max-age=31536000; includeSubDomains`

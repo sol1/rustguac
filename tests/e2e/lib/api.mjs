@@ -15,6 +15,20 @@
  *                    exact-path overrides, checked before the defaults
  */
 
+// What /api/me returns as `permissions` for each built-in role, as
+// src/perms.rs defines them (#294).
+const VIEWER = ['docs.view'];
+const OPERATOR = ['connections.connect', 'credentials.self', ...VIEWER];
+const POWERUSER = ['connections.adhoc', 'recordings.view', 'reports.view', 'tokens.self', ...OPERATOR];
+export const ROLE_PERMS = {
+    viewer: VIEWER,
+    operator: OPERATOR,
+    poweruser: POWERUSER,
+    admin: [...POWERUSER, 'connections.edit', 'folders.manage_access', 'connections.unrestricted',
+        'sessions.view_all', 'sessions.shadow', 'recordings.delete',
+        'admin.users', 'admin.roles', 'admin.audit', 'admin.system'],
+};
+
 export function entry(name, session_type, extra = {}) {
     return {
         name,
@@ -140,12 +154,21 @@ export async function installApi(page, options = {}) {
 
         // ── identity ──
         if (path === '/api/me') return route.fulfill(json({
-            name: 'tester@example.com', role, groups: ['everyone'], vault_enabled: true, vault_configured: true
+            name: 'tester@example.com', role, permissions: ROLE_PERMS[role] || [],
+            groups: ['everyone'], vault_enabled: true, vault_configured: true
         }));
         if (path === '/api/auth/status') return route.fulfill(json({
             oidc_enabled: false, drive_configured: false, theme: 'dark'
         }));
         if (path === '/api/me/credentials') return route.fulfill(json({ credentials: {} }));
+        // Favourites (#335): kept in state so a spec can star and unstar.
+        if (path === '/api/me/favourites') {
+            state.favourites = state.favourites || (options.favourites || []).slice();
+            const key = f => f.scope + '|' + f.folder + '|' + f.entry;
+            if (method === 'PUT' && !state.favourites.some(f => key(f) === key(body))) state.favourites.push(body);
+            if (method === 'DELETE') state.favourites = state.favourites.filter(f => key(f) !== key(body));
+            return method === 'GET' ? route.fulfill(json(state.favourites)) : route.fulfill({ status: 204, body: '' });
+        }
         if (path === '/api/credential-variables' || path === '/api/login-scripts' || path === '/api/auth/known-groups')
             return route.fulfill(json([]));
 

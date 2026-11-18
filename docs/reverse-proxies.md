@@ -45,6 +45,15 @@ Default HAProxy forwards the request URI unchanged. The shipped
 `%2F` issue. See [`integrations.md`](integrations.md) for the full
 config including Knocknoc.
 
+If HAProxy offers HTTP/2 (`alpn h2,http/1.1` on the `bind` line), add
+this to the `global` section, or sessions in Firefox will keep dropping
+(see [WebSockets over HTTP/2](#websockets-over-http2)):
+
+```
+global
+    h2-workaround-bogus-websocket-clients
+```
+
 ## nginx
 
 **Affected by default.** nginx normalises the URI when `proxy_pass` has a
@@ -205,6 +214,37 @@ A correctly configured proxy returns **200** (empty array from rustguac,
 since the folder doesn't exist but the route matches). A broken proxy
 returns **404** from axum's router (because the URL got decoded to extra
 path segments along the way).
+
+## WebSockets over HTTP/2
+
+Each session runs over a WebSocket. When the proxy offers HTTP/2 and says
+it supports WebSockets over it (RFC 8441), Firefox carries the WebSocket
+as a stream inside its shared HTTP/2 connection rather than opening a
+connection of its own. Behind HAProxy this has been seen to drop sessions
+after anywhere from a few seconds to a few minutes, again and again, with
+nothing wrong at either end:
+
+- the browser shows a connection error; its console has `tunnel error ...
+  code=519` and Firefox's "The connection to wss://... was interrupted
+  while the page was loading";
+- rustguac logs `Proxy ended: browser disconnected ... Connection reset
+  without closing handshake`;
+- HAProxy logs the `/ws/` request as `HTTP/2.0` with termination code
+  `CD` (aborted on the client side during transfer), while the page's
+  other requests on the same connection are fine.
+
+Stop the proxy offering WebSockets over HTTP/2. WebSockets then use a
+plain HTTP/1.1 upgrade on their own connection, and everything else can
+stay on HTTP/2. For HAProxy:
+
+```
+global
+    h2-workaround-bogus-websocket-clients
+```
+
+Then `systemctl reload haproxy`. Afterwards the `/ws/` lines in HAProxy's
+log say `HTTP/1.1`. Turning HTTP/2 off altogether (`alpn http/1.1`) also
+works, but isn't needed.
 
 ## Trusting the proxy's IP
 

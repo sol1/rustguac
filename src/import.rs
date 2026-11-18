@@ -165,6 +165,7 @@ pub async fn cmd_import_guacamole(
             disable_paste: None,
             banner: None,
             enable_gfx: None,
+            rdp_console: param_map.get("console").map(|v| *v == "true"),
             enable_desktop_composition: None,
             enable_wallpaper: None,
             enable_theming: None,
@@ -195,6 +196,10 @@ pub async fn cmd_import_guacamole(
             proxmox_verify_tls: None,
             max_monitors: None,
             ssh_font_size: param_map.get("font-size").and_then(|s| s.parse().ok()),
+            ssh_color_scheme: param_map
+                .get("color-scheme")
+                .filter(|s| crate::guacd::SSH_COLOR_SCHEMES.contains(s))
+                .map(|s| s.to_string()),
             wol_send_packet: param_map
                 .get("wol-send-packet")
                 .map(|s| s.eq_ignore_ascii_case("true")),

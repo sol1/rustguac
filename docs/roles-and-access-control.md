@@ -1,17 +1,65 @@
 # Roles and Access Control
 
-## Role hierarchy
+## Roles and permissions
 
-rustguac implements a 4-tier role hierarchy:
+Every check on the server asks for a **permission**, and a role is a named set of permissions. There are four built-in roles, each granting everything the one below it does:
 
-| Role | Level | Description |
-|------|-------|-------------|
-| **admin** | 4 | Full access — manage users, connections, recordings, sessions, group mappings, all API tokens |
-| **poweruser** | 3 | Ad-hoc connections (Connect to a host) + connections connect + self-service API tokens |
-| **operator** | 2 | Connections connect only (no ad-hoc connections); can view own API tokens |
-| **viewer** | 1 | Read-only — view sessions and recordings; no API token access |
+| Role | Adds | Description |
+|------|------|-------------|
+| **viewer** | `docs.view` | Read the docs. Can sign in, but can't open Connections. |
+| **operator** | `connections.connect`, `credentials.self` | Open Connections and connect to entries in folders they can access, and save their own credential variables. |
+| **poweruser** | `connections.adhoc`, `recordings.view`, `reports.view`, `tokens.self` | Ad-hoc connections (**Connect to a host**), recordings, reports, and their own API tokens. |
+| **admin** | every permission | Everything, including any permission added in a later release. |
 
-Roles are hierarchical: each role includes all permissions of lower roles. For example, a poweruser can do everything an operator can, plus open ad-hoc connections.
+The permissions and what they allow:
+
+| Permission | Allows |
+|---|---|
+| `connections.connect` | See folders and entries in Connections, connect to them, and list and end your own sessions and VDI containers |
+| `credentials.self` | Save your own credential variables |
+| `connections.adhoc` | Ad-hoc sessions to any host, ad-hoc `/api/connect` links, and the SSH host-key probe they use |
+| `recordings.view` | List and play recordings and typescripts |
+| `reports.view` | Reports |
+| `tokens.self` | Create and revoke your own API tokens |
+| `connections.edit` | Create, edit, move, copy and delete entries and folders, and folder default credentials. Sees and connects to every folder |
+| `folders.manage_access` | Change who can open a folder (anyone with this can give themselves any folder) |
+| `connections.unrestricted` | Ad-hoc and link sessions skip the [ad-hoc policy](api.md#post-apisessions) |
+| `sessions.view_all` | See, thumbnail and end anyone's session |
+| `sessions.shadow` | Shadow someone else's session |
+| `recordings.delete` | Delete recordings |
+| `admin.users` | Manage users and the API tokens issued to them |
+| `admin.roles` | Set users' roles, and manage group-to-role mappings |
+| `admin.audit` | Audit logs |
+| `admin.system` | Detailed system status |
+| `docs.view` | Documentation |
+
+`GET /api/me` returns the caller's `roles` and `permissions`.
+
+### Custom roles
+
+Admins can build their own roles from these permissions: **Admin > Roles**, the API, or the CLI. A custom role can be assigned to users, mapped from OIDC groups, and used to cap API tokens, just like a built-in. The Roles section offers two starting points, both editable before saving:
+
+| Template | Permissions | For |
+|---|---|---|
+| Connection editor | `connections.connect`, `connections.edit`, `credentials.self`, `docs.view` | Managing connections site wide, without folder access settings, reports, recordings or admin |
+| Connect only | `connections.connect` | Contractors who only see the folders they're given and connect. Entries they use need stored or prompted credentials, since they can't save their own. |
+
+Rules that keep this safe:
+
+- **Nobody can grant what they don't hold.** A role, a role assignment, a group mapping or a token cap is refused if it would grant a permission the person making the change doesn't have.
+- **Nobody changes their own role**, or edits or deletes a role they're using.
+- **Nobody disables or deletes a user who holds more than they do.**
+- **The last way to manage roles is kept.** A change that would leave no enabled admin API key with `admin.roles` (a key without a role has it) and no enabled user holding `admin.roles` is refused.
+- **Built-in roles can't be changed**, and their names (in any case) can't be used for custom roles.
+- **A role in use can't simply be deleted.** Its users, group mappings, token caps and admin API keys have to move to another role first (the Admin page offers this; the CLI has `--reassign-to`). The role set as `[oidc] default_role` can't be deleted.
+- **New permissions are off for custom roles.** A permission added in a later release isn't granted to any custom role until an admin adds it. `admin` gets every permission automatically.
+
+Role names are lowercase letters, digits, `-` and `_`, and can't be changed after creation; the display name can.
+
+### Seeing what someone can do
+
+**Admin > Users > access** shows a user's own role, which group mappings apply to them (with their groups as of their last login), the roles in effect, and which role grants each permission. The same is available as `GET /api/users/{email}/access` and `rustguac show-user --email ...`.
+
 
 ## Authentication paths
 
@@ -19,11 +67,15 @@ rustguac supports three authentication methods, tried in order: admin API key, u
 
 ### API key admins
 
-API key holders always have full **admin** access (level 4). There is no way to restrict an API key to a lower role. API keys are intended for automation, CI/CD, and system administration.
+An API key holds every permission unless it's given a role with `--role`, in which case it holds only that role's permissions (a built-in or custom role). Keys created before 1.14.3 have no role and keep full admin access. API keys are intended for automation, CI/CD, and system administration.
 
 ```bash
 # Create an API key admin
 rustguac add-admin --name automation
+
+# A key for a reporting script that can only read reports
+rustguac add-role --name report-reader --perm reports.view
+rustguac add-admin --name reports --role report-reader
 
 # With IP restrictions and expiry
 rustguac add-admin --name ci-bot \
@@ -45,13 +97,58 @@ User API tokens authenticate as the OIDC user who owns the token, with an effect
 
 OIDC users are assigned a role through three mechanisms (in order of precedence):
 
-1. **Group-to-role mappings** — evaluated on every OIDC login. If the user's OIDC groups match any mappings, the highest matching role is applied.
+1. **Group-to-role mappings** — matching groups grant the union of all mapped roles' permissions, replacing the user's direct role. Group membership is recorded on login; current mappings are evaluated on each request.
 2. **Manual role assignment** — admins can set a user's role via CLI, API, or the Admin page.
 3. **Default role** — new users get the `default_role` from OIDC config on first login (default: `operator`).
 
+#### SSO-managed roles
+
+Group mappings always grant the union of every matching role's permissions,
+replacing the user's own direct role. With no matching mappings, the direct role
+applies. By default, an unmatched user keeps that role and `default_role` is applied
+only when creating an account.
+
+To reset unmatched users' direct roles to the configured default on login:
+
+```toml
+[oidc]
+# Other provider settings omitted.
+default_role = "operator"
+sync_role_on_login = true
+```
+
+Synchronization adds only that reset when no group mapping matches, including for
+existing users with manually assigned roles. Matching groups continue to grant
+all their mapped roles regardless of the sync setting. For example, a user mapped
+to both a support role and an auditing role receives both sets of permissions.
+The direct role, including `default_role`, is not a minimum or an additional grant
+while any mapping matches. This also applies to pre-provisioned users with
+`auto_create_users = false`; disabled accounts and identity checks still prevent login.
+
+Synchronization requires the configured groups claim to be present in the validated
+ID token. A missing or unusable claim preserves the stored role and logs a warning;
+an explicit empty array synchronizes to the default. Check the provider's claim
+mapping and group-overage settings if that warning appears.
+
+For example, mapping `remote-admins` to `admin` promotes members on login. Removing
+that membership returns them to `operator` at the next login if no other mapping
+matches. Changing the default also updates unmatched existing users on their next
+login. If a role change would remove the last user's `admin.roles` access and no
+usable admin API key remains, rustguac retains that user's stored role and logs a
+warning. Custom roles with `admin.roles` count as role administrators too.
+
+`default_role` must name an existing built-in or custom role. An unknown name
+prevents server startup, including when `sync_role_on_login` is false.
+
+Role lookup or persistence errors reject the login instead of issuing a session
+with stale privileges. Synchronization runs on a fresh OIDC login, not on every
+request or token refresh. It does not poll the identity provider or terminate
+existing remote desktop sessions; membership changes are not immediate revocation.
+Local API-key admins are unaffected.
+
 #### Only users you have added
 
-With `auto_create_users = false` in `[oidc]`, rustguac does not create accounts on login: a user must be added first with `rustguac add-user --email <email> --role <role>`, `POST /api/users`, or **Add User** on the Admin page. Anyone else who authenticates with the identity provider is sent back to the login page with "You do not have an account here". The role the admin chose is kept; `default_role` is not applied, but group-to-role mappings still are.
+With `auto_create_users = false` in `[oidc]`, rustguac does not create accounts on login: a user must be added first with `rustguac add-user --email <email> --role <role>`, `POST /api/users`, or **Add User** on the Admin page. Anyone else who authenticates with the identity provider is sent back to the login page with "You do not have an account here". By default the role the admin chose is kept, but group-to-role mappings still apply. With role synchronization enabled, unmatched pre-provisioned users also receive `default_role`, subject to the last-administrator safeguard.
 
 ```bash
 rustguac add-user --email jsmith@example.com --role operator --name "J Smith"
@@ -160,6 +257,7 @@ Operators can view their tokens (created by an admin on their behalf) but cannot
 | `GET /api/health` | None | Always returns 200 |
 | `GET /api/auth/status` | None | Returns OIDC enabled status |
 | `GET /api/me` | Any authenticated | Returns current user info |
+| `GET /api/docs` | `docs.view` | The documentation shown on the Docs page. Needed no login before 1.14 |
 
 ## Folder access control
 
@@ -170,9 +268,10 @@ Each Connections folder decides who can see it, in its `.config` entry in Vault:
 
 A user can see a folder if any of their groups is in `allowed_groups` **or** their email is in `allowed_users`.
 
-- **Admins** bypass these checks and see all folders.
-- **Operators and powerusers** see only folders that grant them access.
-- If both lists are empty, the folder is **admin-only**.
+- **Admins**, and anyone with `connections.edit`, bypass these checks and see all folders.
+- **Everyone else** sees only folders that grant them access.
+- If both lists are empty, the folder is visible only to admins and connection editors.
+- Changing `allowed_groups`, `allowed_users` or `inherit_from_parent` needs `folders.manage_access`. Without it, a new top-level folder starts with both lists empty and a new subfolder inherits its parent's access.
 - Folders the user cannot access are **hidden** from the tree, not shown-then-denied. This applies at every level, including subfolders.
 - A folder the user cannot access is still shown if it leads to a subfolder they can, so a deeper grant is never orphaned out of the tree. Its own entries stay hidden; the user opens the subfolder. For example, a folder `users/jsmith` shared with `jsmith@example.com` shows `users` in jsmith's tree even if `users` itself is admin-only.
 - The list of allowed users is only shown to admins. A user who can open a folder does not see who else can.
@@ -204,10 +303,12 @@ Admins can configure automatic role assignment based on OIDC group membership. T
 
 ### How it works
 
-1. When a user logs in via OIDC, their group memberships are extracted from the JWT
-2. Each group is checked against the `group_role_mappings` table
-3. If any groups match, the **highest role** among all matches is applied
-4. If no groups match, the user's existing role is preserved
+1. When a user logs in via OIDC, their group memberships are extracted from the JWT and recorded.
+2. Their groups are checked against the `group_role_mappings` table.
+3. If any groups match, the user gets **every role** their groups map to (the union of those roles' permissions), and those replace the role set on the user.
+4. If no groups match, the user's own role applies.
+
+For the built-in roles, the union is the same as the highest matching role, which is how mappings have always resolved. Permissions are worked out on each request from the groups recorded at the user's last login and the current mappings, so a mapping change applies straight away; a change to someone's groups at the identity provider applies at their next login. At login rustguac still records a single role on the user (the highest matching built-in, or the first matching custom role by name), which is what an older release would read after a downgrade.
 
 ### Example
 
@@ -217,7 +318,7 @@ Admins can configure automatic role assignment based on OIDC group membership. T
 | `engineering` | poweruser |
 | `support` | operator |
 
-A user with groups `["engineering", "support"]` would get `poweruser` (the higher of the two matching roles).
+A user with groups `["engineering", "support"]` gets everything `poweruser` and `operator` grant, which is `poweruser`. With custom roles the union adds up: a user in both a `reporter` group and a `recordings` group gets both roles' permissions.
 
 ### Managing mappings from the CLI
 
@@ -240,7 +341,7 @@ Group 'sysadmin' is already mapped to role 'poweruser'. Re-run with --force to c
 
 Add `--force` to change it. Mapping a group to the role it already has is a no-op and exits zero, so repeated runs of the same provisioning script are safe.
 
-Mappings are applied during OIDC login, not at the moment you create them. A user who is already signed in keeps their current role until their next login. This cuts both ways: granting a role does not take effect immediately, and neither does lowering one, so to revoke access straight away change the mapping *and* disable the user or end their sessions.
+Mapping changes affect permissions on subsequent requests using the groups recorded at the user's last login. Changes to group membership at the identity provider require another login. Existing remote sessions are not terminated by changing a mapping; end those sessions separately when revoking access.
 
 Mappings created this way are identical to those made in the Admin page or through the API, and are listed alongside them.
 
@@ -261,16 +362,16 @@ The primary use case is powerusers creating tokens for service account automatio
 
 ### Effective role
 
-Each token has an optional `max_role` cap. When the token is used to authenticate, the effective role is:
+Each token has an optional `max_role` cap, a built-in or custom role. A token gets only the permissions both its owner and its cap allow:
 
 ```
-effective_role = min(user_current_role, token_max_role)
+token permissions = user's current permissions ∩ permissions of max_role
 ```
 
 This means:
 - A poweruser who creates a token with `max_role: operator` gets operator-level access when using that token
 - If an admin later demotes the user to operator, the token's effective access drops accordingly
-- The `max_role` can never grant more access than the user currently has
+- The `max_role` can never grant more access than the user currently has, and a cap can only be a role granting nothing beyond what its owner holds
 
 ### Token management UI
 
@@ -303,6 +404,25 @@ rustguac delete-user --email user@example.com
 
 Re-enabling a disabled user is done from the Admin page or the API (`POST /api/users/{email}/enable`); there is no `enable-user` subcommand. Bear that in mind before disabling your own account from the shell.
 
+## Role management CLI
+
+```bash
+# List built-in and custom roles with their permissions
+rustguac list-roles
+
+# Create a custom role (repeat --perm for each permission)
+rustguac add-role --name connection-editor --display-name "Connection editor" \
+    --perm connections.connect --perm connections.edit --perm credentials.self --perm docs.view
+
+# Show what a user can do and why
+rustguac show-user --email jsmith@example.com
+
+# Delete a role, moving its users, group mappings and token caps first
+rustguac delete-role --name connection-editor --reassign-to operator
+```
+
+`add-user`, `set-role` and `map-group` accept custom role names too. The CLI is the recovery path, so the rules about granting only what you hold don't apply to it; it's audited in the CLI audit log.
+
 ## Admin (API key) management CLI
 
 ```bash
@@ -314,6 +434,9 @@ rustguac add-admin --name myadmin --allowed-ips "10.0.0.0/8,192.168.1.0/24"
 
 # With expiry
 rustguac add-admin --name myadmin --expires "2026-12-31T00:00:00Z"
+
+# Limited to one role's permissions
+rustguac add-admin --name reports --role report-reader
 
 # List admins
 rustguac list-admins

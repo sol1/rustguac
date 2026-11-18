@@ -1,7 +1,8 @@
-// Every page carries the same navigation, gated by role through the
-// data-role-level attribute on <html> and data-min-role on the links: a
-// viewer never sees Sessions, Reports, Tokens or Admin, an admin sees all
-// of them, and the link order is identical from page to page.
+// Every page carries the same navigation, gated by permission (#294): the
+// caller's permissions are on <html data-perms> and each gated link names the
+// one it needs in data-perm. A link shows only to those who can use the page
+// behind it, an admin sees all of them, and the link order is identical from
+// page to page.
 import { test, expect } from '@playwright/test';
 import { installApi, settle } from '../lib/api.mjs';
 
@@ -25,23 +26,41 @@ for (const path of PAGES) {
     });
 }
 
-test('a viewer sees no gated links', async ({ page }) => {
+test('a viewer sees no gated links, Recordings and Credentials included', async ({ page }) => {
     await installApi(page, { role: 'viewer' });
     await page.goto('/connections.html');
     await settle(page);
     await expect(page.locator('html')).toHaveAttribute('data-role-level', '1');
+    await expect(page.locator('html')).toHaveAttribute('data-perms', 'docs.view');
     const links = await visibleNav(page);
-    for (const gated of ['Sessions', 'Reports', 'Tokens', 'Admin']) expect(links).not.toContain(gated);
+    // Recordings needs recordings.view (poweruser): the server never let a
+    // viewer list them, but the link used to show.
+    for (const gated of ['Sessions', 'Recordings', 'Reports', 'Tokens', 'Admin']) expect(links).not.toContain(gated);
     expect(links).toContain('Connections');
-    expect(links).toContain('Recordings');
+    expect(links).toContain('Docs');
+    // Saving credentials needs credentials.self (operator).
+    await expect(page.locator('#my-creds-nav')).toBeHidden();
 });
 
-test('an operator sees Tokens but not Sessions, Reports or Admin', async ({ page }) => {
+test('an operator sees Credentials but not Tokens, Recordings, Sessions, Reports or Admin', async ({ page }) => {
     await installApi(page, { role: 'operator' });
-    await page.goto('/recordings.html');
+    await page.goto('/docs.html');
     await settle(page);
     await expect(page.locator('html')).toHaveAttribute('data-role-level', '2');
     const links = await visibleNav(page);
-    expect(links).toContain('Tokens');
-    for (const gated of ['Sessions', 'Reports', 'Admin']) expect(links).not.toContain(gated);
+    // Creating a token and listing recordings both need poweruser on the
+    // server; the links used to show to operators anyway.
+    for (const gated of ['Tokens', 'Recordings', 'Sessions', 'Reports', 'Admin']) expect(links).not.toContain(gated);
+    await page.goto('/connections.html');
+    await settle(page);
+    await expect(page.locator('#my-creds-nav')).toBeVisible();
+});
+
+test('a poweruser sees everything but Admin', async ({ page }) => {
+    await installApi(page, { role: 'poweruser' });
+    await page.goto('/connections.html');
+    await settle(page);
+    const links = await visibleNav(page);
+    for (const l of ['Sessions', 'Recordings', 'Reports', 'Tokens', 'Docs']) expect(links).toContain(l);
+    expect(links).not.toContain('Admin');
 });

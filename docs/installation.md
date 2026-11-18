@@ -157,11 +157,19 @@ docker run -d -p 8089:8089 --security-opt seccomp=contrib/docker/seccomp-chromiu
 The Docker image:
 - Uses a multi-stage build (Debian 13 trixie-slim runtime)
 - Builds guacd from source with patches applied
-- Generates a self-signed TLS certificate at build time
+- Generates a self-signed TLS certificate for each container on first start (see [TLS certificate](#tls-certificate))
 - Enables TLS between rustguac and guacd by default
-- Exposes HTTP on port 8089 (put a reverse proxy in front for HTTPS)
+- Serves HTTPS on port 8089 with that certificate (or put a reverse proxy in front)
 - Runs as the unprivileged `rustguac` user, with Chromium's sandbox enabled
 - Includes the seccomp profile for web sessions at `/opt/rustguac/seccomp-chromium.json`
+
+### TLS certificate
+
+The image contains no TLS key. On first start, a container without a pair at `/opt/rustguac/tls` generates its own self-signed `cert.pem` and `key.pem` there, used for the web UI's HTTPS and the link to guacd.
+
+That pair lives in the container, so it survives restarts but not `docker rm`: a recreated container gets a new certificate, and browsers warn about it again. To keep it, put a volume on `/opt/rustguac/tls` (as in the Compose example below). To use your own certificate, mount a directory holding `cert.pem` and `key.pem` there instead (read-only is fine). If the directory is empty and not writable, the container stops with an error rather than running without TLS.
+
+**Images before 1.14.4** shipped a key generated at build time, the same in every container of an image and readable by anyone who can pull it ([GHSA-j4r4-h9h8-fj4v](https://github.com/sol1/rustguac/security/advisories/GHSA-j4r4-h9h8-fj4v)). If you served HTTPS with it, replace it and stop trusting the old certificate. A container recreated from 1.14.4 or later makes a new pair by itself, but a volume on `/opt/rustguac/tls` keeps the old key (the container warns at startup that `key.pem` is readable by other users): delete `cert.pem` and `key.pem` in it and restart.
 
 ### API key setup
 
@@ -214,12 +222,15 @@ services:
       - ./config.toml:/opt/rustguac/config.toml
       - rustguac-data:/opt/rustguac/data
       - rustguac-recordings:/opt/rustguac/recordings
+      # Keeps the container's TLS pair across recreation; or mount your own
+      - rustguac-tls:/opt/rustguac/tls
     environment:
       - RUST_LOG=info
 
 volumes:
   rustguac-data:
   rustguac-recordings:
+  rustguac-tls:
 ```
 
 ## Option D: RPM package (build from source)

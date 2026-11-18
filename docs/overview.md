@@ -97,6 +97,8 @@ Connects guacd to a target RDP server. Supports username/password, domain, and v
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) and [Kerberos NLA authentication](integrations.md#rdp-kerberos-nla-authentication).
 
+**Connect to the console session** on an RDP entry connects to the server's console (admin) session, like `mstsc /admin`, which also skips RD Connection Broker load balancing.
+
 #### Keyboard layout
 
 RDP sends key positions, not characters, so guacd turns what you type into the key positions of the remote desktop's keyboard layout, and needs to know that layout. Left at its US default, a desktop set up for Swiss German swaps Y and Z and loses its umlauts. There are two places to set it:
@@ -150,6 +152,11 @@ Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reac
 Spawns an ephemeral Docker container running xrdp and a Linux desktop, then connects guacd via RDP to the container. Each user gets a dedicated container named `rustguac-vdi-{username}`. Containers persist after disconnect for reconnection and are automatically cleaned up after an idle timeout.
 
 VDI sessions support persistent home directories, per-entry resource limits and idle timeouts, session thumbnails, and active session previews in the connections. See [VDI Desktop Containers](vdi.md) for configuration and image requirements.
+
+## On the Connections page
+
+- **Favourites:** the star beside an entry adds it to **Favourites** at the top of the page, from any folder, so the connections you use most are one click away. Favourites are your own and follow you between browsers. One you can no longer open (moved, renamed, deleted, or no longer shared with you) isn't shown.
+- **Active Sessions:** a button with a count of your sessions in progress. It opens a panel over the page to rejoin, share or end them. **Terminate all** ends every one of them after a single confirmation; dormant VDI desktops are left running.
 
 ## SSH tunnel / jump hosts
 
