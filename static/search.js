@@ -272,6 +272,14 @@
         renderResults(matches, q, tokens);
     }
 
+    // An entry with no stored credentials (or one set to prompt) asks for
+    // them at connect time, as in the folder view. Web, VDI and Proxmox
+    // entries never prompt.
+    function entryNeedsPrompt(e) {
+        return !!e && (e.prompt_credentials || !e.has_credentials) &&
+            e.session_type !== 'web' && e.session_type !== 'vdi' && e.session_type !== 'proxmox';
+    }
+
     function renderResults(matches, query, tokens) {
         var content = document.getElementById('search-results');
         searchFilters.update(matches.map(function (m) { return m.row; }));
@@ -301,7 +309,7 @@
             var r = m.row, e = r.entry;
             var typeLabel = e.session_type.toUpperCase();
             var typeCls = 'type-' + attr(e.session_type);
-            var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
+            var needsPrompt = entryNeedsPrompt(e);
             var connectLabel = needsPrompt ? 'Login…' : 'Connect';
             var userCol = e.session_type === 'proxmox' ? highlight(e.proxmox_token_id || '', tokens) : (e.username ? highlight(e.username, tokens) : '');
             var scopeIcon = r.scope === 'shared' ? '⊕' : '▣';
@@ -558,12 +566,21 @@
                 var sc = conn.getAttribute('data-scope'), fo = conn.getAttribute('data-folder'), nm = conn.getAttribute('data-sc-connect');
                 var row = null, si = searchIndex || [];
                 for (var k = 0; k < si.length; k++) { if (si[k].scope === sc && si[k].folderPath === fo && si[k].entry.name === nm) { row = si[k]; break; } }
+                var isWin = conn.classList.contains('btn-connect-win');
+                // Login…: ask for the credentials first (#360). Connecting
+                // without them started an RDP session with no login. Off the
+                // connections page there is no prompt, so open the folder.
+                if (row && entryNeedsPrompt(row.entry)) {
+                    if (typeof window.rgShowCredPrompt === 'function') { close(); window.rgShowCredPrompt(row.entry, sc, fo, conn, isWin); }
+                    else openFolder(sc, fo);
+                    return;
+                }
                 var fsoc = row && row.entry && row.entry.fullscreen_on_connect;
                 // The regular Connect goes zero-click fullscreen in this tab; the
                 // ⧉ button is an explicit "open in a new window", so it keeps the
                 // new-window path.
                 if (fsoc && !conn.classList.contains('btn-connect-win')) { close(); rgLaunchFullscreen(sc, fo, nm, conn); }
-                else doConnect(sc, fo, nm, conn, conn.classList.contains('btn-connect-win'));
+                else doConnect(sc, fo, nm, conn, isWin);
             }
         });
         // Escape closes the overlay from anywhere (not only the search box);

@@ -3776,6 +3776,11 @@
             });
         }
 
+        // The global search (search.js) asks for credentials the same way (#360).
+        window.rgShowCredPrompt = function(entry, scope, folder, btn, newWindow) {
+            showCredPrompt(entry, scope, folder, btn, newWindow);
+        };
+
         function showCredPrompt(entry, scope, folder, btn, newWindow) {
             pendingConnect = { scope: scope, folder: folder, name: entry.name, btn: btn, newWindow: !!newWindow };
             var label = entry.display_name || entry.name;
