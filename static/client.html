@@ -1547,6 +1547,7 @@
                 var reader = new Guacamole.BlobReader(stream, mimetype);
                 reader.onend = function() {
                     var blob = reader.getBlob();
+                    if (isPrintJob) blob = new Blob([blob], { type: 'application/pdf' });
                     if (isPrintJob && printingMethod === 'trigger_print') {
                         var printUrl = URL.createObjectURL(blob);
                         var frame = document.createElement('iframe');

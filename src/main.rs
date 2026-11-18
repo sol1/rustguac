@@ -1172,6 +1172,17 @@ async fn connect_vault_backend(
     }
 }
 
+fn unauthenticated_stateful_routes(manager: Arc<SessionManager>, database: Db) -> Router<()> {
+    Router::new()
+        .route("/api/health", get(api::health))
+        .route("/api/sessions/{id}/banner", get(api::get_session_banner))
+        .route("/api/sessions/{id}/print-job", post(api::log_print_job))
+        .route("/client/{session_id}", get(serve_client_page))
+        .with_state(manager)
+        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(database))
+}
+
 async fn run_server(config: Config, database: Db) {
     // Initialize logging
     tracing_subscriber::fmt()
@@ -1865,13 +1876,7 @@ async fn run_server(config: Config, database: Db) {
         .layer(Extension(database.clone()));
 
     // Unauthenticated stateful routes
-    let unauth_routes = Router::new()
-        .route("/api/health", get(api::health))
-        .route("/api/sessions/{id}/banner", get(api::get_session_banner))
-        .route("/api/sessions/{id}/print-job", post(api::log_print_job))
-        .route("/client/{session_id}", get(serve_client_page))
-        .with_state(manager)
-        .layer(middleware::from_fn(auth::optional_auth));
+    let unauth_routes = unauthenticated_stateful_routes(manager, database.clone());
 
     // Branded HTML page routes (served from memory with site_title/logo baked in)
     let html_routes = Router::new()
@@ -2855,6 +2860,49 @@ mod tests {
         req.extensions_mut()
             .insert(axum::extract::ConnectInfo(addr));
         req
+    }
+
+    #[tokio::test]
+    async fn print_job_route_authenticates_the_session_owner() {
+        let database = db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user =
+            db::create_user(&database, "printer@example.com", "Printer", "operator").unwrap();
+        let cookie = db::create_auth_session(&database, user.id, 3600).unwrap();
+
+        let mut config = Config::default();
+        let recording_path =
+            std::env::temp_dir().join(format!("rustguac-test-rec-{}", uuid::Uuid::new_v4()));
+        config.recording_path = recording_path.clone();
+        let manager = Arc::new(SessionManager::new_with_db(config, None, database.clone()));
+        let session = manager
+            .create_session(
+                serde_json::from_value(serde_json::json!({
+                    "session_type": "ssh",
+                    "hostname": "127.0.0.1",
+                    "username": "printer",
+                    "generate_keypair": true
+                }))
+                .unwrap(),
+                user.email,
+            )
+            .await
+            .unwrap();
+
+        let app = unauthenticated_stateful_routes(manager, database);
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/api/sessions/{}/print-job", session.session_id))
+            .header("cookie", format!("rustguac_session={cookie}"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"filename":"report.pdf"}"#))
+            .unwrap();
+        request.extensions_mut().insert(axum::extract::ConnectInfo(
+            "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
+        ));
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NO_CONTENT);
+        let _ = std::fs::remove_dir_all(recording_path);
     }
 
     #[tokio::test]

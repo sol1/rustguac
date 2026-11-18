@@ -25,6 +25,7 @@ const elements = [];
 const timers = [];
 const printLogs = [];
 const streamAcks = [];
+const objectUrlBlobs = [];
 let iframePrintCalls = 0;
 let iframeFocusCalls = 0;
 let blobReaderCount = 0;
@@ -43,6 +44,9 @@ const ctx = {
             }
             getBlob() { return { type: this.mimetype }; }
         }
+    },
+    Blob: class {
+        constructor(parts, options) { this.parts = parts; this.type = options?.type || ''; }
     },
     document: {
         body: {
@@ -70,7 +74,7 @@ const ctx = {
             return element;
         }
     },
-    URL: { createObjectURL: () => 'blob:print-job', revokeObjectURL() {} },
+    URL: { createObjectURL: blob => { objectUrlBlobs.push(blob); return 'blob:print-job'; }, revokeObjectURL() {} },
     window: {},
     sessionId: 'session-id',
     printingMethod: 'trigger_print',
@@ -93,6 +97,7 @@ client.onfile(printStream, 'application/pdf', 'C:\\print\\invoice');
 assert.equal(blobReaderCount, 1);
 assert.deepEqual(streamAcks, [{ message: 'OK', status: 0 }]);
 reader.onend();
+assert.equal(objectUrlBlobs[0].type, 'application/pdf', 'print frames must receive a PDF-typed blob');
 const printFrame = elements.find(element => element.tagName === 'iframe');
 assert.ok(printFrame, 'a hidden frame should receive the PDF without showing it');
 assert.equal(printFrame.style.display, 'none');
@@ -109,6 +114,7 @@ assert.deepEqual(JSON.parse(printLogs[0].options.body), { filename: 'C:\\print\\
 ctx.printingMethod = 'download';
 client.onfile(printStream, 'application/pdf', 'C:\\print\\report');
 reader.onend();
+assert.equal(objectUrlBlobs[1].type, 'application/pdf', 'download-mode print jobs must stay PDF-typed');
 assert.deepEqual(downloads.at(-1), { href: 'blob:print-job', filename: 'C:\\print\\report' }, 'download mode should save the print PDF');
 assert.equal(iframePrintCalls, 1, 'download mode must not invoke the local print dialog');
 assert.equal(printLogs.length, 2, 'print jobs should be logged in either delivery mode');
@@ -116,4 +122,5 @@ assert.equal(printLogs.length, 2, 'print jobs should be logged in either deliver
 client.onfile(printStream, 'text/plain', 'notes.txt');
 reader.onend();
 assert.deepEqual(downloads.at(-1), { href: 'blob:print-job', filename: 'notes.txt' });
+assert.equal(objectUrlBlobs[2].type, 'text/plain', 'ordinary downloads keep their original MIME type');
 console.log('client-print-file: ok');

@@ -106,11 +106,7 @@ pub fn create_session_dir(config: &DriveConfig, session_id: Uuid) -> Result<Path
     {
         use std::os::unix::fs::PermissionsExt;
         if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750)) {
-            let _ = std::fs::remove_dir_all(&dir);
-            return Err(DriveError::Io(format!(
-                "failed to set permissions on session drive directory {:?}: {}",
-                dir, e
-            )));
+            tracing::warn!(path = ?dir, error = %e, "Failed to restrict permissions on session drive directory");
         }
     }
     // Canonicalize to absolute path — guacd runs as a separate systemd service

@@ -1271,11 +1271,6 @@ impl SessionManager {
                         Ok(path) => Some(path),
                         Err(e) => {
                             tracing::warn!(session_id = %session_id, "Failed to create drive dir: {}", e);
-                            if printing_enabled {
-                                return Err(SessionError::VdiError(format!(
-                                    "failed to prepare RDP printer drive: {e}"
-                                )));
-                            }
                             None
                         }
                     }

@@ -298,7 +298,7 @@ pub async fn log_print_job(
     };
     let is_admin = identity
         .as_ref()
-        .is_some_and(|Extension(identity)| identity.has_role("admin"));
+        .is_some_and(|Extension(identity)| identity.role() == "admin");
     let is_owner = identity
         .as_ref()
         .is_some_and(|Extension(identity)| info.created_by == identity.display_name());
