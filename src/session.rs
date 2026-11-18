@@ -52,6 +52,13 @@ pub struct CreateSessionRequest {
     pub url: Option<String>,
     // RDP fields
     pub domain: Option<String>,
+    pub gateway_hostname: Option<String>,
+    pub gateway_port: Option<u16>,
+    pub gateway_username: Option<String>,
+    pub gateway_password: Option<String>,
+    pub gateway_domain: Option<String>,
+    /// RDS Connection Broker load-balance cookie (guacd `load-balance-info`).
+    pub load_balance_info: Option<String>,
     pub security: Option<String>,
     /// RDP server keyboard layout (guacd `server-layout`).
     pub server_layout: Option<String>,
@@ -669,6 +676,50 @@ async fn check_session_network(
     Ok(())
 }
 
+/// Validate the RDP endpoint that the daemon will dial. With RD Gateway, the
+/// target is resolved from the gateway's network, so only the gateway needs
+/// a local allowlist check. For untrusted ad-hoc callers, pin that gateway to
+/// the address returned by the check to prevent a second DNS lookup from
+/// changing the destination.
+async fn check_rdp_session_network(
+    target_host: &str,
+    target_port: u16,
+    gateway_host: Option<&str>,
+    gateway_port: Option<u16>,
+    allowed: &[String],
+    jump_hops: &[tunnel::JumpHost],
+    fence_all_targets: bool,
+) -> Result<Option<String>, SessionError> {
+    if let Some(gateway_host) = gateway_host {
+        if !jump_hops.is_empty() {
+            return Err(SessionError::ValidationError(
+                "RD Gateway cannot be combined with SSH jump hosts".into(),
+            ));
+        }
+
+        let ip = allowed_address(gateway_host, gateway_port.unwrap_or(443), allowed)
+            .await
+            .map_err(|e| SessionError::ValidationError(format!("RD Gateway: {e}")))?;
+        // Preserve the hostname for trusted entries/admins so FreeRDP can
+        // verify the gateway certificate against its DNS name. Fenced
+        // ad-hoc callers must dial the exact address that passed the check.
+        let gateway = if fence_all_targets {
+            ip.to_string()
+        } else {
+            gateway_host.to_string()
+        };
+        tracing::debug!(
+            target = %target_host,
+            gateway = %gateway,
+            "RDP target resolved by RD Gateway, not checked locally"
+        );
+        return Ok(Some(gateway));
+    }
+
+    check_session_network(target_host, target_port, allowed, jump_hops).await?;
+    Ok(None)
+}
+
 /// Check that a host resolves to an IP within the allowed CIDR networks.
 ///
 /// Passes if ANY resolved address is allowed. Callers that can connect by
@@ -1196,11 +1247,14 @@ impl SessionManager {
                 let port = req.port.unwrap_or(3389);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_session_network(
+                let gateway_hostname = check_rdp_session_network(
                     &hostname,
                     port,
+                    req.gateway_hostname.as_deref(),
+                    req.gateway_port,
                     &self.config.rdp_allowed_networks,
                     &jump_hops,
+                    fence_all_targets,
                 )
                 .await?;
 
@@ -1255,6 +1309,12 @@ impl SessionManager {
                     username: username.clone(),
                     password: req.password.clone(),
                     domain: req.domain.clone(),
+                    gateway_hostname,
+                    gateway_port: req.gateway_port,
+                    gateway_username: req.gateway_username.clone(),
+                    gateway_password: req.gateway_password.clone(),
+                    gateway_domain: req.gateway_domain.clone(),
+                    load_balance_info: req.load_balance_info.clone(),
                     security: rdp_security,
                     server_layout: req.server_layout.clone(),
                     width,
@@ -1784,6 +1844,12 @@ impl SessionManager {
                     username: vdi_username.clone(),
                     password: Some(vdi_password),
                     domain: None,
+                    gateway_hostname: None,
+                    gateway_port: None,
+                    gateway_username: None,
+                    gateway_password: None,
+                    gateway_domain: None,
+                    load_balance_info: None,
                     security: None,
                     server_layout: req.server_layout.clone(),
                     width,
@@ -4022,6 +4088,91 @@ mod tests {
                 .is_ok(),
             "bastion-only target name must not be resolved locally"
         );
+    }
+
+    #[tokio::test]
+    async fn rdp_gateway_checks_gateway_and_skips_target_resolution() {
+        let cidrs = vec!["127.0.0.0/8".into()];
+        let gateway = check_rdp_session_network(
+            "target-resolved-only-by-gateway.invalid",
+            3389,
+            Some("127.0.0.1"),
+            None,
+            &cidrs,
+            &[],
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(gateway.as_deref(), Some("127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn rdp_gateway_rejects_gateway_outside_allowlist() {
+        let cidrs = vec!["10.0.0.0/8".into()];
+        let err = check_rdp_session_network(
+            "target-resolved-only-by-gateway.invalid",
+            3389,
+            Some("192.0.2.1"),
+            Some(443),
+            &cidrs,
+            &[],
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("RD Gateway"));
+        assert!(err.to_string().contains("allowed network list"));
+    }
+
+    #[tokio::test]
+    async fn rdp_gateway_preserves_hostname_for_unfenced_sessions() {
+        let cidrs = vec!["127.0.0.0/8".into(), "::1/128".into()];
+        let gateway = check_rdp_session_network(
+            "target-resolved-only-by-gateway.invalid",
+            3389,
+            Some("localhost"),
+            None,
+            &cidrs,
+            &[],
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(gateway.as_deref(), Some("localhost"));
+
+        let pinned_gateway = check_rdp_session_network(
+            "target-resolved-only-by-gateway.invalid",
+            3389,
+            Some("localhost"),
+            None,
+            &cidrs,
+            &[],
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(pinned_gateway.parse::<std::net::IpAddr>().is_ok());
+    }
+
+    #[tokio::test]
+    async fn rdp_gateway_rejects_ssh_jump_hosts() {
+        let cidrs = vec!["127.0.0.0/8".into()];
+        let err = check_rdp_session_network(
+            "target-resolved-only-by-gateway.invalid",
+            3389,
+            Some("127.0.0.1"),
+            None,
+            &cidrs,
+            &[hop("127.0.0.1", 22)],
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cannot be combined with SSH jump hosts"));
     }
 
     /// Hop 0 is fenced only for untrusted callers, where the chain is built

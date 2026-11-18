@@ -283,6 +283,18 @@ pub struct AddressBookEntry {
     pub private_key: Option<String>,
     pub url: Option<String>,
     pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_balance_info: Option<String>,
     pub security: Option<String>,
     /// RDP server keyboard layout (guacd `server-layout`, e.g. "en-gb-qwerty").
     /// None/empty lets guacd use its default (en-us-qwerty).
@@ -559,6 +571,12 @@ pub struct EntryInfo {
     pub url: Option<String>,
     pub display_name: Option<String>,
     pub domain: Option<String>,
+    pub gateway_hostname: Option<String>,
+    pub gateway_port: Option<u16>,
+    pub gateway_username: Option<String>,
+    pub gateway_domain: Option<String>,
+    pub load_balance_info: Option<String>,
+    pub has_gateway_password: bool,
     pub security: Option<String>,
     /// RDP keyboard layout. The entry editor loads it from here, so without
     /// it every save of an RDP entry reset the layout to the default (#356).
@@ -785,6 +803,12 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             url: e.url.clone(),
             display_name: e.display_name.clone(),
             domain: e.domain.clone(),
+            gateway_hostname: e.gateway_hostname.clone(),
+            gateway_port: e.gateway_port,
+            gateway_username: e.gateway_username.clone(),
+            gateway_domain: e.gateway_domain.clone(),
+            load_balance_info: e.load_balance_info.clone(),
+            has_gateway_password: e.gateway_password.as_ref().is_some_and(|p| !p.is_empty()),
             security: e.security.clone(),
             server_layout: e.server_layout.clone(),
             ignore_cert: e.ignore_cert,
@@ -2135,6 +2159,10 @@ pub fn entry_credential_variables(entry: &AddressBookEntry) -> Vec<String> {
         &entry.username,
         &entry.password,
         &entry.domain,
+        &entry.gateway_username,
+        &entry.gateway_password,
+        &entry.gateway_domain,
+        &entry.load_balance_info,
         &entry.private_key,
         &entry.container_username,
         &entry.container_password,
@@ -2176,6 +2204,10 @@ pub fn resolve_credential_variables(
     resolve_field(&mut resolved.username, user_creds, &mut missing);
     resolve_field(&mut resolved.password, user_creds, &mut missing);
     resolve_field(&mut resolved.domain, user_creds, &mut missing);
+    resolve_field(&mut resolved.gateway_username, user_creds, &mut missing);
+    resolve_field(&mut resolved.gateway_password, user_creds, &mut missing);
+    resolve_field(&mut resolved.gateway_domain, user_creds, &mut missing);
+    resolve_field(&mut resolved.load_balance_info, user_creds, &mut missing);
     resolve_field(&mut resolved.private_key, user_creds, &mut missing);
     resolve_field(&mut resolved.container_username, user_creds, &mut missing);
     resolve_field(&mut resolved.container_password, user_creds, &mut missing);
