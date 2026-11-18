@@ -8849,6 +8849,7 @@ mod tests {
             "jump_username",
             "jump_password",
             "jump_private_key",
+            "gateway_password",
             "container_password",
             "proxmox_token_secret",
         ];
