@@ -479,7 +479,7 @@ Add a user ahead of their first OIDC login, which is how anyone gets in when `[o
 { "email": "jsmith@example.com", "role": "operator", "name": "J Smith" }
 ```
 
-`role` is one of `admin`, `poweruser`, `operator`, `viewer`; `name` is optional and replaced by the provider's name on login. The email must contain `@`, be at most 254 characters and have no spaces or control characters; the name at most 200 characters. Responses: `201` with the user; `400` for an invalid email, name or role; `409` if a user with that email already exists, ignoring case. See [How a login is matched to a user](roles-and-access-control.md#how-a-login-is-matched-to-a-user).
+`role` is the name of any existing role, built-in (`admin`, `poweruser`, `operator`, `viewer`) or [custom](roles-and-access-control.md#custom-roles); `name` is optional and replaced by the provider's name on login. The email must contain `@`, be at most 254 characters and have no spaces or control characters; the name at most 200 characters. Responses: `201` with the user; `400` for an invalid email, name or role (`unknown role` if no role has that name); `403` if the role grants permissions you don't hold; `409` if a user with that email already exists, ignoring case. See [How a login is matched to a user](roles-and-access-control.md#how-a-login-is-matched-to-a-user).
 
 ### `PUT /api/users/:email/role`
 
@@ -491,7 +491,7 @@ Set a user's role.
 }
 ```
 
-Valid roles: `admin`, `poweruser`, `operator`, `viewer`.
+`role` is the name of any existing role, built-in (`admin`, `poweruser`, `operator`, `viewer`) or [custom](roles-and-access-control.md#custom-roles). An unknown role is `400 unknown role`; a role that grants permissions you don't hold is `403`.
 
 ### `DELETE /api/users/:email`
 
@@ -515,18 +515,31 @@ Force-logout a user by deleting all their auth sessions.
 
 List all group-to-role mappings.
 
+```json
+[
+  {
+    "id": 1,
+    "oidc_group": "engineering",
+    "role": "poweruser",
+    "created_at": "2026-01-01 00:00:00"
+  }
+]
+```
+
+Requests send the group as `group`; responses return it as `oidc_group`.
+
 ### `POST /api/admin/group-mappings`
 
 Create a mapping.
 
 ```json
 {
-  "oidc_group": "engineering",
+  "group": "engineering",
   "role": "poweruser"
 }
 ```
 
-Returns 409 Conflict if a mapping for the group already exists.
+`role` can be a built-in or custom role. Returns `201` with the mapping, `400 unknown role` if no role has that name, `403` if the role grants permissions you don't hold, and `409 Conflict` if a mapping for the group already exists. `PUT` checks the role the same way.
 
 ### `PUT /api/admin/group-mappings/:id`
 
@@ -534,7 +547,7 @@ Update a mapping.
 
 ```json
 {
-  "oidc_group": "engineering",
+  "group": "engineering",
   "role": "admin"
 }
 ```
