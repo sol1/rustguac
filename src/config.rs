@@ -26,6 +26,10 @@ pub struct OidcConfig {
     pub redirect_uri: String,
     #[serde(default = "default_oidc_default_role")]
     pub default_role: String,
+    /// Reset an unmatched user's direct role to default_role on login.
+    /// Matching groups always grant the union of their mapped roles.
+    #[serde(default)]
+    pub sync_role_on_login: bool,
     /// Create a user account on first OIDC login (default: true). When false,
     /// only users already in the database (pre-provisioned with `add-user`,
     /// `POST /api/users` or the Admin page) can log in.
@@ -64,6 +68,7 @@ impl std::fmt::Debug for OidcConfig {
             )
             .field("redirect_uri", &self.redirect_uri)
             .field("default_role", &self.default_role)
+            .field("sync_role_on_login", &self.sync_role_on_login)
             .field("auto_create_users", &self.auto_create_users)
             .field("allow_unverified_email", &self.allow_unverified_email)
             .field("groups_claim", &self.groups_claim)
@@ -93,6 +98,9 @@ pub struct VaultConfig {
     pub role_id: String,
     /// Workload JWT login; when configured, never fall back to AppRole.
     pub jwt_auth: Option<VaultJwtAuth>,
+    /// An existing short-lived token managed by Vault/OpenBao Agent. Reopened
+    /// for each request; rustguac never renews this externally owned token.
+    pub token_file: Option<PathBuf>,
     pub namespace: Option<String>,
     /// Instance name for instance-scoped address book entries.
     /// Entries under `<base_path>/shared/` are visible to all instances.
@@ -119,6 +127,7 @@ impl std::fmt::Debug for VaultConfig {
             .field("mount", &self.mount)
             .field("base_path", &self.base_path)
             .field("role_id", &"[REDACTED]")
+            .field("token_file", &self.token_file)
             .field("namespace", &self.namespace)
             .field("instance_name", &self.instance_name)
             .field("tls_skip_verify", &self.tls_skip_verify)
@@ -197,9 +206,18 @@ impl VaultJwtAuth {
 
 impl VaultConfig {
     /// The AppRole secret ID to log in with, from the environment variable
-    /// `env_name`, or an empty string when this backend logs in with a JWT
-    /// and needs none. The error says what is missing.
+    /// `env_name`, or an empty string for JWT or externally managed token-file
+    /// authentication, which need none. The error says what is missing.
     pub fn login_secret(&self, env_name: &str) -> Result<String, String> {
+        if let Some(ref path) = self.token_file {
+            if path.as_os_str().is_empty()
+                || self.jwt_auth.is_some()
+                || !self.role_id.trim().is_empty()
+            {
+                return Err("token_file requires a nonempty path and cannot be combined with JWT or AppRole".into());
+            }
+            return Ok(String::new());
+        }
         if let Some(ref jwt) = self.jwt_auth {
             jwt.validate()?;
             return Ok(String::new());
@@ -1412,6 +1430,19 @@ impl Config {
         config
     }
 
+    pub fn validate_oidc_role(&self, database: &crate::db::Db) -> Result<(), String> {
+        if let Some(ref oidc) = self.oidc {
+            if !crate::roles::role_exists(database, &oidc.default_role)
+                .map_err(|error| error.to_string())?
+            {
+                return Err(
+                    "[oidc].default_role must name an existing built-in or custom role".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Check that `[oidc]`, when present, has a usable client secret from
     /// either config.toml or `OIDC_CLIENT_SECRET` (already merged by
     /// `Config::load`). Returns the operator-facing error text on failure.
@@ -1714,6 +1745,7 @@ mod tests {
             client_secret: Some("sensitive-value".into()),
             redirect_uri: "https://console.example.com/oidc/callback".into(),
             default_role: default_oidc_default_role(),
+            sync_role_on_login: false,
             auto_create_users: true,
             allow_unverified_email: false,
             groups_claim: default_groups_claim(),
@@ -1724,6 +1756,66 @@ mod tests {
         let dbg = format!("{:?}", config);
         assert!(!dbg.contains("sensitive-value"), "got: {}", dbg);
         assert!(dbg.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn config_file_rejects_unknown_oidc_default_role() {
+        let path =
+            std::env::temp_dir().join(format!("rustguac-role-{}.toml", uuid::Uuid::new_v4()));
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        crate::roles::create_custom_role(&db, "auditor", "Auditor", "", Default::default())
+            .unwrap();
+        for sync in [false, true] {
+            for role in [
+                "admin",
+                "poweruser",
+                "operator",
+                "viewer",
+                "auditor",
+                "operatr",
+                "",
+            ] {
+                std::fs::write(
+                    &path,
+                    format!(
+                        r#"
+                [oidc]
+                issuer_url = "https://idp.example.com"
+                client_id = "console"
+                redirect_uri = "https://console.example.com/auth/callback"
+                default_role = "{role}"
+                sync_role_on_login = {sync}
+            "#
+                    ),
+                )
+                .unwrap();
+                let result = super::load_from_file(path.to_str().unwrap())
+                    .unwrap()
+                    .validate_oidc_role(&db);
+                assert_eq!(
+                    result.is_ok(),
+                    ["admin", "poweruser", "operator", "viewer", "auditor"].contains(&role)
+                );
+                if let Err(error) = result {
+                    assert!(error.contains("default_role"));
+                }
+            }
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn oidc_role_sync_is_opt_in() {
+        let minimal = r#"
+            issuer_url = "https://idp.example.com"
+            client_id = "console"
+            redirect_uri = "https://console.example.com/auth/callback"
+        "#;
+        let config: OidcConfig = toml::from_str(minimal).unwrap();
+        assert!(!config.sync_role_on_login);
+        let config: OidcConfig =
+            toml::from_str(&format!("{minimal}\nsync_role_on_login = true")).unwrap();
+        assert!(config.sync_role_on_login);
     }
 
     // ── Theme TOML loader (v1.7.1) ──

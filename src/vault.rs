@@ -1,4 +1,4 @@
-//! HashiVault / OpenBao KV v2 client with AppRole or workload JWT authentication.
+//! HashiVault / OpenBao KV v2 client with AppRole, workload JWT, or token-file authentication.
 //!
 //! Stores address book entries (connection credentials) in Vault.
 //! Path structure:
@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
 use crate::config::VaultConfig;
@@ -381,6 +382,10 @@ pub struct AddressBookEntry {
     /// Enable RDP Graphics Pipeline Extension (GFX). Enables RemoteFX codec for better video.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_gfx: Option<bool>,
+    /// RDP: connect to the console (admin) session, like `mstsc /admin`.
+    /// Also bypasses RD Connection Broker load balancing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rdp_console: Option<bool>,
     /// Enable desktop composition (DWM). Improves video overlay rendering in RDP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_desktop_composition: Option<bool>,
@@ -494,6 +499,10 @@ pub struct AddressBookEntry {
     /// sessions. Lets operators tune readability independently of display DPI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_font_size: Option<u32>,
+    /// SSH terminal colours (`gray-black`, `white-black`, `green-black`,
+    /// `black-white`). None uses guacd's default, `gray-black`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_color_scheme: Option<String>,
     /// Wake-on-LAN: send a magic packet to wake the target before connecting.
     /// Passed through to guacd's `wol-send-packet` param (SSH/RDP/VNC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -569,6 +578,10 @@ pub struct EntryInfo {
     pub load_balance_info: Option<String>,
     pub has_gateway_password: bool,
     pub security: Option<String>,
+    /// RDP keyboard layout. The entry editor loads it from here, so without
+    /// it every save of an RDP entry reset the layout to the default (#356).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_layout: Option<String>,
     pub ignore_cert: Option<bool>,
     pub enable_drive: Option<bool>,
     /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
@@ -637,6 +650,9 @@ pub struct EntryInfo {
     /// Enable RDP Graphics Pipeline Extension (GFX).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_gfx: Option<bool>,
+    /// RDP: connect to the console (admin) session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rdp_console: Option<bool>,
     /// Enable desktop composition (DWM).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_desktop_composition: Option<bool>,
@@ -721,6 +737,9 @@ pub struct EntryInfo {
     /// SSH terminal font size in points (SSH only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_font_size: Option<u32>,
+    /// SSH terminal colour scheme (SSH only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_color_scheme: Option<String>,
     /// Wake-on-LAN: send a magic packet before connecting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wol_send_packet: Option<bool>,
@@ -791,6 +810,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             load_balance_info: e.load_balance_info.clone(),
             has_gateway_password: e.gateway_password.as_ref().is_some_and(|p| !p.is_empty()),
             security: e.security.clone(),
+            server_layout: e.server_layout.clone(),
             ignore_cert: e.ignore_cert,
             enable_drive: e.enable_drive,
             auth_pkg: e.auth_pkg.clone(),
@@ -816,6 +836,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             banner: e.banner.clone(),
             credential_variables: entry_credential_variables(e),
             enable_gfx: e.enable_gfx,
+            rdp_console: e.rdp_console,
             enable_desktop_composition: e.enable_desktop_composition,
             enable_wallpaper: e.enable_wallpaper,
             enable_theming: e.enable_theming,
@@ -849,6 +870,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
                 .is_some_and(|t| !t.is_empty()),
             max_monitors: e.max_monitors,
             ssh_font_size: e.ssh_font_size,
+            ssh_color_scheme: e.ssh_color_scheme.clone(),
             wol_send_packet: e.wol_send_packet,
             wol_mac_addr: e.wol_mac_addr.clone(),
             wol_broadcast_addr: e.wol_broadcast_addr.clone(),
@@ -890,6 +912,36 @@ pub struct VaultClient {
     role_id: String,
     secret_id: String,
     jwt_auth: Option<crate::config::VaultJwtAuth>,
+    token_file: Option<std::path::PathBuf>,
+}
+
+/// The external token manager owns renewal and rotation. Never cache the file's
+/// content, include it in errors, or fall back to another identity when unreadable.
+async fn read_token_file(path: &std::path::Path) -> Result<String, VaultError> {
+    let file = tokio::fs::File::open(path).await.map_err(|e| {
+        VaultError::Auth(format!(
+            "cannot open external token file {}: {}",
+            path.display(),
+            e.kind()
+        ))
+    })?;
+    let mut bytes = Vec::new();
+    file.take(65537)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|_| VaultError::Auth("cannot read external token file".into()))?;
+    if bytes.len() > 65536 {
+        return Err(VaultError::Auth("external token exceeds size limit".into()));
+    }
+    let raw = String::from_utf8(bytes)
+        .map_err(|_| VaultError::Auth("external token is not UTF-8".into()))?;
+    let token = raw.trim();
+    if token.is_empty() || !token.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(VaultError::Auth(
+            "external token is empty or malformed".into(),
+        ));
+    }
+    Ok(token.into())
 }
 
 /// The workload identity JWT for a login: read from `path`, or printed by
@@ -946,7 +998,9 @@ async fn fetch_workload_jwt(cfg: &crate::config::VaultJwtAuth) -> Result<String,
 impl VaultClient {
     /// Create a new Vault client and perform initial login.
     pub async fn new(config: &VaultConfig, secret_id: &str) -> Result<Self, VaultError> {
-        if let Some(ref jwt_auth) = config.jwt_auth {
+        if config.token_file.is_some() {
+            config.login_secret("").map_err(VaultError::Auth)?;
+        } else if let Some(ref jwt_auth) = config.jwt_auth {
             jwt_auth.validate().map_err(VaultError::Auth)?;
         } else if config.role_id.trim().is_empty() {
             return Err(VaultError::Auth(
@@ -971,11 +1025,40 @@ impl VaultClient {
             role_id: config.role_id.clone(),
             secret_id: secret_id.to_string(),
             jwt_auth: config.jwt_auth.clone(),
+            token_file: config.token_file.clone(),
         };
 
         // Perform initial login
         let (token, _ttl) = client.login().await?;
-        *client.token.write().await = token;
+        if let Some(ref path) = client.token_file {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let metadata = tokio::fs::metadata(path).await.map_err(|e| {
+                    VaultError::Auth(format!(
+                        "cannot inspect external token file {}: {}",
+                        path.display(),
+                        e.kind()
+                    ))
+                })?;
+                if metadata.permissions().mode() & 0o044 != 0 {
+                    tracing::warn!(path = %path.display(), "External Vault token file is group or world readable; restrict access to the token manager and rustguac");
+                }
+            }
+            // Validate the externally issued identity before marking this backend
+            // connected. Initial failures use the existing reconnect/status path.
+            let response = client
+                .request(reqwest::Method::GET, "/v1/auth/token/lookup-self", None)
+                .await?;
+            if !response.status().is_success() {
+                return Err(VaultError::Auth(format!(
+                    "external token lookup-self failed (HTTP {})",
+                    response.status()
+                )));
+            }
+        } else {
+            *client.token.write().await = token;
+        }
 
         Ok(client)
     }
@@ -984,6 +1067,9 @@ impl VaultClient {
     /// fetched again every time, so a rotated token (kubelet, Nomad,
     /// spiffe-helper, a metadata service) is always the one sent.
     async fn login(&self) -> Result<(String, u64), VaultError> {
+        if let Some(ref path) = self.token_file {
+            return Ok((read_token_file(path).await?, 0));
+        }
         let (url, body) = if let Some(ref jwt_auth) = self.jwt_auth {
             let jwt = fetch_workload_jwt(jwt_auth).await?;
             (
@@ -1045,6 +1131,9 @@ impl VaultClient {
 
     /// Spawn a background task that renews the token at 50% of TTL.
     pub fn spawn_renewal_task(self: &Arc<Self>) {
+        if self.token_file.is_some() {
+            return; // Agent, not this process, owns these tokens.
+        }
         let client = Arc::clone(self);
         tokio::spawn(async move {
             // Initial TTL — re-login to get it
@@ -1103,7 +1192,8 @@ impl VaultClient {
         Ok(json["auth"]["lease_duration"].as_u64().unwrap_or(3600))
     }
 
-    /// Make an authenticated request to Vault. Retries once on 403 with re-login.
+    /// Make an authenticated request to Vault. On 403, retry once after re-login
+    /// or, for an externally managed token, only if the file now holds a new token.
     async fn request(
         &self,
         method: reqwest::Method,
@@ -1112,11 +1202,11 @@ impl VaultClient {
     ) -> Result<reqwest::Response, VaultError> {
         let url = format!("{}{}", self.addr, path);
 
-        let do_request = |token: String| {
+        let do_request = |token: &str| {
             let mut req = self
                 .http
                 .request(method.clone(), &url)
-                .header("X-Vault-Token", &token);
+                .header("X-Vault-Token", token);
             if let Some(ref ns) = self.namespace {
                 req = req.header("X-Vault-Namespace", ns.as_str());
             }
@@ -1126,16 +1216,28 @@ impl VaultClient {
             req.send()
         };
 
-        let token = self.token.read().await.clone();
-        let resp = do_request(token).await?;
+        let token = match self.token_file {
+            Some(ref path) => read_token_file(path).await?,
+            None => self.token.read().await.clone(),
+        };
+        let resp = do_request(&token).await?;
 
         if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            if let Some(ref path) = self.token_file {
+                let new_token = read_token_file(path).await?;
+                return if new_token != token {
+                    tracing::debug!("Vault 403, retrying with updated token file");
+                    Ok(do_request(&new_token).await?)
+                } else {
+                    Ok(resp)
+                };
+            }
             // Re-login and retry once
             tracing::debug!("Vault 403, attempting re-login and retry");
             match self.login().await {
                 Ok((new_token, _)) => {
                     *self.token.write().await = new_token.clone();
-                    let resp = do_request(new_token).await?;
+                    let resp = do_request(&new_token).await?;
                     Ok(resp)
                 }
                 Err(e) => Err(e),
@@ -1659,15 +1761,8 @@ impl VaultClient {
     async fn kv_list(&self, path: &str) -> Result<Vec<String>, VaultError> {
         // Vault LIST is a GET with ?list=true (also works with HTTP method LIST,
         // but ?list=true is more portable across HTTP clients).
-        let url = format!("{}{}?list=true", self.addr, path);
-        let token = self.token.read().await.clone();
-
-        let mut req = self.http.get(&url).header("X-Vault-Token", &token);
-        if let Some(ref ns) = self.namespace {
-            req = req.header("X-Vault-Namespace", ns.as_str());
-        }
-
-        let resp = req.send().await?;
+        let path = format!("{}?list=true", path);
+        let resp = self.request(reqwest::Method::GET, &path, None).await?;
 
         match resp.status().as_u16() {
             200 => {
@@ -2483,6 +2578,286 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn token_file_startup_rejects_invalid_identity_and_recovers_after_rotation() {
+        use axum::{
+            http::{HeaderMap, StatusCode},
+            routing::get,
+            Router,
+        };
+        let calls = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let recorded = calls.clone();
+        let app = Router::new().route(
+            "/v1/auth/token/lookup-self",
+            get(move |headers: HeaderMap| {
+                let recorded = recorded.clone();
+                async move {
+                    assert_eq!(headers["X-Vault-Namespace"], "example-ns");
+                    let token = headers["X-Vault-Token"].to_str().unwrap().to_string();
+                    recorded.lock().await.push(token.clone());
+                    if token == "valid-agent-token" {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::FORBIDDEN
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let path = std::env::temp_dir().join(format!("rustguac-lookup-{}", uuid::Uuid::new_v4()));
+        let mut config = base_config();
+        config.addr = format!("http://{addr}");
+        config.role_id.clear();
+        config.token_file = Some(path.clone());
+        config.namespace = Some("example-ns".into());
+        for token in ["expired-agent-token", "garbage-token"] {
+            tokio::fs::write(&path, token).await.unwrap();
+            let error = match VaultClient::new(&config, "").await {
+                Ok(_) => panic!("invalid external token accepted"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains("lookup-self"));
+            assert!(!error.contains(token));
+        }
+        let next = path.with_extension("next");
+        tokio::fs::write(&next, "valid-agent-token").await.unwrap();
+        tokio::fs::rename(next, &path).await.unwrap();
+        let client = VaultClient::new(&config, "").await.unwrap();
+        assert!(client.token.read().await.is_empty());
+        assert_eq!(
+            *calls.lock().await,
+            vec!["expired-agent-token", "garbage-token", "valid-agent-token"]
+        );
+        tokio::fs::remove_file(path).await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn agent_token_file_refuses_invalid_or_missing_material_without_leaking_it() {
+        let path = std::env::temp_dir().join(format!("rustguac-agent-{}", uuid::Uuid::new_v4()));
+        let error = read_token_file(&path).await.unwrap_err().to_string();
+        assert!(error.contains(path.to_str().unwrap()));
+        for invalid in [
+            Vec::new(),
+            b" \n\t".to_vec(),
+            b"synthetic-secret\0".to_vec(),
+            b"synthetic-secret\x7f".to_vec(),
+            "synthetic-secret\u{e9}".as_bytes().to_vec(),
+            b"synthetic-secret with spaces".to_vec(),
+            vec![b'x'; 65537],
+            vec![255],
+        ] {
+            tokio::fs::write(&path, invalid).await.unwrap();
+            let error = read_token_file(&path).await.unwrap_err().to_string();
+            assert!(!error.contains("synthetic-secret"));
+        }
+        tokio::fs::write(&path, vec![b'x'; 65536]).await.unwrap();
+        assert_eq!(read_token_file(&path).await.unwrap().len(), 65536);
+        tokio::fs::remove_file(path).await.unwrap();
+    }
+
+    #[test]
+    fn agent_token_file_is_exclusive_and_needs_no_secret_id_environment() {
+        let mut config = base_config();
+        config.token_file = Some("/run/agent/token".into());
+        assert!(config.login_secret("RUSTGUAC_ABSENT_TEST_SECRET").is_err());
+        config.role_id.clear();
+        assert_eq!(
+            config.login_secret("RUSTGUAC_ABSENT_TEST_SECRET").unwrap(),
+            ""
+        );
+        config.jwt_auth = Some(jwt_file_auth(std::path::Path::new("/run/jwt")));
+        assert!(config.login_secret("RUSTGUAC_ABSENT_TEST_SECRET").is_err());
+        config.jwt_auth = None;
+        config.token_file = Some("".into());
+        assert!(config.login_secret("RUSTGUAC_ABSENT_TEST_SECRET").is_err());
+    }
+
+    #[tokio::test]
+    async fn token_file_forbidden_retries_only_once_and_only_after_rotation() {
+        use axum::{
+            extract::Request,
+            http::StatusCode,
+            routing::{any, get},
+            Router,
+        };
+        for (replace, reject_new) in [(false, false), (true, false), (true, true)] {
+            let path =
+                std::env::temp_dir().join(format!("rustguac-token-{}", uuid::Uuid::new_v4()));
+            tokio::fs::write(&path, "old-token").await.unwrap();
+            let calls = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+            let recorded = calls.clone();
+            let sink = path.clone();
+            let app = Router::new()
+                .route(
+                    "/v1/auth/token/lookup-self",
+                    get(|| async { StatusCode::OK }),
+                )
+                .fallback(any(move |request: Request| {
+                    let recorded = recorded.clone();
+                    let sink = sink.clone();
+                    async move {
+                        assert_eq!(request.uri().path(), "/v1/check");
+                        assert_eq!(request.headers()["X-Vault-Namespace"], "example-ns");
+                        let token = request.headers()["X-Vault-Token"]
+                            .to_str()
+                            .unwrap()
+                            .to_string();
+                        recorded.lock().await.push(token.clone());
+                        if token == "old-token" {
+                            if replace {
+                                let next = sink.with_extension("next");
+                                tokio::fs::write(&next, "new-token").await.unwrap();
+                                tokio::fs::rename(next, sink).await.unwrap();
+                            }
+                            StatusCode::FORBIDDEN
+                        } else if reject_new {
+                            StatusCode::FORBIDDEN
+                        } else {
+                            StatusCode::OK
+                        }
+                    }
+                }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let mut config = base_config();
+            config.addr = format!("http://{addr}");
+            config.role_id.clear();
+            config.token_file = Some(path.clone());
+            config.namespace = Some("example-ns".into());
+            let client = VaultClient::new(&config, "").await.unwrap();
+            let response = client
+                .request(reqwest::Method::GET, "/v1/check", None)
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if replace && !reject_new {
+                    StatusCode::OK
+                } else {
+                    StatusCode::FORBIDDEN
+                }
+            );
+            assert_eq!(
+                *calls.lock().await,
+                if replace {
+                    vec!["old-token", "new-token"]
+                } else {
+                    vec!["old-token"]
+                }
+            );
+            assert!(client.token.read().await.is_empty());
+            tokio::fs::remove_file(path).await.unwrap();
+            server.abort();
+        }
+    }
+
+    #[test]
+    fn token_file_deserializes_for_each_backend() {
+        for section in ["vault", "vault_shared", "vault_local"] {
+            let config: crate::config::Config = toml::from_str(&format!(
+                "[{section}]\naddr = 'https://vault.example.com:8200'\ntoken_file = '/run/agent/token'\n"
+            )).unwrap();
+            let backend = match section {
+                "vault" => config.vault,
+                "vault_shared" => config.vault_shared,
+                _ => config.vault_local,
+            }
+            .unwrap();
+            assert!(backend
+                .login_secret("RUSTGUAC_ABSENT_TEST_SECRET")
+                .unwrap()
+                .is_empty());
+            assert_eq!(
+                backend.token_file.unwrap(),
+                std::path::PathBuf::from("/run/agent/token")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_token_file_reopens_atomic_rotation_without_auth_or_renew_requests() {
+        use axum::{extract::Request, http::StatusCode, routing::any, Json, Router};
+        let calls = Arc::new(tokio::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let recorded = calls.clone();
+        let app = Router::new().fallback(any(move |request: Request| {
+            let recorded = recorded.clone();
+            async move {
+                assert_eq!(request.headers()["X-Vault-Namespace"], "example-ns");
+                let token = request.headers()["X-Vault-Token"]
+                    .to_str()
+                    .unwrap()
+                    .to_string();
+                let status = if token.is_empty() {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::OK
+                };
+                recorded
+                    .lock()
+                    .await
+                    .push((request.uri().path_and_query().unwrap().to_string(), token));
+                (
+                    status,
+                    Json(serde_json::json!({"data": {"keys": ["team/"]}})),
+                )
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let path = std::env::temp_dir().join(format!("rustguac-agent-{}", uuid::Uuid::new_v4()));
+        tokio::fs::write(&path, "synthetic-agent-one\n")
+            .await
+            .unwrap();
+        let mut config = base_config();
+        config.addr = format!("http://{addr}");
+        config.role_id.clear();
+        config.token_file = Some(path.clone());
+        config.namespace = Some("example-ns".into());
+        let client = Arc::new(VaultClient::new(&config, "").await.unwrap());
+        client.spawn_renewal_task();
+        client
+            .request(reqwest::Method::GET, "/v1/check", None)
+            .await
+            .unwrap();
+        assert_eq!(client.kv_list("/v1/folders").await.unwrap(), vec!["team/"]);
+        let replacement = path.with_extension("next");
+        tokio::fs::write(&replacement, "synthetic-agent-two\n")
+            .await
+            .unwrap();
+        tokio::fs::rename(replacement, &path).await.unwrap();
+        client
+            .request(reqwest::Method::GET, "/v1/check", None)
+            .await
+            .unwrap();
+        assert_eq!(client.kv_list("/v1/folders").await.unwrap(), vec!["team/"]);
+        assert_eq!(
+            *calls.lock().await,
+            vec![
+                (
+                    "/v1/auth/token/lookup-self".into(),
+                    "synthetic-agent-one".into()
+                ),
+                ("/v1/check".into(), "synthetic-agent-one".into()),
+                ("/v1/folders?list=true".into(), "synthetic-agent-one".into()),
+                ("/v1/check".into(), "synthetic-agent-two".into()),
+                ("/v1/folders?list=true".into(), "synthetic-agent-two".into()),
+            ]
+        );
+        tokio::fs::remove_file(path).await.unwrap();
+        assert!(client
+            .request(reqwest::Method::GET, "/v1/check", None)
+            .await
+            .is_err());
+        assert!(client.kv_list("/v1/folders").await.is_err());
+        assert_eq!(calls.lock().await.len(), 5);
+        server.abort();
+    }
+
     fn base_config() -> VaultConfig {
         VaultConfig {
             addr: "https://vault.example.com:8200".into(),
@@ -2490,6 +2865,7 @@ mod tests {
             base_path: "rustguac".into(),
             role_id: "test-role-id".into(),
             jwt_auth: None,
+            token_file: None,
             namespace: None,
             instance_name: None,
             tls_skip_verify: false,

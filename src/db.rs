@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rand::RngExt;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use std::path::Path;
@@ -20,6 +20,8 @@ pub struct AdminInfo {
     pub disabled: bool,
     pub created_at: String,
     pub last_used_at: Option<String>,
+    /// The role whose permissions the key holds. None: every permission.
+    pub role: Option<String>,
 }
 
 /// User record from OIDC login.
@@ -265,7 +267,43 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             details    TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
-        CREATE INDEX IF NOT EXISTS idx_cli_audit_created ON cli_audit_log(created_at DESC);",
+        CREATE INDEX IF NOT EXISTS idx_cli_audit_created ON cli_audit_log(created_at DESC);
+
+        -- Custom roles (#294). Built-in roles are defined in code, never here.
+        CREATE TABLE IF NOT EXISTS roles (
+            name         TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            description  TEXT NOT NULL DEFAULT '',
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role       TEXT NOT NULL REFERENCES roles(name) ON DELETE CASCADE,
+            permission TEXT NOT NULL,
+            PRIMARY KEY (role, permission)
+        );
+
+        -- Role, user and mapping changes made through the API (#294).
+        CREATE TABLE IF NOT EXISTS admin_audit_log (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor      TEXT NOT NULL,
+            action     TEXT NOT NULL,
+            target     TEXT NOT NULL,
+            details    TEXT,
+            ip_addr    TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC);
+
+        -- Each user's favourite connection entries (#335).
+        CREATE TABLE IF NOT EXISTS user_favourites (
+            user_email TEXT NOT NULL,
+            scope      TEXT NOT NULL,
+            folder     TEXT NOT NULL,
+            entry      TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (user_email, scope, folder, entry)
+        );",
     )?;
 
     // Migration: add oidc_groups column if it doesn't exist
@@ -274,6 +312,12 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         .is_ok();
     if !has_oidc_groups {
         conn.execute_batch("ALTER TABLE users ADD COLUMN oidc_groups TEXT NOT NULL DEFAULT ''")?;
+    }
+
+    // Migration: a role per admin API key. NULL keeps a key a full admin.
+    let has_admin_role: bool = conn.prepare("SELECT role FROM admins LIMIT 0").is_ok();
+    if !has_admin_role {
+        conn.execute_batch("ALTER TABLE admins ADD COLUMN role TEXT")?;
     }
 
     // Migration: auth_sessions token → token_hash (v1.0.0 security hardening)
@@ -318,7 +362,7 @@ fn generate_key() -> String {
 /// so callers can **fail closed** (treat an unparseable expiry as expired)
 /// rather than the previous behaviour of silently ignoring it, which let a
 /// malformed value authenticate forever.
-fn parse_expires_at(s: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn parse_expires_at(s: &str) -> Option<DateTime<Utc>> {
     let s = s.trim();
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Some(dt.with_timezone(&Utc));
@@ -334,18 +378,32 @@ fn parse_expires_at(s: &str) -> Option<DateTime<Utc>> {
     None
 }
 
+/// Create a full admin API key.
+#[cfg(test)]
 pub fn add_admin(
     db: &Db,
     name: &str,
     allowed_ips: Option<&str>,
     expires_at: Option<&str>,
 ) -> rusqlite::Result<String> {
+    add_admin_with_role(db, name, allowed_ips, expires_at, None)
+}
+
+/// Create an admin API key holding `role`'s permissions, or every
+/// permission when `role` is None. The caller checks the role exists.
+pub fn add_admin_with_role(
+    db: &Db,
+    name: &str,
+    allowed_ips: Option<&str>,
+    expires_at: Option<&str>,
+    role: Option<&str>,
+) -> rusqlite::Result<String> {
     let key = generate_key();
     let key_hash = hash_key(&key);
     let conn = db.lock().unwrap();
     conn.execute(
-        "INSERT INTO admins (name, api_key_hash, allowed_ips, expires_at) VALUES (?1, ?2, ?3, ?4)",
-        params![name, key_hash, allowed_ips, expires_at],
+        "INSERT INTO admins (name, api_key_hash, allowed_ips, expires_at, role) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![name, key_hash, allowed_ips, expires_at, role],
     )?;
     Ok(key)
 }
@@ -354,7 +412,7 @@ pub fn add_admin(
 pub fn list_admins(db: &Db) -> rusqlite::Result<Vec<AdminInfo>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, name, allowed_ips, expires_at, disabled, created_at, last_used_at FROM admins ORDER BY id",
+        "SELECT id, name, allowed_ips, expires_at, disabled, created_at, last_used_at, role FROM admins ORDER BY id",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(AdminInfo {
@@ -365,6 +423,7 @@ pub fn list_admins(db: &Db) -> rusqlite::Result<Vec<AdminInfo>> {
             disabled: row.get::<_, i32>(4)? != 0,
             created_at: row.get(5)?,
             last_used_at: row.get(6)?,
+            role: row.get(7)?,
         })
     })?;
     rows.collect()
@@ -387,7 +446,7 @@ pub fn validate_api_key(
     // Fetch all admins and compare hashes in constant time
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, allowed_ips, expires_at, disabled, created_at, last_used_at, api_key_hash
+            "SELECT id, name, allowed_ips, expires_at, disabled, created_at, last_used_at, api_key_hash, role
              FROM admins",
         )
         .map_err(|_| AuthError::InvalidKey)?;
@@ -403,6 +462,7 @@ pub fn validate_api_key(
                     disabled: row.get::<_, i32>(4)? != 0,
                     created_at: row.get(5)?,
                     last_used_at: row.get(6)?,
+                    role: row.get(8)?,
                 },
                 stored_hash,
             ))
@@ -903,8 +963,79 @@ pub fn delete_user(db: &Db, email: &str) -> rusqlite::Result<bool> {
         "DELETE FROM user_api_tokens WHERE user_id IN (SELECT id FROM users WHERE email = ?1)",
         params![email],
     )?;
+    conn.execute(
+        "DELETE FROM user_favourites WHERE user_email = lower(?1)",
+        params![email],
+    )?;
     let changed = conn.execute("DELETE FROM users WHERE email = ?1", params![email])?;
     Ok(changed > 0)
+}
+
+// ── Favourites (#335) ──
+
+/// Most favourites one user may have.
+pub const MAX_FAVOURITES: usize = 500;
+
+/// One favourite: the entry it names, as (scope, folder path, entry name).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Favourite {
+    pub scope: String,
+    pub folder: String,
+    pub entry: String,
+}
+
+/// A user's favourites, oldest first. Emails are compared ignoring case.
+pub fn list_favourites(db: &Db, email: &str) -> rusqlite::Result<Vec<Favourite>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT scope, folder, entry FROM user_favourites WHERE user_email = lower(?1)
+         ORDER BY created_at, rowid",
+    )?;
+    let rows = stmt.query_map(params![email], |r| {
+        Ok(Favourite {
+            scope: r.get(0)?,
+            folder: r.get(1)?,
+            entry: r.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Add a favourite. Returns false if the user already has `MAX_FAVOURITES`.
+/// Adding one that exists is a no-op.
+pub fn add_favourite(db: &Db, email: &str, fav: &Favourite) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM user_favourites WHERE user_email = lower(?1)",
+        params![email],
+        |r| r.get(0),
+    )?;
+    if count as usize >= MAX_FAVOURITES {
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM user_favourites WHERE user_email = lower(?1) AND scope = ?2 AND folder = ?3 AND entry = ?4",
+                params![email, fav.scope, fav.folder, fav.entry],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        return Ok(exists);
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO user_favourites (user_email, scope, folder, entry)
+         VALUES (lower(?1), ?2, ?3, ?4)",
+        params![email, fav.scope, fav.folder, fav.entry],
+    )?;
+    Ok(true)
+}
+
+pub fn remove_favourite(db: &Db, email: &str, fav: &Favourite) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "DELETE FROM user_favourites WHERE user_email = lower(?1) AND scope = ?2 AND folder = ?3 AND entry = ?4",
+        params![email, fav.scope, fav.folder, fav.entry],
+    )?;
+    Ok(())
 }
 
 // ── Group-to-role mappings ──
@@ -1285,7 +1416,11 @@ pub fn cleanup_old_audit_log(db: &Db, retain_days: u32) -> rusqlite::Result<usiz
         "DELETE FROM cli_audit_log WHERE created_at < datetime('now', ?1)",
         params![&modifier],
     )?;
-    Ok(tok + ab + cli)
+    let admin = conn.execute(
+        "DELETE FROM admin_audit_log WHERE created_at < datetime('now', ?1)",
+        params![&modifier],
+    )?;
+    Ok(tok + ab + cli + admin)
 }
 
 // ── Connections (address book) audit log ──
@@ -1637,43 +1772,24 @@ pub fn cleanup_session_history(db: &Db, retain_days: u32) -> rusqlite::Result<us
     )
 }
 
-/// Resolve the best role for a user based on their OIDC groups and the group-to-role mappings.
-/// Returns `Some(role)` if at least one group matched a mapping (highest wins),
-/// or `None` if no mappings matched (caller should preserve the existing role).
+/// The role to record for a user at login from their OIDC groups and the
+/// group-to-role mappings. Returns `Some(role)` if at least one group matched
+/// a mapping, or `None` if none did (the caller chooses its fallback policy).
+///
+/// Permissions come from every matching mapping (`roles::user_access`); this
+/// is only the single role written to `users.role`, as before: the highest
+/// matching built-in, or failing that the first matching custom role by name
+/// (see `roles::login_role_for`).
 pub fn resolve_role_from_groups(db: &Db, groups: &[String]) -> rusqlite::Result<Option<String>> {
     if groups.is_empty() {
         return Ok(None);
     }
-
-    let mappings = list_group_mappings(db)?;
-    if mappings.is_empty() {
-        return Ok(None);
-    }
-
-    fn role_level(role: &str) -> u8 {
-        match role {
-            "admin" => 4,
-            "poweruser" => 3,
-            "operator" => 2,
-            "viewer" => 1,
-            _ => 0,
-        }
-    }
-
-    let mut best_level = 0u8;
-    let mut best_role: Option<String> = None;
-
-    for mapping in &mappings {
-        if groups.iter().any(|g| g == &mapping.oidc_group) {
-            let level = role_level(&mapping.role);
-            if level > best_level {
-                best_level = level;
-                best_role = Some(mapping.role.clone());
-            }
-        }
-    }
-
-    Ok(best_role)
+    let matched: Vec<String> = list_group_mappings(db)?
+        .into_iter()
+        .filter(|m| groups.iter().any(|g| g == &m.oidc_group))
+        .map(|m| m.role)
+        .collect();
+    Ok(crate::roles::login_role_for(&matched))
 }
 
 #[cfg(test)]
@@ -1757,6 +1873,49 @@ mod tests {
 
     fn test_db() -> Db {
         init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn favourites_belong_to_a_user_and_are_capped() {
+        let db = test_db();
+        let fav = |e: &str| Favourite {
+            scope: "shared".into(),
+            folder: "ops/linux".into(),
+            entry: e.into(),
+        };
+        assert!(add_favourite(&db, "Jon@Example.com", &fav("web01")).unwrap());
+        assert!(
+            add_favourite(&db, "jon@example.com", &fav("web01")).unwrap(),
+            "adding twice is fine"
+        );
+        assert!(add_favourite(&db, "jon@example.com", &fav("web02")).unwrap());
+        assert_eq!(
+            list_favourites(&db, "JON@example.com").unwrap(),
+            [fav("web01"), fav("web02")]
+        );
+        assert!(list_favourites(&db, "someone@example.com")
+            .unwrap()
+            .is_empty());
+
+        remove_favourite(&db, "jon@example.com", &fav("web01")).unwrap();
+        assert_eq!(
+            list_favourites(&db, "jon@example.com").unwrap(),
+            [fav("web02")]
+        );
+
+        for i in 0..MAX_FAVOURITES {
+            add_favourite(&db, "max@example.com", &fav(&format!("e{i}"))).unwrap();
+        }
+        assert!(!add_favourite(&db, "max@example.com", &fav("one-more")).unwrap());
+        assert!(
+            add_favourite(&db, "max@example.com", &fav("e0")).unwrap(),
+            "an existing one is still fine"
+        );
+
+        // Deleting the user deletes their favourites.
+        create_user(&db, "jon@example.com", "", "operator").unwrap();
+        delete_user(&db, "jon@example.com").unwrap();
+        assert!(list_favourites(&db, "jon@example.com").unwrap().is_empty());
     }
 
     #[test]

@@ -141,7 +141,7 @@ Each user gets `{home_base}/{username}` mounted as `/home/{username}` inside the
 
 ## Active Sessions
 
-The connections shows an **Active Sessions** section with thumbnail previews of running sessions. Thumbnails are captured every 10 seconds from the browser display. Click a thumbnail to reconnect.
+The **Active sessions** button on Connections opens a panel with thumbnail previews of running sessions. Thumbnails are captured every 10 seconds from the browser display. Click a thumbnail to reconnect.
 
 Dormant VDI containers (running but no active browser session) also appear with their last captured thumbnail.
 

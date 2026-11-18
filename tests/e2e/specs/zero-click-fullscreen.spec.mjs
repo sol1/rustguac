@@ -6,6 +6,14 @@
 import { test, expect } from '@playwright/test';
 import { installApi, settle } from '../lib/api.mjs';
 
+// HTTP fixtures do not provide a guacd WebSocket. Keep a simulated session
+// alive so these launcher tests don't race genuine disconnect cleanup.
+test.beforeEach(async ({ page }) => {
+    await page.routeWebSocket('**/ws/**', socket => {
+        socket.send('4.sync,1.0;');
+    });
+});
+
 test('Connect on a fullscreen entry launches the embedded frame with the measured size', async ({ page }) => {
     const api = await installApi(page);
     await page.goto('/connections.html');

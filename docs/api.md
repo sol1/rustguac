@@ -239,6 +239,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `security` | string | RDP | `tls`, `nla`, or `rdp` |
 | `server_layout` | string | RDP | Keyboard layout, a guacd keymap name such as `de-ch-qwertz` (see [keyboard layout](overview.md#keyboard-layout)). Default: guacd's, US English |
 | `ignore_cert` | boolean | RDP | Ignore TLS certificate errors |
+| `rdp_console` | boolean | RDP | Connect to the console (admin) session, like `mstsc /admin`. Also skips RD Connection Broker load balancing |
 | `auth_pkg` | string | RDP | NLA auth package: `kerberos`, `ntlm`, or empty (negotiate) |
 | `kdc_url` | string | RDP | Kerberos KDC or KDC Proxy URL |
 | `kerberos_cache` | string | RDP | Path to Kerberos credential cache (advanced) |
@@ -257,6 +258,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `dpi` | integer | All | Display DPI |
 | `banner` | string | All | Banner message shown before session starts |
 | `ssh_font_size` | integer | SSH | Terminal font size in points (default 12, 6 to 72) |
+| `ssh_color_scheme` | string | SSH | Terminal colours: `gray-black` (default), `white-black`, `green-black` or `black-white` (text on background) |
 | `wol_send_packet` | boolean | SSH, RDP, VNC | Send a Wake-on-LAN magic packet before connecting |
 | `wol_mac_addr` | string | SSH, RDP, VNC | MAC address to wake (required with `wol_send_packet`) |
 | `wol_broadcast_addr` | string | SSH, RDP, VNC | Broadcast address for the packet (guacd default `255.255.255.255`) |
@@ -681,6 +683,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `security` | string | RDP | Security mode |
 | `server_layout` | string | RDP | Keyboard layout, a guacd keymap name such as `de-ch-qwertz`. Empty uses the connecting user's own layout if they have set one, otherwise guacd's default (US English) |
 | `ignore_cert` | boolean | RDP | Ignore certificate errors |
+| `rdp_console` | boolean | RDP | Connect to the console (admin) session, like `mstsc /admin`. Also skips RD Connection Broker load balancing |
 | `auth_pkg` | string | RDP | NLA auth package |
 | `kdc_url` | string | RDP | Kerberos KDC URL |
 | `color_depth` | integer | RDP | Color depth |
@@ -870,6 +873,16 @@ Create a personal API token. Requires **poweruser** role or higher. Only availab
 
 The `token` field is the plaintext token — it is only returned once at creation and cannot be retrieved again.
 
+### Favourites
+
+The caller's favourite entries (#335), for a signed-in user who holds `connections.connect`. Admin API keys have none. Each favourite is `{"scope": "shared", "folder": "ops/linux", "entry": "web01"}`.
+
+| Endpoint | |
+|---|---|
+| `GET /api/me/favourites` | The caller's favourites, oldest first, as they starred them. Entries since moved, renamed or no longer shared are still listed; the Connections page shows only those it finds among the entries the caller can open. |
+| `PUT /api/me/favourites` | Add one (body as above). Adding one that exists is fine; at most 500, after which `409`. |
+| `DELETE /api/me/favourites` | Remove one (body as above). |
+
 ### `GET /api/me/tokens`
 
 List your own tokens. Available to any OIDC user (operator+). Returns token metadata only (never the plaintext token).
@@ -931,19 +944,36 @@ No authentication required. Returns whether OIDC is enabled and the site title.
 
 ### `GET /api/me`
 
-Returns current user info. Requires authentication.
+Returns current user info. Requires authentication. `permissions` lists what the caller may do (see [Roles and permissions](roles-and-access-control.md#roles-and-permissions)); an admin API key holds every permission, or its role's if it was created with `--role`.
 
 ```json
 {
   "name": "User Name",
   "email": "user@example.com",
   "role": "operator",
+  "roles": ["operator"],
+  "permissions": ["connections.connect", "credentials.self", "docs.view"],
   "groups": ["engineering"],
   "auth_type": "oidc",
   "vault_enabled": true,
   "vault_configured": true
 }
 ```
+
+### Roles and permissions
+
+All need an admin API key or a user holding the permission named. Changes are recorded in the admin audit log. See [Roles and permissions](roles-and-access-control.md#roles-and-permissions) for the rules (nobody grants what they don't hold, the last way to manage roles is kept, and so on).
+
+| Endpoint | Needs | |
+|---|---|---|
+| `GET /api/admin/permissions` | `admin.roles` or `admin.users` | Every permission: `name`, `description`, `sensitive` |
+| `GET /api/admin/roles` | `admin.roles` or `admin.users` | Built-in and custom roles with their permissions |
+| `POST /api/admin/roles` | `admin.roles` | Create a custom role: `{"name", "display_name", "description", "permissions": [...]}` |
+| `PUT /api/admin/roles/{name}` | `admin.roles` | Change a custom role's display name, description and permissions |
+| `DELETE /api/admin/roles/{name}?reassign_to=ROLE` | `admin.roles` | Delete a custom role. If it's in use, `reassign_to` is required; without it the answer is `409` with `usage` listing the users, mappings and token caps |
+| `GET /api/users/{email}/access` | `admin.users` | A user's own role, the group mappings that apply, the roles in effect, and each permission with the roles granting it |
+| `GET /api/admin/admin-audit?limit=N` | `admin.audit` | Role, user and mapping changes, newest first |
+| `GET /api/me/token-roles` | logged in | Roles the caller can cap their own tokens at |
 
 ### `GET /auth/login`
 

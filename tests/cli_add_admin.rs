@@ -96,3 +96,26 @@ fn without_if_none_duplicate_still_fails() {
     dir.run(&["add-admin", "--name", "docker-admin"]).success();
     dir.run(&["add-admin", "--name", "docker-admin"]).failure();
 }
+
+#[test]
+fn role_scopes_the_key_and_an_unknown_role_is_refused() {
+    let dir = ScratchDir::new("add-admin-role");
+
+    dir.run(&["add-admin", "--name", "reports", "--role", "viewer"])
+        .success();
+    let role: Option<String> = Connection::open(dir.0.join("elsewhere/custom.db"))
+        .expect("open database")
+        .query_row("SELECT role FROM admins WHERE name = 'reports'", [], |r| {
+            r.get(0)
+        })
+        .expect("read role");
+    assert_eq!(role.as_deref(), Some("viewer"));
+
+    dir.run(&["add-admin", "--name", "typo", "--role", "no-such-role"])
+        .failure();
+    assert_eq!(dir.admin_count(), 1);
+
+    let listed = dir.run(&["list-admins"]).success();
+    let out = String::from_utf8_lossy(&listed.get_output().stdout).to_string();
+    assert!(out.contains("viewer"), "list-admins shows the role: {out}");
+}

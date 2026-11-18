@@ -1121,6 +1121,14 @@ Guacamole.Keyboard = function Keyboard(element) {
             guac_keyboard.release(0xFFE4); // Right ctrl 
             guac_keyboard.release(0xFFE9); // Left alt
             guac_keyboard.release(0xFFEA); // Right alt
+            // rustguac (#358): and AltGr. Chromium on Windows reports AltGr
+            // as left Ctrl plus a right Alt named "AltGraph" (ISO Level 3
+            // Shift). Leaving that held while Ctrl is released sent a Windows
+            // server right Alt without its Ctrl, which is not AltGr there, so
+            // AltGr characters came out wrong. With everything released,
+            // guacd presses AltGr itself when the server's layout needs it,
+            // as it already did for Ctrl + left Alt.
+            guac_keyboard.release(0xFE03); // AltGr
         }
 
     };
