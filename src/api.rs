@@ -296,9 +296,9 @@ pub async fn log_print_job(
     let Some(info) = manager.get_session(id).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let is_admin = identity
+    let can_view_all = identity
         .as_ref()
-        .is_some_and(|Extension(identity)| identity.role() == "admin");
+        .is_some_and(|Extension(identity)| identity.has_perm(Perm::SessionsViewAll));
     let is_owner = identity
         .as_ref()
         .is_some_and(|Extension(identity)| info.created_by == identity.display_name());
@@ -306,7 +306,7 @@ pub async fn log_print_job(
         Some(token) => manager.validate_share_token(id, token).await.is_valid(),
         None => false,
     };
-    if !is_admin && !is_owner && !is_shared_viewer {
+    if !can_view_all && !is_owner && !is_shared_viewer {
         return StatusCode::NOT_FOUND.into_response();
     }
     if body.filename.is_empty()

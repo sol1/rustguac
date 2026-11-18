@@ -2868,6 +2868,26 @@ mod tests {
         let user =
             db::create_user(&database, "printer@example.com", "Printer", "operator").unwrap();
         let cookie = db::create_auth_session(&database, user.id, 3600).unwrap();
+        // Another operator may not log a print job on someone else's session,
+        // but a custom role that can see every session may.
+        let other = db::create_user(&database, "other@example.com", "Other", "operator").unwrap();
+        let other_cookie = db::create_auth_session(&database, other.id, 3600).unwrap();
+        roles::create_custom_role(
+            &database,
+            "session-watcher",
+            "",
+            "",
+            perms::PermSet::of(&[perms::Perm::SessionsViewAll]),
+        )
+        .unwrap();
+        let watcher = db::create_user(
+            &database,
+            "watcher@example.com",
+            "Watcher",
+            "session-watcher",
+        )
+        .unwrap();
+        let watcher_cookie = db::create_auth_session(&database, watcher.id, 3600).unwrap();
 
         let mut config = Config::default();
         let recording_path =
@@ -2889,18 +2909,25 @@ mod tests {
             .unwrap();
 
         let app = unauthenticated_stateful_routes(manager, database);
-        let mut request = axum::http::Request::builder()
-            .method("POST")
-            .uri(format!("/api/sessions/{}/print-job", session.session_id))
-            .header("cookie", format!("rustguac_session={cookie}"))
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from(r#"{"filename":"report.pdf"}"#))
-            .unwrap();
-        request.extensions_mut().insert(axum::extract::ConnectInfo(
-            "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
-        ));
+        let post = |cookie: &str| {
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/api/sessions/{}/print-job", session.session_id))
+                .header("cookie", format!("rustguac_session={cookie}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(r#"{"filename":"report.pdf"}"#))
+                .unwrap();
+            request.extensions_mut().insert(axum::extract::ConnectInfo(
+                "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
+            ));
+            request
+        };
 
-        let response = app.oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(post(&cookie)).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NO_CONTENT);
+        let response = app.clone().oneshot(post(&other_cookie)).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+        let response = app.oneshot(post(&watcher_cookie)).await.unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::NO_CONTENT);
         let _ = std::fs::remove_dir_all(recording_path);
     }
