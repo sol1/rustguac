@@ -32,7 +32,7 @@ Depends: ${shlibs:Depends}, ${misc:Depends},
  chromium,
  x11-utils,
  cryptsetup-bin
-Recommends: haproxy
+Recommends: ghostscript, haproxy
 Description: Lightweight Rust replacement for Apache Guacamole webapp
  rustguac proxies the Guacamole protocol over WebSockets between web
  browsers and guacd. Supports SSH, VNC, RDP, SPICE, and web browser
