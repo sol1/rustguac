@@ -114,7 +114,7 @@ The response includes the public key in the `banner_text` field. The SSH connect
 }
 ```
 
-`gateway_port` defaults to 443. When a gateway is configured, the RDP target is resolved from the gateway side, so rustguac does not resolve or check the inner target against its local RDP allowlist. For non-admin ad-hoc sessions, the gateway itself must resolve inside `rdp_allowed_networks`.
+`gateway_port` defaults to 443. When a gateway is configured, the RDP target is resolved from the gateway side, so rustguac does not resolve or check the inner target against its local RDP allowlist. The gateway itself must resolve inside `rdp_allowed_networks` for every session. Fenced ad-hoc sessions pin the gateway connection to the IP address that passed the check; FreeRDP then checks the gateway certificate against that IP, so certificate name validation may fail unless `ignore_cert` is enabled. Saved entries and admin sessions retain the gateway hostname for certificate validation. RD Gateway cannot currently be combined with SSH jump hosts.
 
 **RDP session with Kerberos NLA:**
 

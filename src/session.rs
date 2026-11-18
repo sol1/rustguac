@@ -691,10 +691,19 @@ async fn check_rdp_session_network(
     fence_all_targets: bool,
 ) -> Result<Option<String>, SessionError> {
     if let Some(gateway_host) = gateway_host {
+        if !jump_hops.is_empty() {
+            return Err(SessionError::ValidationError(
+                "RD Gateway cannot be combined with SSH jump hosts".into(),
+            ));
+        }
+
+        let ip = allowed_address(gateway_host, gateway_port.unwrap_or(443), allowed)
+            .await
+            .map_err(|e| SessionError::ValidationError(format!("RD Gateway: {e}")))?;
+        // Preserve the hostname for trusted entries/admins so FreeRDP can
+        // verify the gateway certificate against its DNS name. Fenced
+        // ad-hoc callers must dial the exact address that passed the check.
         let gateway = if fence_all_targets {
-            let ip = allowed_address(gateway_host, gateway_port.unwrap_or(443), allowed)
-                .await
-                .map_err(|e| SessionError::ValidationError(format!("RD Gateway: {e}")))?;
             ip.to_string()
         } else {
             gateway_host.to_string()
@@ -4108,12 +4117,62 @@ mod tests {
             Some(443),
             &cidrs,
             &[],
-            true,
+            false,
         )
         .await
         .unwrap_err();
         assert!(err.to_string().contains("RD Gateway"));
         assert!(err.to_string().contains("allowed network list"));
+    }
+
+    #[tokio::test]
+    async fn rdp_gateway_preserves_hostname_for_unfenced_sessions() {
+        let cidrs = vec!["127.0.0.0/8".into(), "::1/128".into()];
+        let gateway = check_rdp_session_network(
+            "target-resolved-only-by-gateway.invalid",
+            3389,
+            Some("localhost"),
+            None,
+            &cidrs,
+            &[],
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(gateway.as_deref(), Some("localhost"));
+
+        let pinned_gateway = check_rdp_session_network(
+            "target-resolved-only-by-gateway.invalid",
+            3389,
+            Some("localhost"),
+            None,
+            &cidrs,
+            &[],
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(pinned_gateway.parse::<std::net::IpAddr>().is_ok());
+    }
+
+    #[tokio::test]
+    async fn rdp_gateway_rejects_ssh_jump_hosts() {
+        let cidrs = vec!["127.0.0.0/8".into()];
+        let err = check_rdp_session_network(
+            "target-resolved-only-by-gateway.invalid",
+            3389,
+            Some("127.0.0.1"),
+            None,
+            &cidrs,
+            &[hop("127.0.0.1", 22)],
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cannot be combined with SSH jump hosts"));
     }
 
     /// Hop 0 is fenced only for untrusted callers, where the chain is built
