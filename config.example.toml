@@ -160,6 +160,11 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # # Admin page). The email must match what the identity provider sends.
 # auto_create_users = true
 #
+# # Redirect unauthenticated visitors to the OIDC provider without requiring
+# # them to click the SSO button (default: false).
+# # To bypass this redirect and use an API key, open /login.
+# auto_login = false
+#
 # # Accept logins the provider marks as having an unverified email
 # # (email_verified: false). Default: false, they are refused. authentik's
 # # default email mapping sends false for everyone; fixing the mapping is

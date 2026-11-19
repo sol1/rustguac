@@ -47,13 +47,20 @@ extra_scopes = ["groups"]
 
 ### Login flow
 
-1. User clicks "Login" on the web UI
+1. User clicks "Sign in with SSO" on the web UI, or is redirected automatically
+   when `[oidc] auto_login = true`
 2. Redirected to OIDC provider with PKCE challenge
 3. After authentication, provider redirects to `/auth/callback`
 4. rustguac validates the token (PKCE + nonce), extracts user info and groups
 5. User is created or updated in the database
 6. Group-to-role mappings are evaluated (highest matching role wins)
 7. A session cookie is set and the user is redirected to the application
+
+Set `auto_login = true` under `[oidc]` to start this flow as soon as an
+unauthenticated visitor opens the login page. The redirect waits until the
+provider is available, preserves the manual SSO button as a fallback, and
+does not retry automatically after a callback error. To bypass automatic SSO
+and use an API key, open `/login`.
 
 ### Logout
 
