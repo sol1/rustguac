@@ -98,7 +98,7 @@ test('logging out leaves no button on the login page', async ({ page }) => {
     await expect(page.locator('#rg-adhoc')).toBeVisible();
     signedIn = false;
     await page.locator('#logout-item').click();
-    await page.waitForURL(/\/(index\.html)?$/);
+    await page.waitForURL(/\/login$/);
     await settle(page);
     await expect(page.locator('#rg-adhoc')).toHaveCount(0);
 });
