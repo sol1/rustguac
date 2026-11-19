@@ -233,7 +233,7 @@
         document.getElementById('logout-item').addEventListener('click', function() {
             sessionStorage.removeItem('rustguac_api_key');
             fetch('/auth/logout', { credentials: 'same-origin' })
-            .finally(function() { window.location.href = '/'; });
+            .finally(function() { window.location.href = '/login'; });
         });
     </script>
     <script src="/search.js"></script>

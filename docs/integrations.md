@@ -64,7 +64,7 @@ and use an API key, open `/login`.
 
 ### Logout
 
-`GET /auth/logout` clears the session cookie and deletes the auth session from the database.
+`GET /auth/logout` clears the session cookie, deletes the auth session from the database, and redirects to `/login`. This page does not start automatic OIDC login, so users can choose API-key authentication after logging out.
 
 ### Authentik setup guide
 

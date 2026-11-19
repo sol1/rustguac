@@ -737,7 +737,7 @@ pub fn has_role_admin_mapping(database: &Db) -> rusqlite::Result<bool> {
     Ok(false)
 }
 
-/// GET /auth/logout — clear session cookie and redirect to login.
+/// GET /auth/logout — clear session cookie and show the manual login page.
 pub async fn logout(
     Extension(database): Extension<Db>,
     request: axum::extract::Request,
@@ -754,7 +754,7 @@ pub async fn logout(
 
     (
         [(header::SET_COOKIE, clear_cookie)],
-        Redirect::temporary("/"),
+        Redirect::temporary("/login"),
     )
         .into_response()
 }
