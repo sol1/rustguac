@@ -6,7 +6,7 @@
 import { test, expect } from '@playwright/test';
 import { installApi, settle, entry, folder } from '../lib/api.mjs';
 
-/* As the server lists an entry to an admin: the primary's fields on top,
+/* As the server lists an entry to a connection editor: the primary's fields on top,
  * every protocol under `protocols`, each level's own fields under
  * `settings` (secrets only as has_* flags). */
 function multi() {
@@ -19,7 +19,7 @@ function multi() {
         settings: { hostname: '10.0.0.10', display_name: 'srv01 (DC1)', username: 'Administrator', has_password: true },
         protocols: [
             { ...rdp, protocol: 'rdp', settings: { port: 3389 } },
-            { ...ssh, protocol: 'ssh', settings: { port: 2222, username: 'admin' } }
+            { ...ssh, protocol: 'ssh', settings: { port: 2222, username: 'admin' }, allowed_groups: ['netops'] }
         ]
     };
 }
@@ -236,7 +236,7 @@ test('editing an old single-protocol entry saves it as one protocol, host fields
     expect(JSON.stringify(body)).not.toContain('has_password');
 });
 
-test('adding a protocol and making it primary', async ({ page }) => {
+test('adding a protocol, with its own access rule, and making it primary', async ({ page }) => {
     const api = await installApi(page, { folders: folders() });
     await openAcme(page);
     await page.locator('button[data-edit-entry="web01"]').click();
@@ -244,13 +244,66 @@ test('adding a protocol and making it primary', async ({ page }) => {
     await expect(page.locator('#em-type')).toHaveValue('rdp');
     await expect(page.locator('#em-type')).toBeEnabled();
     await page.locator('#em-rdp-port').fill('3390');
+    await page.locator('#em-proto-own-rule').check();
+    await page.locator('#em-proto-groups').fill('windows-admins, ops');
     await page.locator('#em-proto-primary').click();
     await expect(page.locator('#em-proto-tabs .em-proto-tab')).toHaveText(['★ rdp', 'ssh', '+ Add protocol']);
     await page.locator('#em-save').click();
     await expect.poll(() => api.calls.find(c => c.method === 'PUT' && /entries\/web01$/.test(c.path))).toBeTruthy();
     const body = api.calls.find(c => c.method === 'PUT' && /entries\/web01$/.test(c.path)).body;
     expect(body.protocols.map(p => p.type)).toEqual(['rdp', 'ssh']);
-    expect(body.protocols[0]).toMatchObject({ type: 'rdp', port: 3390 });
+    expect(body.protocols[0]).toMatchObject({ port: 3390, allowed_groups: ['windows-admins', 'ops'], allowed_users: [] });
+    // No rule of its own: null, so it follows the host. The host's rule is
+    // sent in full, empty here, which the server stores as no rule.
+    expect(body.protocols[1].allowed_groups).toBeNull();
+    expect(body.protocols[1].allowed_users).toBeNull();
+    expect(body.allowed_groups).toEqual([]);
+    expect(body.allowed_users).toEqual([]);
+});
+
+test('clearing access rules sends [] for the host and null for a protocol', async ({ page }) => {
+    const folders1 = [folder('acme', { entries: [{ ...multi(), allowed_groups: ['ops'], allowed_users: ['alice@example.com'] }] })];
+    const api = await installApi(page, { folders: folders1 });
+    await openAcme(page);
+    await page.locator('button[data-edit-entry="srv01"]').click();
+    await expect(page.locator('#em-host-groups')).toHaveValue('ops');
+    await expect(page.locator('#em-host-users')).toHaveValue('alice@example.com');
+    await page.locator('#em-host-groups').fill('');
+    await page.locator('#em-host-users').fill('');
+    await page.locator('#em-proto-tabs [data-proto-tab="1"]').click();
+    await expect(page.locator('#em-proto-own-rule')).toBeChecked();
+    await page.locator('#em-proto-own-rule').uncheck();
+    await page.locator('#em-save').click();
+    await expect.poll(() => api.calls.find(c => c.method === 'PUT' && /entries\/srv01$/.test(c.path))).toBeTruthy();
+    const body = api.calls.find(c => c.method === 'PUT' && /entries\/srv01$/.test(c.path)).body;
+    expect(body.allowed_groups).toEqual([]);
+    expect(body.allowed_users).toEqual([]);
+    expect(body.protocols[1]).toMatchObject({ type: 'ssh', allowed_groups: null, allowed_users: null });
+});
+
+test('without folders.manage_access the rules are shown but not edited, and left out of the save', async ({ page }) => {
+    const EDITOR = ['connections.connect', 'connections.edit', 'credentials.self', 'docs.view'];
+    const folders1 = [folder('acme', { entries: [{ ...multi(), allowed_groups: ['ops'] }] })];
+    const api = await installApi(page, { role: 'operator', folders: folders1, routes: {
+        'GET /api/me': { name: 'jon@example.com', role: 'connection-editor', roles: ['connection-editor'],
+            permissions: EDITOR, groups: [], vault_enabled: true, vault_configured: true }
+    } });
+    await openAcme(page);
+    await page.locator('button[data-edit-entry="srv01"]').click();
+    await expect(page.locator('#em-host-groups')).toHaveValue('ops');
+    await expect(page.locator('#em-host-groups')).toBeDisabled();
+    await expect(page.locator('#em-host-users')).toBeDisabled();
+    await expect(page.locator('#em-rules-note')).toBeVisible();
+    await page.locator('#em-proto-tabs [data-proto-tab="1"]').click();
+    await expect(page.locator('#em-proto-own-rule')).toBeChecked();
+    await expect(page.locator('#em-proto-own-rule')).toBeDisabled();
+    await expect(page.locator('#em-proto-groups')).toBeDisabled();
+    await page.locator('#em-port').fill('2223');
+    await page.locator('#em-save').click();
+    await expect.poll(() => api.calls.find(c => c.method === 'PUT' && /entries\/srv01$/.test(c.path))).toBeTruthy();
+    const body = api.calls.find(c => c.method === 'PUT' && /entries\/srv01$/.test(c.path)).body;
+    expect(body.protocols[1].port).toBe(2223);
+    expect(JSON.stringify(body)).not.toMatch(/allowed_(groups|users)/);
 });
 
 test('the multi-protocol editor loads each protocol with the host as its defaults', async ({ page }) => {
@@ -265,6 +318,8 @@ test('the multi-protocol editor loads each protocol with the host as its default
     await expect(page.locator('#em-type')).toHaveValue('ssh');
     await expect(page.locator('#em-username')).toHaveValue('admin');
     await expect(page.locator('#em-port')).toHaveValue('2222');
+    await expect(page.locator('#em-proto-own-rule')).toBeChecked();
+    await expect(page.locator('#em-proto-groups')).toHaveValue('netops');
 });
 
 test('the Type filter matches any of an entry\'s protocols', async ({ page }) => {

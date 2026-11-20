@@ -955,6 +955,14 @@
                     <div class="pw-wrap"><input type="password" id="em-host-password" autocomplete="new-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
                 </label>
                 <div class="field-hint">Used by every protocol that leaves its own field blank. Credentials set on a protocol win over these, and folder defaults apply only when neither has any.</div>
+                <label>Allowed groups <span style="color:var(--text-muted);font-size:0.85em">(optional, comma-separated)</span>
+                    <input type="text" id="em-host-groups" placeholder="Blank: everyone who can open the folder">
+                </label>
+                <label>Allowed users <span style="color:var(--text-muted);font-size:0.85em">(optional, login emails, comma-separated)</span>
+                    <input type="text" id="em-host-users">
+                </label>
+                <div class="field-hint">Narrows who can see and use this entry inside the folder. A protocol can set its own rule instead. Connection editors always can.</div>
+                <div id="em-rules-note" class="field-hint" style="display:none">Who can use an entry is set by an administrator (it needs the <code>folders.manage_access</code> permission). Saving keeps the rules as they are.</div>
             </div>
             <div id="em-proto-tabs" class="em-proto-tabs"></div>
             <div class="em-proto-head">
@@ -966,6 +974,18 @@
                     <label><input type="checkbox" id="em-proto-clear-hostname">hostname</label>
                     <label><input type="checkbox" id="em-proto-clear-username">username</label>
                     <label><input type="checkbox" id="em-proto-clear-password">password</label>
+                </div>
+                <label style="margin-top:0.6em;text-transform:none;letter-spacing:0;cursor:pointer">
+                    <input type="checkbox" id="em-proto-own-rule" style="display:inline;width:auto;margin-right:0.4em"> Own access rule for this protocol
+                </label>
+                <div id="em-proto-rule" style="display:none">
+                    <label>Allowed groups <span style="color:var(--text-muted);font-size:0.85em">(comma-separated)</span>
+                        <input type="text" id="em-proto-groups">
+                    </label>
+                    <label>Allowed users <span style="color:var(--text-muted);font-size:0.85em">(comma-separated)</span>
+                        <input type="text" id="em-proto-users">
+                    </label>
+                    <div class="field-hint">Replaces the host's rule for this protocol. Leave both blank to open it to everyone who can open the folder.</div>
                 </div>
                 <div class="em-proto-actions">
                     <button type="button" id="em-proto-primary">Make primary</button>
@@ -3251,7 +3271,7 @@
         // yet. Empty until the cred status has loaded (setCredVars !== null).
         function entryUnsetVars(e) {
             if (!setCredVars || !e) return [];
-            // Across every protocol (#296).
+            // Across every protocol the user may use (#296).
             var vars = [];
             ((e.protocols && e.protocols.length) ? e.protocols : [e]).forEach(function(p) {
                 (p.credential_variables || []).forEach(function(v) { if (vars.indexOf(v) < 0) vars.push(v); });
@@ -3335,7 +3355,7 @@
         // sessionStorage for this tab; the Folder facet only applies while
         // searching.
         // Folder-view filter (Type), shown in the folder header.
-        // An entry's protocols, primary first; an entry
+        // An entry's protocols the caller may use, primary first; an entry
         // from an older server is its own single protocol.
         function entryProtocols(e) { return (e && e.protocols && e.protocols.length) ? e.protocols : [e]; }
         function entryProtocol(e, name) {
@@ -3540,7 +3560,7 @@
                 html += '<td class="connect-cell">';
                 if (protos.length > 1) {
                     // Split button: Connect opens the primary, the toggle a
-                    // menu of every protocol.
+                    // menu of every protocol the user may use.
                     var menuId = 'proto-menu-' + idx;
                     html += '<span class="split-btn">' + connectBtn
                         + '<button class="btn-connect split-toggle" data-proto-toggle="1" aria-haspopup="menu" aria-expanded="false" aria-controls="' + menuId + '" aria-label="Choose a protocol" title="Choose a protocol">&#9662;</button>'
@@ -4971,9 +4991,9 @@
         // ── Multi-protocol entries (#296) ──
         //
         // The editor holds the host's fields and a list of protocols. The
-        // Host box edits the host's hostname, username and password; the form
-        // below it edits the selected protocol, which inherits any field it
-        // leaves blank from the host. Every other field the host
+        // Host box edits the host's hostname, username, password and access
+        // rule; the form below it edits the selected protocol, which inherits
+        // any field it leaves blank from the host. Every other field the host
         // holds (banner, Wake-on-LAN, prompting, ...) is shown in a protocol's
         // form and stays on the host unless that protocol changes it. The
         // first protocol is the primary, the one Connect uses.
@@ -4998,6 +5018,9 @@
         };
 
         function protoName(it) { return it.name || it.type; }
+        function splitList(v) {
+            return (v || '').split(',').map(function(x) { return x.trim(); }).filter(function(x) { return x; });
+        }
         // Drop the editor-only flags the server adds in place of secrets.
         function stripFlags(obj) {
             var out = {};
@@ -5027,8 +5050,8 @@
         }
 
         function protoEdNew(type) {
-            return { host: {}, hostHasPassword: false, active: 0,
-                items: [{ type: type, name: '', settings: {}, isNew: true }] };
+            return { host: {}, hostHasPassword: false, groups: [], users: [], active: 0,
+                items: [{ type: type, name: '', settings: {}, rule: null, isNew: true }] };
         }
         // From an entry as the list endpoints give it to an admin.
         function protoEdFromInfo(info) {
@@ -5037,6 +5060,8 @@
             return {
                 host: stripFlags(hostSettings),
                 hostHasPassword: !!hostSettings.has_password,
+                groups: info.allowed_groups || [],
+                users: info.allowed_users || [],
                 active: 0,
                 items: ps.map(function(p) {
                     var nm = p.protocol && p.protocol !== p.session_type ? p.protocol : '';
@@ -5045,6 +5070,7 @@
                         // Without settings (an older server) the protocol's
                         // own fields are the entry's.
                         settings: p.settings || (info.settings ? {} : p),
+                        rule: (p.allowed_groups || p.allowed_users) ? { groups: p.allowed_groups || [], users: p.allowed_users || [] } : null,
                         isNew: false
                     };
                 })
@@ -5058,6 +5084,16 @@
             var hpw = document.getElementById('em-host-password');
             hpw.value = '';
             hpw.placeholder = ed.hostHasPassword ? '(stored, leave blank to keep)' : '';
+            document.getElementById('em-host-groups').value = (ed.groups || []).join(', ');
+            document.getElementById('em-host-users').value = (ed.users || []).join(', ');
+            // Changing who can use an entry needs folders.manage_access, as
+            // for a folder: without it the rules are shown, not editable, and
+            // left out of the saved body so the server keeps them.
+            var mayRule = can('folders.manage_access');
+            ['em-host-groups', 'em-host-users', 'em-proto-own-rule', 'em-proto-groups', 'em-proto-users'].forEach(function(id) {
+                document.getElementById(id).disabled = !mayRule;
+            });
+            document.getElementById('em-rules-note').style.display = mayRule ? 'none' : '';
             protoLoad(0);
         }
 
@@ -5121,6 +5157,11 @@
             ['hostname', 'username', 'password'].forEach(function(k) {
                 document.getElementById('em-proto-clear-' + k).checked = (it.settings || {})[k] === '';
             });
+            var own = !!it.rule;
+            document.getElementById('em-proto-own-rule').checked = own;
+            document.getElementById('em-proto-rule').style.display = own ? '' : 'none';
+            document.getElementById('em-proto-groups').value = own ? (it.rule.groups || []).join(', ') : '';
+            document.getElementById('em-proto-users').value = own ? (it.rule.users || []).join(', ') : '';
             renderProtoTabs();
         }
 
@@ -5156,6 +5197,12 @@
             });
             it.settings = flat;
             if (it.isNew) it.name = document.getElementById('em-proto-name').value.trim();
+            if (document.getElementById('em-proto-own-rule').checked) {
+                it.rule = { groups: splitList(document.getElementById('em-proto-groups').value),
+                            users: splitList(document.getElementById('em-proto-users').value) };
+            } else {
+                it.rule = null;
+            }
         }
 
         // The body to save: the host's fields, then the protocols in order.
@@ -5170,6 +5217,14 @@
             var hp = document.getElementById('em-host-password').value;
             if (hp) body.password = hp; else delete body.password;
             delete body.port; // set per protocol
+            // Access rules: sent in full, so a cleared list goes as [] and
+            // clears the stored one (a list left out keeps it). Without
+            // folders.manage_access they are left out altogether.
+            var mayRule = can('folders.manage_access');
+            if (mayRule) {
+                body.allowed_groups = splitList(document.getElementById('em-host-groups').value);
+                body.allowed_users = splitList(document.getElementById('em-host-users').value);
+            }
             var seen = {};
             for (var i = 0; i < protoEd.items.length; i++) {
                 var it = protoEd.items[i];
@@ -5183,6 +5238,12 @@
                 delete p.display_name; delete p.external_id;
                 p.type = it.type;
                 if (it.name) p.name = it.name;
+                // A protocol without a rule of its own sends null, so one it
+                // had is dropped and it follows the host again.
+                if (mayRule) {
+                    p.allowed_groups = it.rule ? it.rule.groups : null;
+                    p.allowed_users = it.rule ? it.rule.users : null;
+                }
                 return p;
             });
             // One protocol: a hostname typed into its form is the host's, so
@@ -5204,7 +5265,7 @@
                 protoStore();
                 var used = protoEd.items.map(function(x) { return x.type; });
                 var next = ['ssh', 'rdp', 'web', 'vnc', 'spice', 'proxmox', 'vdi'].filter(function(x) { return used.indexOf(x) < 0; })[0] || 'ssh';
-                protoEd.items.push({ type: next, name: '', settings: {}, isNew: true });
+                protoEd.items.push({ type: next, name: '', settings: {}, rule: null, isNew: true });
                 protoLoad(protoEd.items.length - 1);
                 return;
             }
@@ -5224,6 +5285,9 @@
             if (!protoEd || protoEd.items.length < 2) return;
             protoEd.items.splice(protoEd.active, 1);
             protoLoad(0);
+        });
+        document.getElementById('em-proto-own-rule').addEventListener('change', function() {
+            document.getElementById('em-proto-rule').style.display = this.checked ? '' : 'none';
         });
         document.getElementById('em-proto-name').addEventListener('input', function() {
             if (!protoEd) return;

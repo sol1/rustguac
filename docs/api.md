@@ -568,13 +568,14 @@ List visible folders. Filtered by OIDC group membership (admins see all).
 
 List entries in a folder. Scope is `shared` or `instance`. Requires folder group access.
 
-Each entry lists its protocols ([multi-protocol entries](#multi-protocol-entries)); `GET /api/addressbook` and `GET /api/addressbook/search-index` do the same. The top-level fields (`session_type`, `hostname`, `port`, `username`, `has_credentials`, ...) describe the primary, so clients that know nothing of protocols see what they always did. In addition:
+Each entry lists only the protocols the caller may use (see [Entry and protocol access](roles-and-access-control.md#entry-and-protocol-access)), and an entry with none is left out; `GET /api/addressbook` and `GET /api/addressbook/search-index` do the same. The top-level fields (`session_type`, `hostname`, `port`, `username`, `has_credentials`, ...) describe the first of them, which is the primary unless it is closed to the caller, so clients that know nothing of protocols see what they always did. In addition:
 
 | Field | Description |
 |-------|-------------|
 | `protocol` | Name of the protocol the top-level fields describe |
-| `protocols` | Every protocol, in order, each with the same fields as the entry (its effective values: host fields with the protocol's on top) and its `protocol` name |
-| `settings` | Admins only: the fields set at that level as stored, for the editor (the host's own at the top level, the protocol's overrides in `protocols`). Secrets appear only as `has_password`, `has_private_key`, ... flags |
+| `protocols` | Every protocol the caller may use, in order, each with the same fields as the entry (its effective values: host fields with the protocol's on top) and its `protocol` name |
+| `allowed_groups`, `allowed_users` | Only with `connections.edit`: the access rule on the host (top level) or on the protocol (in `protocols`) |
+| `settings` | Only with `connections.edit`: the fields set at that level as stored, for the editor (the host's own at the top level, the protocol's overrides in `protocols`). Secrets appear only as `has_password`, `has_private_key`, ... flags |
 
 ### `POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect`
 
@@ -598,7 +599,7 @@ Optional body to override or supply credentials at connect time:
 
 `keyboard_layout` is the connecting user's own keyboard (**Settings > My keyboard layout** in the UI). It applies to RDP entries with no `server_layout` of their own, and to VDI desktops. A name guacd doesn't know is ignored.
 
-`protocol` picks one of the entry's protocols by name (or by type, when no protocol has that name); without it the primary is used. A protocol the entry does not have answers `404`. The session records the protocol's name as `address_book_protocol`, and so does its recording (`protocol`).
+`protocol` picks one of the entry's protocols by name (or by type, when no protocol has that name); without it the primary is used, or the first protocol the caller may use. A protocol the caller may not use answers `404` like a missing one. The session records the protocol's name as `address_book_protocol`, and so does its recording (`protocol`).
 
 Prompted credentials are used for the current session only and are never stored. Jump host credentials always come from the Vault entry and cannot be overridden at connect time.
 
@@ -729,6 +730,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `external_id` | string | All | Stable id of the record the entry is synced from (the [NetBox webhook](netbox.md#create-webhook-device-createdupdated) sends `netbox:device:<id>`). What `PUT ...?move=true` matches on; never used to connect. Preserved on update when omitted. |
 
 | `protocols` | array | All | The ways to connect to the host, primary first, in place of `type` (see [Multi-protocol entries](#multi-protocol-entries)) |
+| `allowed_groups`, `allowed_users` | array | All | Narrow who can see and use the entry within the folder (see [Entry and protocol access](roles-and-access-control.md#entry-and-protocol-access)). Setting them needs `folders.manage_access`; without it a body with a rule is refused with `403` |
 
 For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed under [`POST /api/sessions`](#post-apisessions) apply here too. The `proxmox_token_secret` is write-only: it is never returned by the read endpoints (a `has_proxmox_token_secret` boolean indicates whether one is stored), and it is preserved on update when omitted. See [SPICE and Proxmox VE Sessions](spice-and-proxmox.md) for the editor fields and how the token is stored.
 
@@ -744,23 +746,23 @@ An entry can list several protocols for one host instead of a single `type`. The
   "username": "Administrator",
   "protocols": [
     { "type": "rdp", "port": 3389 },
-    { "type": "ssh", "port": 22, "username": "admin" },
+    { "type": "ssh", "port": 22, "username": "admin", "allowed_groups": ["netops"] },
     { "type": "ssh", "name": "ssh-2222", "port": 2222 },
     { "type": "web", "url": "https://10.0.0.10/", "hostname": "" }
   ]
 }
 ```
 
-- `name` defaults to the type and must be unique in the entry (letters, digits, `-`, `_`, `.`). The connect endpoints, updates and sessions refer to a protocol by it.
+- `name` defaults to the type and must be unique in the entry (letters, digits, `-`, `_`, `.`). The connect endpoints, access rules, updates and sessions refer to a protocol by it.
 - An update keeps each protocol's stored secrets by matching names, so renaming a protocol would leave it without them. To rename one, send its old name as `renamed_from` alongside the new `name` (`{"type": "ssh", "name": "ssh-mgmt", "renamed_from": "ssh-2222"}`) and its secrets move with it. `renamed_from` is used for that update only and is never stored.
 - `port` is set per protocol and never inherited: a protocol without one connects on its type's standard port (SSH 22, RDP 3389, VNC 5900). A top-level `port` next to `protocols` is refused.
 - Credentials resolve in this order: the protocol's own, the host's, the folder's [default credentials](credential-variables.md#folder-default-credentials) for the protocol's type, then `$variable` references are filled in.
 - The single-protocol form (a top-level `type`) is still accepted everywhere and is the same as a one-item `protocols` list. A body with both `type` and `protocols` is refused with `400`, as is an unknown protocol type or two protocols with the same name.
-- An entry that loses nothing by it is stored in the single-protocol form, so instances that predate this keep reading it. An entry with more than one protocol, a protocol name, or a host default the single form would put on the protocol (for example a host `username`) is stored with `protocols`; see [Migration](migration.md#multi-protocol-entries) before you create one.
+- An entry that loses nothing by it is stored in the single-protocol form, so instances that predate this keep reading it. An entry with more than one protocol, a protocol name, an access rule, or a host default the single form would put on the protocol (for example a host `username`) is stored with `protocols`; see [Migration](migration.md#multi-protocol-entries) before you create one.
 
 ### `PUT /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 
-Update a connection entry, or create it if there is none of that name in the folder. Uses read-modify-write: reads existing entry from Vault, merges incoming fields on top. Credentials (`password`, `private_key`, `container_password`, `proxmox_token_secret`) that are omitted from the request are preserved from the existing entry, and so is `external_id`. Jump host credentials are merged per-hop by index. If the existing entry cannot be read for any reason other than not existing, the response is `502` and nothing is written, so a request without secrets never replaces an entry that has them.
+Update a connection entry, or create it if there is none of that name in the folder. Uses read-modify-write: reads existing entry from Vault, merges incoming fields on top. Credentials (`password`, `private_key`, `container_password`, `proxmox_token_secret`) that are omitted from the request are preserved from the existing entry, and so is `external_id`. Jump host credentials are merged per-hop by index. Access rules (`allowed_groups`, `allowed_users`) are kept the same way: a list the request leaves out is kept, `[]` clears the host's, and on a protocol `null` drops its own rule so it follows the host (see [Changing entry and protocol rules](roles-and-access-control.md#changing-entry-and-protocol-rules)). A caller without `folders.manage_access` gets `403`, with nothing written, for a body that would change them. If the existing entry cannot be read for any reason other than not existing, the response is `502` and nothing is written, so a request without secrets never replaces an entry that has them.
 
 With [protocols](#multi-protocol-entries), the request's list is the entry's list of protocols, and secrets are kept per protocol: each protocol keeps the ones it omits from the stored protocol of the same name, and the host keeps its own. When the request and the stored entry each have one protocol, the two are matched whatever their names, so an old single-protocol body that changes an entry's `type` keeps its secrets as before. A single-protocol body (such as the original NetBox webhook) sent for an entry that has several protocols replaces them with that one.
 

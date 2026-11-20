@@ -55,7 +55,7 @@ The link opens the entry's primary protocol. To offer each protocol of a [multi-
 | Console RDP | Console | same, with `'rdp'` | `&protocol=rdp` |
 | Console Web | Console | same, with `'web'` | `&protocol=web` |
 
-A link naming a protocol the entry does not have says so.
+A link naming a protocol the user may not use (see [protocol access](roles-and-access-control.md#entry-and-protocol-access)) says the entry has no such protocol, the same as one that does not exist.
 
 ### Link 2: Ad-hoc SSH (blue outline)
 
@@ -185,7 +185,7 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 
 ### Multi-protocol entries
 
-An entry can offer several ways into one device, for example RDP, SSH and its web UI, each with its own port and, if needed, credentials. `remote_protocol` stays the primary protocol (what the plain Console link opens) and `remote_port` its port. Add the optional `remote_protocols` and `remote_ports` custom fields from the table above, and use this body template instead of the one above:
+An entry can offer several ways into one device, for example RDP, SSH and its web UI, each with its own port and, if needed, credentials and [access rules](roles-and-access-control.md#entry-and-protocol-access). The webhook's bodies carry no rules, so it never changes rules set on an entry in rustguac: an update keeps the ones it leaves out. `remote_protocol` stays the primary protocol (what the plain Console link opens) and `remote_port` its port. Add the optional `remote_protocols` and `remote_ports` custom fields from the table above, and use this body template instead of the one above:
 
 ```jinja
 {%- set ip = data.primary_ip4.address.split('/')[0] -%}

@@ -2939,6 +2939,17 @@ pub async fn get_docs(identity: Option<Extension<AuthIdentity>>) -> Response {
     Json(json!(sections)).into_response()
 }
 
+/// Who is asking, for the entry and protocol access rules (#296): `None`
+/// for anyone with `connections.edit`, who bypasses them as they bypass
+/// folder access, and sees the rules, as they see a folder's.
+fn entry_viewer(id: &AuthIdentity) -> Option<crate::vault::FolderSubject<'_>> {
+    if id.has_perm(Perm::ConnectionsEdit) {
+        None
+    } else {
+        Some(id.folder_subject())
+    }
+}
+
 /// Helper: check if the identity has group access to a folder, honouring
 /// `inherit_from_parent` on the folder's config (a subfolder may inherit
 /// access from any ancestor whose `allowed_groups` matches the caller's
@@ -3902,11 +3913,12 @@ pub async fn ab_list_all(
         let mut entries = Vec::new();
         for name in &entry_names {
             if let Ok(entry) = vault.get_entry(&folder.scope, &folder.name, name).await {
+                // Only the protocols the caller may use; none hides the entry.
                 let Some(info) = crate::vault::EntryInfo::for_viewer(
                     name,
                     &entry,
                     defaults.as_ref(),
-                    id.has_perm(Perm::ConnectionsEdit),
+                    entry_viewer(id),
                 ) else {
                     continue;
                 };
@@ -4014,11 +4026,12 @@ pub async fn ab_search_index(
             .filter(|s| !s.is_empty());
         for name in &names {
             if let Ok(entry) = vault.get_entry(&scope, &path, name).await {
+                // Only the protocols the caller may use; none hides the entry.
                 let Some(info) = crate::vault::EntryInfo::for_viewer(
                     name,
                     &entry,
                     defaults.as_ref(),
-                    id.has_perm(Perm::ConnectionsEdit),
+                    entry_viewer(id),
                 ) else {
                     continue;
                 };
@@ -4077,11 +4090,12 @@ pub async fn ab_list_entries(
     let mut entries = Vec::new();
     for name in &entry_names {
         if let Ok(entry) = vault.get_entry(&scope, &folder, name).await {
+            // Only the protocols the caller may use; none hides the entry.
             let Some(info) = crate::vault::EntryInfo::for_viewer(
                 name,
                 &entry,
                 defaults.as_ref(),
-                id.has_perm(Perm::ConnectionsEdit),
+                entry_viewer(id),
             ) else {
                 continue;
             };
@@ -4121,7 +4135,7 @@ pub struct ConnectRequest {
     #[serde(default)]
     pub domain: Option<String>,
     /// Which of the entry's protocols to connect with, by name (#296).
-    /// Default: the primary.
+    /// Default: the primary, or the first one the caller may use.
     #[serde(default)]
     pub protocol: Option<String>,
 }
@@ -4504,7 +4518,11 @@ pub async fn ab_connect_entry(
     };
 
     // The protocol to connect with, resolved to a plain single-type entry.
-    let Some((protocol_name, ab_entry)) = ab_entry.pick_protocol(req.protocol.as_deref()) else {
+    // One the caller may not use is reported as missing, like one that does
+    // not exist, so it does not show.
+    let Some((protocol_name, ab_entry)) =
+        ab_entry.pick_protocol(req.protocol.as_deref(), entry_viewer(&id))
+    else {
         let msg = if req
             .protocol
             .as_deref()
@@ -5251,18 +5269,174 @@ pub async fn ab_delete_folder(
 }
 
 /// Check an entry body from the API and tidy it for storage: either form
-/// (a top-level `type`, or `protocols`), written in the old flat form when
-/// that loses nothing.
-fn prepare_entry_body(mut e: AddressBookEntry) -> Result<AddressBookEntry, String> {
+/// (a top-level `type`, or `protocols`), access rules tidied like a
+/// folder's, written in the old flat form when that loses nothing. What
+/// `POST .../entries` stores; an update merges first (see `upsert_entry`).
+fn prepare_entry_body(e: AddressBookEntry) -> Result<AddressBookEntry, String> {
+    Ok(finish_entry(tidy_entry_body(e)?))
+}
+
+/// Check an entry body and tidy its fields, keeping what an update needs to
+/// merge it: an access rule sent empty (`[]`, to clear it) stays empty
+/// rather than absent (which keeps the stored one).
+fn tidy_entry_body(mut e: AddressBookEntry) -> Result<AddressBookEntry, String> {
     e.check_shape().map_err(|e| e.to_string())?;
+    fn tidy(
+        groups: &mut Option<Vec<String>>,
+        users: &mut Option<Vec<String>>,
+    ) -> Result<(), String> {
+        if let Some(g) = groups.as_mut() {
+            let mut out: Vec<String> = Vec::new();
+            for x in g.drain(..) {
+                let x = x.trim().to_string();
+                if !x.is_empty() && !out.contains(&x) {
+                    out.push(x);
+                }
+            }
+            *g = out;
+        }
+        if let Some(u) = users.take() {
+            *users = Some(normalize_allowed_users(u)?);
+        }
+        Ok(())
+    }
+    tidy(&mut e.allowed_groups, &mut e.allowed_users)?;
     if let Some(protocols) = e.protocols.as_mut() {
         for p in protocols.iter_mut() {
+            tidy(&mut p.allowed_groups, &mut p.allowed_users)?;
             if p.name.as_deref() == Some(p.session_type.as_str()) {
                 p.name = None;
             }
         }
     }
-    Ok(e.compact())
+    Ok(e)
+}
+
+/// An entry as it is stored, once tidied (and merged, for an update).
+fn finish_entry(mut e: AddressBookEntry) -> AddressBookEntry {
+    // An empty host rule means no rule: store it as absent.
+    let empty = |v: &Option<Vec<String>>| v.as_ref().is_none_or(Vec::is_empty);
+    if empty(&e.allowed_groups) && empty(&e.allowed_users) {
+        e.allowed_groups = None;
+        e.allowed_users = None;
+    }
+    // A flat body with an access rule goes to the list form, which older
+    // instances cannot read: in the flat form they would read the entry and
+    // ignore the rule, showing it to the whole folder.
+    if !e.has_protocol_list() && (e.allowed_groups.is_some() || e.allowed_users.is_some()) {
+        let (mut host, protocols) = e.split();
+        host.protocols = Some(protocols);
+        e = host;
+    }
+    e.compact()
+}
+
+/// Whether an entry body touches its access rules at all: sets a list on
+/// the host or a protocol, or resets a protocol's. A body that does not
+/// keeps them as stored.
+fn body_sets_rules(e: &AddressBookEntry) -> bool {
+    e.allowed_groups.is_some()
+        || e.allowed_users.is_some()
+        || e.protocols
+            .iter()
+            .flatten()
+            .any(|p| p.has_own_rule() || p.rule_reset)
+}
+
+/// The protocol stored as `p` was before this update: the one of the same
+/// name, or of the name in its `renamed_from`; when both sides have exactly
+/// one protocol, that one, whatever their names.
+fn stored_counterpart<'a>(
+    p: &crate::entry_protocols::ProtocolEntry,
+    existing: &'a [crate::entry_protocols::ProtocolEntry],
+    pair_singles: bool,
+) -> Option<&'a crate::entry_protocols::ProtocolEntry> {
+    let was = p
+        .renamed_from
+        .as_deref()
+        .filter(|n| !n.is_empty())
+        .unwrap_or(p.name());
+    existing
+        .iter()
+        .find(|o| o.name() == was)
+        .or(if pair_singles { existing.first() } else { None })
+}
+
+/// An update's access rule for one protocol: a list the request leaves out
+/// is kept from the stored protocol, one it sends wins, and `null` drops
+/// the protocol's own rule so it follows the host's again.
+fn keep_protocol_rule(
+    p: &mut crate::entry_protocols::ProtocolEntry,
+    old: Option<&crate::entry_protocols::ProtocolEntry>,
+) {
+    if p.rule_reset {
+        p.allowed_groups = None;
+        p.allowed_users = None;
+        return;
+    }
+    if let Some(old) = old {
+        if p.allowed_groups.is_none() {
+            p.allowed_groups = old.allowed_groups.clone();
+        }
+        if p.allowed_users.is_none() {
+            p.allowed_users = old.allowed_users.clone();
+        }
+    }
+}
+
+/// An access rule as compared for a change: groups and lower-cased users,
+/// in no order. `None` for no rule (on the host: both lists empty).
+type RuleKey = Option<(
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<String>,
+)>;
+
+fn rule_key(groups: &Option<Vec<String>>, users: &Option<Vec<String>>, host: bool) -> RuleKey {
+    if groups.is_none() && users.is_none() {
+        return None;
+    }
+    let g: std::collections::BTreeSet<String> = groups.iter().flatten().cloned().collect();
+    let u: std::collections::BTreeSet<String> = users
+        .iter()
+        .flatten()
+        .map(|x| x.to_ascii_lowercase())
+        .collect();
+    if host && g.is_empty() && u.is_empty() {
+        return None;
+    }
+    Some((g, u))
+}
+
+/// Whether writing `data` would change who may use the entry stored as
+/// `existing` (`None`: there is none): the host's rule, or the own rule of
+/// a protocol the entry keeps or gains. With `merge`, as an update
+/// (`PUT`) would merge it, keeping what it leaves out; without, as `POST`
+/// replaces it. Removing a protocol changes no rule.
+fn rules_differ(data: &AddressBookEntry, existing: Option<&AddressBookEntry>, merge: bool) -> bool {
+    let (mut host, protocols) = data.split();
+    let (old_host, old_protocols) = match existing {
+        Some(e) => e.split(),
+        None => (AddressBookEntry::default(), Vec::new()),
+    };
+    if merge {
+        host.allowed_groups = host.allowed_groups.or(old_host.allowed_groups.clone());
+        host.allowed_users = host.allowed_users.or(old_host.allowed_users.clone());
+    }
+    if rule_key(&host.allowed_groups, &host.allowed_users, true)
+        != rule_key(&old_host.allowed_groups, &old_host.allowed_users, true)
+    {
+        return true;
+    }
+    let pair_singles = protocols.len() == 1 && old_protocols.len() == 1;
+    protocols.iter().any(|p| {
+        let old = stored_counterpart(p, &old_protocols, pair_singles);
+        let mut p = p.clone();
+        if merge {
+            keep_protocol_rule(&mut p, old);
+        }
+        let before = old.and_then(|o| rule_key(&o.allowed_groups, &o.allowed_users, false));
+        rule_key(&p.allowed_groups, &p.allowed_users, false) != before
+    })
 }
 
 /// Audit details of an entry write: headline only, the protocol types.
@@ -5313,6 +5487,29 @@ pub async fn ab_create_entry(
         Ok(e) => e,
         Err(msg) => return ab_error(StatusCode::BAD_REQUEST, msg),
     };
+    // Who can use the entry only changes with folders.manage_access, as for
+    // a folder: without it, a new entry has no access rule, and one written
+    // over an existing entry keeps that entry's.
+    let may_change_rules = identity
+        .as_ref()
+        .is_some_and(|Extension(id)| id.has_perm(Perm::FoldersManageAccess));
+    if !may_change_rules {
+        let stored = match vault.get_entry(&scope, &folder, &req.name).await {
+            Ok(e) => Some(e),
+            Err(VaultError::NotFound) => None,
+            Err(e) => return ab_error(StatusCode::BAD_GATEWAY, e.to_string()),
+        };
+        if rules_differ(&entry, stored.as_ref(), false) {
+            return ab_error(
+                StatusCode::FORBIDDEN,
+                if stored.is_some() {
+                    "changing who can use an entry needs folders.manage_access"
+                } else {
+                    "setting who can use an entry needs folders.manage_access"
+                },
+            );
+        }
+    }
     let details = entry_audit_details(&entry, None);
     match vault.put_entry(&scope, &folder, &req.name, &entry).await {
         Ok(()) => {
@@ -5466,34 +5663,26 @@ impl EntryStore for VaultBackends {
 /// protocol of the same name, or of the name in its `renamed_from` when it
 /// is being renamed; when both sides have exactly one protocol the
 /// two are paired whatever their names, so an old flat body that changes
-/// an entry's type keeps its secrets as it always did. The request's list
-/// of protocols is the entry's list. The result is written in the old flat
-/// form whenever that loses nothing (`AddressBookEntry::compact`).
+/// an entry's type keeps its secrets as it always did. Access rules are
+/// kept the same way, list by list (see `keep_protocol_rule`). The
+/// request's list of protocols is the entry's list. The result is written
+/// in the old flat form whenever that loses nothing (`finish_entry`).
 fn merge_entry_update(data: AddressBookEntry, existing: AddressBookEntry) -> AddressBookEntry {
     let (data_host, mut data_protocols) = data.split();
     let (existing_host, existing_protocols) = existing.split();
     let mut host = merge_host_update(data_host, existing_host);
     let pair_singles = data_protocols.len() == 1 && existing_protocols.len() == 1;
     for p in &mut data_protocols {
-        let was = match p.renamed_from.take().filter(|n| !n.is_empty()) {
-            Some(n) => n,
-            None => p.name().to_string(),
-        };
-        let old = existing_protocols
-            .iter()
-            .find(|o| o.name() == was)
-            .or(if pair_singles {
-                existing_protocols.first()
-            } else {
-                None
-            });
+        let old = stored_counterpart(p, &existing_protocols, pair_singles);
         if let Some(old) = old {
             crate::entry_protocols::keep_secrets(&mut p.settings, &old.settings);
         }
+        keep_protocol_rule(p, old);
+        p.renamed_from = None;
     }
     host.protocols = Some(data_protocols);
     host.session_type = String::new();
-    host.compact()
+    finish_entry(host)
 }
 
 /// `merge_entry_update` for the host's own fields.
@@ -5536,6 +5725,11 @@ fn merge_host_update(data: AddressBookEntry, existing: AddressBookEntry) -> Addr
         container_password: data.container_password.or(existing.container_password),
         proxmox_token_secret: data.proxmox_token_secret.or(existing.proxmox_token_secret),
         external_id: data.external_id.or(existing.external_id),
+        // Access rules the request leaves out are kept, as external_id is,
+        // so a sync body without them (the NetBox webhook) cannot clear
+        // them; `[]` clears one on purpose.
+        allowed_groups: data.allowed_groups.or(existing.allowed_groups),
+        allowed_users: data.allowed_users.or(existing.allowed_users),
         jump_hosts: merged_jump_hosts,
         // Clear legacy flat fields — they've been migrated
         jump_password: None,
@@ -5682,9 +5876,8 @@ struct UpsertOutcome {
     entry: AddressBookEntry,
 }
 
-/// `PUT .../entries/:entry` without the HTTP: locate (and move) by
-/// `external_id` when asked, then read-modify-write so the request's fields
-/// land on top of everything stored, secrets included.
+/// `upsert_entry_as` for a caller who may change access rules.
+#[cfg(test)]
 async fn upsert_entry<S: EntryStore>(
     store: &S,
     scope: &str,
@@ -5693,6 +5886,37 @@ async fn upsert_entry<S: EntryStore>(
     data: AddressBookEntry,
     move_: bool,
 ) -> Result<UpsertOutcome, UpsertError> {
+    upsert_entry_as(store, scope, folder, entry, data, move_, true).await
+}
+
+/// `PUT .../entries/:entry` without the HTTP: locate (and move) by
+/// `external_id` when asked, then read-modify-write so the request's fields
+/// land on top of everything stored, secrets and access rules included.
+///
+/// `may_change_rules` says whether the caller may change who can use the
+/// entry (`folders.manage_access`). Without it, a
+/// body that leaves the access rules out, or sends them unchanged, is
+/// written as usual; one that would change them is refused before anything
+/// is written, as a folder `.config` change is.
+#[allow(clippy::too_many_arguments)]
+async fn upsert_entry_as<S: EntryStore>(
+    store: &S,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    data: AddressBookEntry,
+    move_: bool,
+    may_change_rules: bool,
+) -> Result<UpsertOutcome, UpsertError> {
+    let check_rules = !may_change_rules && body_sets_rules(&data);
+    if check_rules && move_ {
+        // The entry to compare with is found by the move itself; refuse
+        // before it happens rather than after.
+        return Err(UpsertError::Rejected(
+            StatusCode::FORBIDDEN,
+            "setting access rules with move=true needs folders.manage_access".into(),
+        ));
+    }
     let moved_from = if move_ {
         let Some(external_id) = data.external_id.as_deref().filter(|id| !id.is_empty()) else {
             return Err(UpsertError::Rejected(
@@ -5706,9 +5930,25 @@ async fn upsert_entry<S: EntryStore>(
         None
     };
 
+    let refused = || {
+        UpsertError::Rejected(
+            StatusCode::FORBIDDEN,
+            "changing who can use an entry needs folders.manage_access".into(),
+        )
+    };
     let merged = match store.get_entry(scope, folder, entry).await {
-        Ok(existing) => merge_entry_update(data, existing),
-        Err(VaultError::NotFound) => data,
+        Ok(existing) => {
+            if check_rules && rules_differ(&data, Some(&existing), true) {
+                return Err(refused());
+            }
+            merge_entry_update(data, existing)
+        }
+        Err(VaultError::NotFound) => {
+            if check_rules && rules_differ(&data, None, true) {
+                return Err(refused());
+            }
+            finish_entry(data)
+        }
         // Writing the request as-is here would replace a stored entry with
         // one that has no secrets, so a failed read is an error, not a create.
         Err(error) => return Err(UpsertError::UpdateFailed { moved_from, error }),
@@ -5754,13 +5994,27 @@ pub async fn ab_update_entry(
         }
     };
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-    let data = match prepare_entry_body(data) {
+    // Tidied but not yet finished: an empty rule (`[]`, to clear it) must
+    // reach the merge as empty, not as absent (which keeps it).
+    let data = match tidy_entry_body(data) {
         Ok(e) => e,
         Err(msg) => return ab_error(StatusCode::BAD_REQUEST, msg),
     };
     let external_id = data.external_id.clone();
+    let may_change_rules = identity
+        .as_ref()
+        .is_some_and(|Extension(id)| id.has_perm(Perm::FoldersManageAccess));
 
-    let result = upsert_entry(vault.as_ref(), &scope, &folder, &entry, data, query.move_).await;
+    let result = upsert_entry_as(
+        vault.as_ref(),
+        &scope,
+        &folder,
+        &entry,
+        data,
+        query.move_,
+        may_change_rules,
+    )
+    .await;
 
     // A move that happened is recorded whatever came after it, as the move
     // endpoint records it, so the audit log says where the entry went.
@@ -7226,9 +7480,9 @@ impl FolderSource for VaultFolderSource<'_> {
             .unwrap_or_default();
         for entry_name in &entries {
             if let Ok(entry) = self.vault.get_entry(scope, path, entry_name).await {
-                // Every protocol (#296), each resolved against the host it
-                // inherits from.
-                for (_, eff) in entry.visible_protocols() {
+                // Every protocol the caller may use (#296), each resolved
+                // against the host it inherits from.
+                for (_, eff) in entry.visible_protocols(entry_viewer(self.id)) {
                     for var in crate::vault::entry_credential_variables(&eff) {
                         if !out.contains(&var) {
                             out.push(var);
@@ -7741,7 +7995,8 @@ pub async fn quick_connect(
         // name (or type); without it the primary is used, as links made
         // before multi-protocol entries expect.
         let requested = query.protocol.as_deref().filter(|p| !p.trim().is_empty());
-        let Some((protocol_name, ab_entry)) = ab_entry.pick_protocol(requested) else {
+        let Some((protocol_name, ab_entry)) = ab_entry.pick_protocol(requested, entry_viewer(&id))
+        else {
             return quick_connect_error(
                 StatusCode::NOT_FOUND,
                 &match requested {
@@ -11365,7 +11620,7 @@ mod tests {
         // The body has no username or jump hosts, so, as before, they go.
         assert_eq!(stored.username, None);
         // And it connects as the flat entry always did.
-        let (name, eff) = stored.pick_protocol(None).unwrap();
+        let (name, eff) = stored.pick_protocol(None, None).unwrap();
         assert_eq!(name, "ssh");
         assert_eq!(
             serde_json::to_value(&eff).unwrap(),
@@ -11421,7 +11676,7 @@ mod tests {
         })))
         .unwrap();
         assert_eq!(e.protocol_types(), ["rdp", "ssh", "web"]);
-        let (_, ssh) = e.pick_protocol(Some("ssh")).unwrap();
+        let (_, ssh) = e.pick_protocol(Some("ssh"), None).unwrap();
         assert_eq!((ssh.port, ssh.prompt_credentials), (Some(2222), Some(true)));
     }
 
@@ -11526,31 +11781,89 @@ mod tests {
         .unwrap();
         assert!(e.protocols.is_none());
         assert_eq!(e.session_type, "ssh");
+        // With an access rule it cannot be: an older instance would ignore it.
+        let e = super::prepare_entry_body(entry(json!({
+            "hostname": "h", "allowed_groups": [" ops ", "ops", ""],
+            "protocols": [{"type": "ssh"}]
+        })))
+        .unwrap();
+        assert!(e.protocols.is_some());
+        assert_eq!(e.allowed_groups.as_deref(), Some(&["ops".to_string()][..]));
+        // So must a flat body with one, as the NetBox webhook or a script
+        // would send it: an older instance reading the flat form would
+        // ignore the rule.
+        let e = super::prepare_entry_body(entry(json!({
+            "type": "ssh", "hostname": "h", "port": 22, "password": "pw",
+            "allowed_users": ["alice@example.com"]
+        })))
+        .unwrap();
+        assert!(e.protocols.is_some(), "stored in the list form");
+        assert!(e.session_type.is_empty());
+        assert_eq!(
+            e.allowed_users.as_deref(),
+            Some(&["alice@example.com".to_string()][..])
+        );
+        let (name, eff) = e.pick_protocol(None, None).unwrap();
+        assert_eq!((name.as_str(), eff.port), ("ssh", Some(22)));
+        assert_eq!(eff.password.as_deref(), Some("pw"));
+        // Without a rule, a flat body stays flat.
+        let e = super::prepare_entry_body(entry(json!({"type": "ssh", "hostname": "h"}))).unwrap();
+        assert!(e.protocols.is_none());
         assert!(super::prepare_entry_body(entry(json!({"hostname": "h"}))).is_err());
+        assert!(super::prepare_entry_body(entry(json!({
+            "protocols": [{"type": "ssh", "allowed_users": ["has space@x"]}]
+        })))
+        .is_err());
     }
 
     #[test]
-    fn listing_shows_every_protocol_and_no_secrets() {
+    fn listing_shows_only_the_protocols_a_user_may_use_and_no_secrets() {
         let e = entry(json!({
             "hostname": "10.0.0.10", "username": "Administrator", "password": "host-pw",
+            "allowed_groups": ["ops"],
             "protocols": [
                 {"type": "rdp", "password": "rdp-pw"},
-                {"type": "ssh", "username": "admin"}
+                {"type": "ssh", "username": "admin", "allowed_groups": ["netops"]}
             ]
         }));
-        let info = crate::vault::EntryInfo::for_viewer("srv", &e, None, false).unwrap();
+        let ops = vec!["ops".to_string()];
+        let netops = vec!["netops".to_string()];
+        let none: Vec<String> = vec![];
+        let as_user = |groups: &[String]| {
+            crate::vault::EntryInfo::for_viewer(
+                "srv",
+                &e,
+                None,
+                Some(crate::vault::FolderSubject {
+                    email: Some("u@example.com"),
+                    groups,
+                }),
+            )
+        };
+        let info = as_user(&ops).unwrap();
         assert_eq!(info.session_type, "rdp");
         assert_eq!(info.protocol.as_deref(), Some("rdp"));
-        assert_eq!(info.protocols.len(), 2);
-        assert_eq!(info.protocols[1].username.as_deref(), Some("admin"));
+        assert_eq!(info.protocols.len(), 1);
         let text = serde_json::to_string(&info).unwrap();
         assert!(!text.contains("pw"), "{text}");
-        assert!(!text.contains("settings"), "settings are for admins");
-        // An admin also gets each level's own fields, secrets as flags.
-        let admin = crate::vault::EntryInfo::for_viewer("srv", &e, None, true).unwrap();
+        assert!(!text.contains("allowed_groups"), "rules are for editors");
+        assert!(!text.contains("settings"));
+        // netops reaches only SSH, so that is what the entry shows as.
+        let info = as_user(&netops).unwrap();
+        assert_eq!(info.session_type, "ssh");
+        assert_eq!(info.username.as_deref(), Some("admin"));
+        assert_eq!(info.protocols.len(), 1);
+        assert!(as_user(&none).is_none(), "no protocol: no entry");
+        // A connection editor sees both, the rules, and each level's own fields.
+        let admin = crate::vault::EntryInfo::for_viewer("srv", &e, None, None).unwrap();
         assert_eq!(admin.protocols.len(), 2);
         let text = serde_json::to_string(&admin).unwrap();
         assert!(!text.contains("pw\""), "{text}");
+        assert_eq!(admin.allowed_groups.as_deref(), Some(&ops[..]));
+        assert_eq!(
+            admin.protocols[1].allowed_groups.as_deref(),
+            Some(&netops[..])
+        );
         assert_eq!(
             admin.settings.as_ref().unwrap()["has_password"],
             json!(true)
@@ -11565,8 +11878,12 @@ mod tests {
     fn a_flat_entry_lists_as_before_plus_its_one_protocol() {
         let e = fw01_stored();
         let before = serde_json::to_value(crate::vault::EntryInfo::from(("fw01", &e))).unwrap();
+        let who = crate::vault::FolderSubject {
+            email: Some("u@example.com"),
+            groups: &[],
+        };
         let now = serde_json::to_value(
-            crate::vault::EntryInfo::for_viewer("fw01", &e, None, false).unwrap(),
+            crate::vault::EntryInfo::for_viewer("fw01", &e, None, Some(who)).unwrap(),
         )
         .unwrap();
         for (k, v) in before.as_object().unwrap() {
@@ -11574,5 +11891,313 @@ mod tests {
         }
         assert_eq!(now["protocol"], json!("ssh"));
         assert_eq!(now["protocols"].as_array().unwrap().len(), 1);
+    }
+
+    // ── Entry and protocol access rules on update (#296) ──
+
+    /// An entry with a host rule and a protocol rule of its own, as stored.
+    fn ruled_stored() -> AddressBookEntry {
+        entry(json!({
+            "hostname": "10.0.0.9", "external_id": "netbox:device:1",
+            "allowed_groups": ["ops"], "allowed_users": ["alice@example.com"],
+            "protocols": [
+                {"type": "ssh", "port": 22, "allowed_groups": ["netops"]},
+                {"type": "web", "url": "https://10.0.0.9/"}
+            ]
+        }))
+    }
+
+    fn rule_of(e: &AddressBookEntry) -> (Option<Vec<String>>, Option<Vec<String>>) {
+        (e.allowed_groups.clone(), e.allowed_users.clone())
+    }
+
+    fn tidied(v: serde_json::Value) -> AddressBookEntry {
+        super::tidy_entry_body(entry(v)).unwrap()
+    }
+
+    #[test]
+    fn an_update_that_omits_the_rules_keeps_them() {
+        // The editor's body without any rule field.
+        let body = tidied(json!({
+            "hostname": "10.0.0.10",
+            "protocols": [{"type": "ssh", "port": 22}, {"type": "web", "url": "https://10.0.0.10/"}]
+        }));
+        let merged = merge_entry_update(body, ruled_stored());
+        assert_eq!(
+            rule_of(&merged),
+            (
+                Some(vec!["ops".to_string()]),
+                Some(vec!["alice@example.com".to_string()])
+            )
+        );
+        let ps = merged.protocols.as_ref().unwrap();
+        assert_eq!(ps[0].allowed_groups, Some(vec!["netops".to_string()]));
+        assert_eq!(ps[1].allowed_groups, None, "web still follows the host");
+        assert_eq!(merged.hostname.as_deref(), Some("10.0.0.10"));
+        // A list sent on its own replaces only that list.
+        let body = tidied(json!({
+            "hostname": "10.0.0.9", "allowed_groups": ["sysadmins"],
+            "protocols": [{"type": "ssh", "port": 22}, {"type": "web", "url": "https://10.0.0.9/"}]
+        }));
+        let merged = merge_entry_update(body, ruled_stored());
+        assert_eq!(
+            rule_of(&merged),
+            (
+                Some(vec!["sysadmins".to_string()]),
+                Some(vec!["alice@example.com".to_string()])
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_flat_netbox_body_keeps_the_rules() {
+        // One protocol, so the flat body's one protocol is its counterpart.
+        let stored = entry(json!({
+            "hostname": "10.0.0.9", "external_id": "netbox:device:1",
+            "allowed_groups": ["ops"], "allowed_users": ["alice@example.com"],
+            "protocols": [{"type": "ssh", "port": 22, "allowed_groups": ["netops"]}]
+        }));
+        let store = FakeStore::with(&[("tenant-a", "fw01", stored)]);
+        let out = upsert_entry(
+            &store,
+            "shared",
+            "tenant-a",
+            "fw01",
+            super::tidy_entry_body(entry(netbox_flat_body())).unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+        let stored = store.stored("tenant-a", "fw01").unwrap();
+        assert_eq!(
+            rule_of(&stored),
+            (
+                Some(vec!["ops".to_string()]),
+                Some(vec!["alice@example.com".to_string()])
+            )
+        );
+        let ps = stored
+            .protocols
+            .as_ref()
+            .expect("a ruled entry stays in the list form");
+        assert_eq!(ps.len(), 1);
+        assert_eq!(ps[0].allowed_groups, Some(vec!["netops".to_string()]));
+        assert_eq!(out.entry.hostname.as_deref(), Some("10.0.0.9"));
+    }
+
+    #[test]
+    fn an_empty_list_clears_a_rule_and_null_makes_a_protocol_follow_the_host() {
+        let body = tidied(json!({
+            "hostname": "10.0.0.9", "allowed_groups": [], "allowed_users": [],
+            "protocols": [
+                {"type": "ssh", "port": 22, "allowed_groups": null},
+                {"type": "web", "url": "https://10.0.0.9/", "allowed_groups": [], "allowed_users": []}
+            ]
+        }));
+        let ps = body.protocols.as_ref().unwrap();
+        assert!(ps[0].rule_reset);
+        assert!(!ps[1].rule_reset);
+        let merged = merge_entry_update(body, ruled_stored());
+        assert_eq!(rule_of(&merged), (None, None), "host rule cleared");
+        let ps = merged.protocols.as_ref().unwrap();
+        assert_eq!(
+            (ps[0].allowed_groups.clone(), ps[0].allowed_users.clone()),
+            (None, None)
+        );
+        // An empty rule of its own is a rule: web is open to the folder.
+        assert_eq!(ps[1].allowed_groups, Some(vec![]));
+        let stored = serde_json::to_string(&merged).unwrap();
+        assert!(!stored.contains("rule_reset"), "{stored}");
+        // With the protocol's empty rule gone too, nothing is left: the
+        // entry goes back to the plain form older instances read.
+        let body = tidied(json!({
+            "hostname": "10.0.0.9", "allowed_groups": [], "allowed_users": [],
+            "protocols": [{"type": "ssh", "port": 22, "allowed_groups": null}]
+        }));
+        let merged = merge_entry_update(body, ruled_stored());
+        assert!(merged.protocols.is_none(), "{merged:?}");
+        assert_eq!(merged.session_type, "ssh");
+    }
+
+    #[tokio::test]
+    async fn without_folders_manage_access_the_rules_cannot_change() {
+        let store = FakeStore::with(&[("tenant-a", "srv", ruled_stored())]);
+        let put = |body: serde_json::Value, move_: bool| {
+            let store = &store;
+            async move {
+                super::upsert_entry_as(
+                    store,
+                    "shared",
+                    "tenant-a",
+                    "srv",
+                    super::tidy_entry_body(entry(body)).unwrap(),
+                    move_,
+                    false,
+                )
+                .await
+            }
+        };
+        let refused = |r: Result<UpsertOutcome, UpsertError>| {
+            matches!(r, Err(UpsertError::Rejected(StatusCode::FORBIDDEN, _)))
+        };
+        // A changed host rule, a cleared one, a changed protocol rule, a
+        // reset one and a new protocol with its own: all refused, nothing
+        // written.
+        for body in [
+            json!({"hostname": "h", "allowed_groups": ["everyone"],
+                "protocols": [{"type": "ssh"}, {"type": "web", "url": "https://h/"}]}),
+            json!({"hostname": "h", "allowed_groups": [], "allowed_users": [],
+                "protocols": [{"type": "ssh"}, {"type": "web", "url": "https://h/"}]}),
+            json!({"hostname": "h",
+                "protocols": [{"type": "ssh", "allowed_groups": ["ops"]}, {"type": "web", "url": "https://h/"}]}),
+            json!({"hostname": "h",
+                "protocols": [{"type": "ssh", "allowed_groups": null}, {"type": "web", "url": "https://h/"}]}),
+            json!({"hostname": "h",
+                "protocols": [{"type": "ssh"}, {"type": "web", "url": "https://h/"},
+                    {"type": "rdp", "allowed_groups": []}]}),
+        ] {
+            assert!(refused(put(body.clone(), false).await), "{body}");
+        }
+        assert_eq!(
+            store.stored("tenant-a", "srv").unwrap().hostname.as_deref(),
+            Some("10.0.0.9")
+        );
+        // move=true with a rule in the body is refused before the move.
+        assert!(refused(
+            put(
+                json!({"hostname": "h", "external_id": "netbox:device:1",
+                "allowed_groups": ["ops"], "protocols": [{"type": "ssh"}]}),
+                true
+            )
+            .await
+        ));
+        // The rules left out, or sent as they are stored (in another order,
+        // users in another case): saved, rules unchanged.
+        put(
+            json!({"hostname": "10.0.0.20",
+                "protocols": [{"type": "ssh", "port": 2222}, {"type": "web", "url": "https://h/"}]}),
+            false,
+        )
+        .await
+        .unwrap();
+        put(
+            json!({"hostname": "10.0.0.21",
+                "allowed_users": ["Alice@Example.com"], "allowed_groups": ["ops"],
+                "protocols": [{"type": "ssh", "port": 2222, "allowed_groups": ["netops"]},
+                    {"type": "web", "url": "https://h/"}]}),
+            false,
+        )
+        .await
+        .unwrap();
+        let stored = store.stored("tenant-a", "srv").unwrap();
+        assert_eq!(stored.hostname.as_deref(), Some("10.0.0.21"));
+        assert_eq!(stored.allowed_groups, Some(vec!["ops".to_string()]));
+        let ps = stored.protocols.as_ref().unwrap();
+        assert_eq!(ps[0].allowed_groups, Some(vec!["netops".to_string()]));
+        assert_eq!(ps[0].settings["port"], json!(2222));
+        // A protocol renamed with renamed_from keeps its rule, so that is no change.
+        put(
+            json!({"hostname": "10.0.0.21",
+                "protocols": [{"type": "ssh", "name": "ssh-alt", "renamed_from": "ssh"},
+                    {"type": "web", "url": "https://h/"}]}),
+            false,
+        )
+        .await
+        .unwrap();
+        let ps = store.stored("tenant-a", "srv").unwrap().protocols.unwrap();
+        assert_eq!(
+            (ps[0].name(), ps[0].allowed_groups.clone()),
+            ("ssh-alt", Some(vec!["netops".to_string()]))
+        );
+        // Removing a protocol with a rule narrows access: allowed.
+        put(
+            json!({"hostname": "h", "protocols": [{"type": "web", "url": "https://h/"}]}),
+            false,
+        )
+        .await
+        .unwrap();
+        // A new entry: none of its own without the permission.
+        assert!(refused(
+            super::upsert_entry_as(
+                &store,
+                "shared",
+                "tenant-a",
+                "new",
+                super::tidy_entry_body(entry(
+                    json!({"type": "ssh", "hostname": "n", "allowed_users": ["a@example.com"]})
+                ))
+                .unwrap(),
+                false,
+                false,
+            )
+            .await
+        ));
+        assert!(store.stored("tenant-a", "new").is_none());
+    }
+
+    #[test]
+    fn post_without_folders_manage_access_compares_with_what_it_replaces() {
+        let ruled = super::prepare_entry_body(entry(json!({
+            "type": "ssh", "hostname": "h", "allowed_groups": ["ops"]
+        })))
+        .unwrap();
+        let plain =
+            super::prepare_entry_body(entry(json!({"type": "ssh", "hostname": "h"}))).unwrap();
+        // A new entry: any rule is a change.
+        assert!(super::rules_differ(&ruled, None, false));
+        assert!(!super::rules_differ(&plain, None, false));
+        // Over an entry with a rule: POST replaces, so leaving it out is one.
+        assert!(super::rules_differ(&plain, Some(&ruled), false));
+        assert!(!super::rules_differ(&ruled, Some(&ruled), false));
+    }
+
+    #[test]
+    fn connection_editors_bypass_entry_rules_and_see_them() {
+        use crate::perms::{Perm, PermSet};
+        let user = |perms: &[Perm]| AuthIdentity::User {
+            email: "u@example.com".into(),
+            role: "custom".into(),
+            groups: vec![],
+            roles: vec!["custom".into()],
+            perms: PermSet::of(perms),
+        };
+        let e = ruled_stored();
+        let editor = user(&[Perm::ConnectionsConnect, Perm::ConnectionsEdit]);
+        let operator = user(&[Perm::ConnectionsConnect]);
+        let seen =
+            crate::vault::EntryInfo::for_viewer("srv", &e, None, super::entry_viewer(&editor))
+                .unwrap();
+        assert_eq!(seen.protocols.len(), 2);
+        assert_eq!(seen.allowed_groups, Some(vec!["ops".to_string()]));
+        assert_eq!(
+            seen.protocols[0].allowed_groups,
+            Some(vec!["netops".to_string()])
+        );
+        assert!(e
+            .pick_protocol(Some("ssh"), super::entry_viewer(&editor))
+            .is_some());
+        // Without connections.edit the rules apply, and are not shown.
+        assert!(crate::vault::EntryInfo::for_viewer(
+            "srv",
+            &e,
+            None,
+            super::entry_viewer(&operator)
+        )
+        .is_none());
+        assert!(e
+            .pick_protocol(Some("ssh"), super::entry_viewer(&operator))
+            .is_none());
+        let alice = AuthIdentity::User {
+            email: "alice@example.com".into(),
+            role: "custom".into(),
+            groups: vec![],
+            roles: vec!["custom".into()],
+            perms: PermSet::of(&[Perm::ConnectionsConnect]),
+        };
+        let seen =
+            crate::vault::EntryInfo::for_viewer("srv", &e, None, super::entry_viewer(&alice))
+                .unwrap();
+        assert_eq!(seen.protocols.len(), 1, "web, through the host rule");
+        assert!(!serde_json::to_string(&seen).unwrap().contains("allowed_"));
     }
 }
