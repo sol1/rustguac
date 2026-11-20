@@ -490,11 +490,19 @@ impl AddressBookEntry {
         let allowed = |p: &&ProtocolEntry| protocol_allowed(&host, p, who);
         let p = match requested.map(str::trim).filter(|r| !r.is_empty()) {
             None => protocols.iter().find(allowed),
+            // A protocol `who` may not use is skipped, as if it were not
+            // there: `&protocol=ssh` falls back to the first ssh protocol
+            // they may use, not to one they may not.
             Some(r) => protocols
                 .iter()
+                .filter(allowed)
                 .find(|p| p.name() == r)
-                .or_else(|| protocols.iter().find(|p| p.session_type == r))
-                .filter(allowed),
+                .or_else(|| {
+                    protocols
+                        .iter()
+                        .filter(allowed)
+                        .find(|p| p.session_type == r)
+                }),
         }?;
         let eff = effective_of(&host, p).ok()?;
         Some((p.name().to_string(), eff))
@@ -956,6 +964,17 @@ mod tests {
         assert_eq!(e.pick_protocol(Some("rdp"), None).unwrap().0, "rdp");
         assert_eq!(e.pick_protocol(Some(""), None).unwrap().0, "ssh-2222");
         assert!(e.pick_protocol(Some("vnc"), None).is_none());
+        // The fallback skips a protocol the user may not use.
+        let groups = vec!["ops".to_string()];
+        let me = who(Some("me@example.com"), &groups);
+        let ruled = entry(json!({"hostname": "h", "protocols": [
+            {"type": "ssh", "name": "ssh-a", "allowed_groups": ["finance"]},
+            {"type": "ssh", "name": "ssh-b", "allowed_groups": ["ops"]}]}));
+        assert_eq!(
+            ruled.pick_protocol(Some("ssh"), Some(me)).unwrap().0,
+            "ssh-b"
+        );
+        assert!(ruled.pick_protocol(Some("ssh-a"), Some(me)).is_none());
         // An old quick link naming the type of a single-protocol entry.
         assert_eq!(
             entry(legacy_rdp())

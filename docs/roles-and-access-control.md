@@ -304,6 +304,8 @@ Within a folder, an entry can narrow who sees and uses it, and each of its [prot
 - A protocol with a rule of its own (either list set, even empty) uses it. An empty rule opens that protocol to everyone who can open the folder.
 - A protocol without one follows the host's rule.
 - With no rule on the host either, everyone who can open the folder may use it, as before.
+
+Note that an empty rule here means the opposite of an empty folder `.config`. A folder whose lists are empty lets nobody in (apart from admins), while an empty rule on an entry or protocol narrows nothing: everyone who can open the folder may use it. So clearing the last group from a host rule opens the entry to the whole folder.
 - An entry is shown when at least one of its protocols is, and lists only those protocols.
 
 With a host rule and a protocol rule each allowing or denying a user, and the entry's other protocols following the host:
@@ -339,6 +341,9 @@ As with a folder, changing who can use an entry needs `folders.manage_access`:
 
 - Without it, an entry can still be created and edited. A body that leaves the rules out, or sends them as they are stored (in any order, users in any case), is saved and the rules stay as they are. One that would change them is refused with `403` and nothing is written: setting a rule on a new entry, changing or clearing the host's rule, or setting, changing or removing a protocol's own rule. Removing a protocol is allowed, since that takes access away from no one who keeps it. A rule in a `PUT ...?move=true` body is refused before anything moves.
 - In the editor, the rules are shown but cannot be changed, and saving leaves them as they are.
+- A rule protects the entry and protocol it is on, not the host behind them: anyone with `connections.edit` can still add another entry, or another protocol, for the same host. Limit who has `connections.edit` accordingly.
+
+An update that renames a protocol with a rule of its own must send `renamed_from` (see [Multi-protocol entries](api.md#multi-protocol-entries)), so the rule goes with it. Without it, the update looks like the protocol was removed and a new one added, and the new one would follow the host's rule, which can be wider. Such an update is refused with `400`, whoever sends it, unless the new protocol sets a rule of its own.
 
 An update (`PUT .../entries/:entry`) keeps the rules it leaves out, as it keeps secrets and `external_id`, so a sync body without them (such as the NetBox webhook's) never clears them:
 

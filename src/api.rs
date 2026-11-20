@@ -4886,7 +4886,7 @@ fn normalize_allowed_users(users: Vec<String>) -> Result<Vec<String>, String> {
         }
     }
     if out.len() > MAX_ALLOWED_USERS {
-        return Err(format!("at most {MAX_ALLOWED_USERS} users per folder"));
+        return Err(format!("at most {MAX_ALLOWED_USERS} users in a list"));
     }
     Ok(out)
 }
@@ -5285,6 +5285,17 @@ fn tidy_entry_body(mut e: AddressBookEntry) -> Result<AddressBookEntry, String> 
         groups: &mut Option<Vec<String>>,
         users: &mut Option<Vec<String>>,
     ) -> Result<(), String> {
+        // A list sent with only blanks in it would tidy to an empty rule,
+        // which admits the whole folder: refuse it rather than open up.
+        let blank = |v: &Option<Vec<String>>| {
+            v.as_ref()
+                .is_some_and(|v| !v.is_empty() && v.iter().all(|x| x.trim().is_empty()))
+        };
+        if blank(groups) || blank(users) {
+            return Err(
+                "an access rule list holds only blanks; send [] to clear it on purpose".into(),
+            );
+        }
         if let Some(g) = groups.as_mut() {
             let mut out: Vec<String> = Vec::new();
             for x in g.drain(..) {
@@ -5292,6 +5303,9 @@ fn tidy_entry_body(mut e: AddressBookEntry) -> Result<AddressBookEntry, String> 
                 if !x.is_empty() && !out.contains(&x) {
                     out.push(x);
                 }
+            }
+            if out.len() > MAX_ALLOWED_USERS {
+                return Err(format!("at most {MAX_ALLOWED_USERS} groups in a list"));
             }
             *g = out;
         }
@@ -5360,6 +5374,49 @@ fn stored_counterpart<'a>(
         .iter()
         .find(|o| o.name() == was)
         .or(if pair_singles { existing.first() } else { None })
+}
+
+/// An update that looks like a protocol renamed without `renamed_from`,
+/// where the protocol had its own access rule: a stored protocol with its
+/// own rule that no protocol in the body matches, and a new protocol of the
+/// same type without a rule of its own. Written as it is, the new protocol
+/// would follow the host's rule, which can be wider, so the rename would
+/// open it up. A lost secret fails closed; a lost rule must not fail open.
+/// Returns why it is refused.
+fn renamed_without_its_rule(
+    data: &AddressBookEntry,
+    existing: &AddressBookEntry,
+) -> Option<String> {
+    let (_, protocols) = data.split();
+    let (_, old_protocols) = existing.split();
+    let pair_singles = protocols.len() == 1 && old_protocols.len() == 1;
+    let matched: Vec<&str> = protocols
+        .iter()
+        .filter_map(|p| stored_counterpart(p, &old_protocols, pair_singles))
+        .map(|o| o.name())
+        .collect();
+    for old in old_protocols
+        .iter()
+        .filter(|o| o.has_own_rule() && !matched.contains(&o.name()))
+    {
+        let new = protocols.iter().find(|p| {
+            p.session_type == old.session_type
+                && stored_counterpart(p, &old_protocols, pair_singles).is_none()
+                && !p.has_own_rule()
+                && !p.rule_reset
+        });
+        if let Some(new) = new {
+            return Some(format!(
+                "protocol {:?} has its own access rule and the update drops it; if {:?} is it \
+                 renamed, send \"renamed_from\": {:?} so the rule goes with it, or set {:?}'s rule",
+                old.name(),
+                new.name(),
+                old.name(),
+                new.name()
+            ));
+        }
+    }
+    None
 }
 
 /// An update's access rule for one protocol: a list the request leaves out
@@ -5499,6 +5556,12 @@ pub async fn ab_create_entry(
             Err(VaultError::NotFound) => None,
             Err(e) => return ab_error(StatusCode::BAD_GATEWAY, e.to_string()),
         };
+        if let Some(why) = stored
+            .as_ref()
+            .and_then(|stored| renamed_without_its_rule(&entry, stored))
+        {
+            return ab_error(StatusCode::BAD_REQUEST, why);
+        }
         if rules_differ(&entry, stored.as_ref(), false) {
             return ab_error(
                 StatusCode::FORBIDDEN,
@@ -5938,6 +6001,9 @@ async fn upsert_entry_as<S: EntryStore>(
     };
     let merged = match store.get_entry(scope, folder, entry).await {
         Ok(existing) => {
+            if let Some(why) = renamed_without_its_rule(&data, &existing) {
+                return Err(UpsertError::Rejected(StatusCode::BAD_REQUEST, why));
+            }
             if check_rules && rules_differ(&data, Some(&existing), true) {
                 return Err(refused());
             }
@@ -11727,6 +11793,97 @@ mod tests {
         assert_eq!(
             merged.effective(None).unwrap().hostname.as_deref(),
             Some("10.0.0.11")
+        );
+    }
+
+    #[test]
+    fn a_rule_of_only_blanks_is_refused_not_opened() {
+        let body = |rule: serde_json::Value| {
+            super::prepare_entry_body(entry(json!({
+                "hostname": "h",
+                "protocols": [{"type": "rdp"}, {"type": "ssh", "allowed_groups": rule}]
+            })))
+        };
+        assert!(
+            body(json!([" "])).is_err(),
+            "blanks would tidy to an open rule"
+        );
+        let cleared = body(json!([])).unwrap();
+        assert_eq!(cleared.protocols.unwrap()[1].allowed_groups, Some(vec![]));
+        let tidied = body(json!([" ops ", "ops", ""])).unwrap();
+        assert_eq!(
+            tidied.protocols.unwrap()[1].allowed_groups,
+            Some(vec!["ops".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn renaming_a_protocol_without_renamed_from_cannot_drop_its_rule() {
+        let stored = entry(json!({
+            "hostname": "h",
+            "allowed_groups": ["staff"],
+            "protocols": [
+                {"type": "rdp"},
+                {"type": "ssh", "allowed_groups": ["netops"]}
+            ]
+        }));
+        let body = |ssh: serde_json::Value| {
+            super::prepare_entry_body(entry(json!({
+                "hostname": "h", "protocols": [{"type": "rdp"}, ssh]
+            })))
+            .unwrap()
+        };
+        // Renamed without renamed_from: refused, even for a caller who may
+        // change rules, rather than opening the protocol to the host's rule.
+        for may_change_rules in [false, true] {
+            let store = FakeStore::with(&[("f", "e", stored.clone())]);
+            let err = super::upsert_entry_as(
+                &store,
+                "shared",
+                "f",
+                "e",
+                body(json!({"type": "ssh", "name": "ssh-b"})),
+                false,
+                may_change_rules,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(&err, UpsertError::Rejected(StatusCode::BAD_REQUEST, m) if m.contains("renamed_from")),
+                "{err:?}"
+            );
+            assert_eq!(
+                serde_json::to_value(store.stored("f", "e").unwrap()).unwrap(),
+                serde_json::to_value(&stored).unwrap(),
+                "nothing is written"
+            );
+        }
+        // With renamed_from, the rule goes with it.
+        let store = FakeStore::with(&[("f", "e", stored.clone())]);
+        let out = super::upsert_entry_as(
+            &store,
+            "shared",
+            "f",
+            "e",
+            body(json!({"type": "ssh", "name": "ssh-b", "renamed_from": "ssh"})),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        let ps = out.entry.protocols.unwrap();
+        assert_eq!(ps[1].name(), "ssh-b");
+        assert_eq!(ps[1].allowed_groups, Some(vec!["netops".to_string()]));
+        // Removing the protocol outright is still fine.
+        let store = FakeStore::with(&[("f", "e", stored.clone())]);
+        let body = super::prepare_entry_body(entry(json!({
+            "hostname": "h", "protocols": [{"type": "rdp"}]
+        })))
+        .unwrap();
+        assert!(
+            super::upsert_entry_as(&store, "shared", "f", "e", body, false, true)
+                .await
+                .is_ok()
         );
     }
 
