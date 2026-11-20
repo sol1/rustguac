@@ -728,7 +728,6 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `prompt_credentials` | boolean | All | Prompt user for credentials at connect time |
 | `jump_hosts` | array | All | Multi-hop SSH tunnel chain (same format as session creation) |
 | `external_id` | string | All | Stable id of the record the entry is synced from (the [NetBox webhook](netbox.md#create-webhook-device-createdupdated) sends `netbox:device:<id>`). What `PUT ...?move=true` matches on; never used to connect. Preserved on update when omitted. |
-
 | `protocols` | array | All | The ways to connect to the host, primary first, in place of `type` (see [Multi-protocol entries](#multi-protocol-entries)) |
 | `allowed_groups`, `allowed_users` | array | All | Narrow who can see and use the entry within the folder (see [Entry and protocol access](roles-and-access-control.md#entry-and-protocol-access)). Setting them needs `folders.manage_access`; without it a body with a rule is refused with `403` |
 

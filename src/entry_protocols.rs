@@ -161,9 +161,51 @@ impl From<ProtocolEntryBody> for ProtocolEntry {
                 b.allowed_users.flatten()
             },
             rule_reset,
-            settings: b.settings,
+            // Only real entry fields, as the old flat form keeps: an unknown
+            // key (a misspelled secret, an editor's has_password flag echoed
+            // back) would otherwise be stored and shown to editors as it is.
+            settings: b
+                .settings
+                .into_iter()
+                .filter(|(k, _)| entry_fields().contains(&k.as_str()))
+                .collect(),
         }
     }
+}
+
+/// The fields of an [`AddressBookEntry`], as its `Deserialize` names them.
+/// Read once from serde: a deserializer that only records the field list
+/// it is asked for.
+fn entry_fields() -> &'static [&'static str] {
+    use serde::de::{Error as _, Visitor};
+    use std::sync::OnceLock;
+    static FIELDS: OnceLock<&'static [&'static str]> = OnceLock::new();
+    struct Fields<'a>(&'a mut &'static [&'static str]);
+    impl<'de> serde::Deserializer<'de> for Fields<'_> {
+        type Error = serde::de::value::Error;
+        fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+            Err(Self::Error::custom("field list only"))
+        }
+        fn deserialize_struct<V: Visitor<'de>>(
+            self,
+            _: &'static str,
+            fields: &'static [&'static str],
+            _: V,
+        ) -> Result<V::Value, Self::Error> {
+            *self.0 = fields;
+            Err(Self::Error::custom("field list only"))
+        }
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+            bytes byte_buf option unit unit_struct newtype_struct seq tuple
+            tuple_struct map enum identifier ignored_any
+        }
+    }
+    FIELDS.get_or_init(|| {
+        let mut fields: &'static [&'static str] = &[];
+        let _ = AddressBookEntry::deserialize(Fields(&mut fields));
+        fields
+    })
 }
 
 impl ProtocolEntry {
@@ -405,6 +447,16 @@ impl AddressBookEntry {
                         "protocols[{i}]: {field} must be 1-64 letters, digits, '-', '_' or '.'"
                     ));
                 }
+            }
+            // A link picks a protocol by name, then by type: a protocol named
+            // after another type ("ssh" on an RDP protocol) would answer a
+            // link that asks for that type with the wrong one.
+            if PROTOCOL_TYPES.contains(&p.name()) && p.name() != p.session_type {
+                return err(format!(
+                    "protocols[{i}]: a {} protocol cannot be named {:?}, which is another protocol type",
+                    p.session_type,
+                    p.name()
+                ));
             }
             if seen.contains(&p.name()) {
                 return err(format!(
@@ -926,6 +978,62 @@ mod tests {
         assert_eq!(new["proxmox_token_secret"], json!("t"));
         assert_eq!(new["jump_hosts"][0]["password"], json!("jp"));
         assert_eq!(new["jump_hosts"][0]["host_key"], json!("hk"));
+    }
+
+    #[test]
+    fn a_protocol_cannot_be_named_after_another_type() {
+        let bad = entry(json!({
+            "hostname": "h",
+            "protocols": [{"type": "rdp", "name": "ssh"}]
+        }));
+        assert!(bad
+            .check_shape()
+            .unwrap_err()
+            .0
+            .contains("another protocol type"));
+        let fine = entry(json!({
+            "hostname": "h",
+            "protocols": [{"type": "ssh", "name": "ssh"}, {"type": "ssh", "name": "ssh-2222", "port": 2222}]
+        }));
+        assert!(fine.check_shape().is_ok());
+    }
+
+    #[test]
+    fn a_protocol_keeps_only_real_entry_fields() {
+        let e = entry(json!({
+            "hostname": "h",
+            "protocols": [{
+                "type": "ssh",
+                "username": "root",
+                "ignore_cert": false,
+                "passwd": "typo-secret",
+                "has_password": true
+            }]
+        }));
+        let p = &e.protocol_list()[0];
+        assert_eq!(p.settings["username"], json!("root"));
+        assert_eq!(
+            p.settings["ignore_cert"],
+            json!(false),
+            "a false override is a real field"
+        );
+        assert!(
+            p.settings.get("passwd").is_none(),
+            "an unknown key is not kept"
+        );
+        assert!(
+            p.settings.get("has_password").is_none(),
+            "an echoed flag is not kept"
+        );
+        for f in [
+            "hostname",
+            "password",
+            "gateway_password",
+            "jump_hosts",
+            "protocols",
+        ] {
+            assert!(entry_fields().contains(&f), "{f} is an entry field");
+        }
     }
 
     #[test]
