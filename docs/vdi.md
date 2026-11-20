@@ -139,6 +139,23 @@ home_base = "/vdi-homes"
 
 Each user gets `{home_base}/{username}` mounted as `/home/{username}` inside the container. Files persist across container restarts. The directory is created automatically on first use.
 
+### Mount `home_base` nosuid,nodev
+
+Whoever is root inside a VDI container can leave a set-user-ID program or a device node in a home directory, and that file is on the host. On a file system mounted `nosuid,nodev` such files do nothing, so `home_base` should be on one.
+
+- **Podman** (`docker_socket` pointing at Podman's socket): rustguac sets `nosuid,nodev` on the bind mount itself.
+- **Docker** cannot set these options on a bind mount, so mount `home_base` with them on the host. rustguac checks, and logs a warning when a VDI with a persistent home starts and `home_base` is not mounted `nosuid,nodev`.
+
+If `home_base` is not already on its own file system, bind it onto itself with the options, in `/etc/fstab`:
+
+```
+/vdi-homes  /vdi-homes  none  bind,nosuid,nodev  0  0
+```
+
+then `sudo mount /vdi-homes` (or reboot), and check with `findmnt -T /vdi-homes`: the options should include `nosuid` and `nodev`.
+
+Releases from 1.5.4 to 1.15.0 always asked for `nosuid,nodev` on the bind, which Docker refuses (`invalid mode: nosuid,nodev`), so a VDI with `home_base` set only started on Podman ([#366](https://github.com/sol1/rustguac/issues/366)).
+
 ## Active Sessions
 
 The **Active sessions** button on Connections opens a panel with thumbnail previews of running sessions. Thumbnails are captured every 10 seconds from the browser display. Click a thumbnail to reconnect.

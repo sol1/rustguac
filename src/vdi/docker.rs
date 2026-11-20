@@ -19,6 +19,50 @@ pub struct DockerDriver {
     host_port_range: Option<(u16, u16)>,
     container_hook_script: Option<String>,
     container_hook_timeout: Duration,
+    /// Whether the socket is Podman's rather than Docker's, asked once.
+    podman: tokio::sync::OnceCell<bool>,
+    /// Whether the warning about an unprotected `home_base` has been logged.
+    warned_home_base: std::sync::atomic::AtomicBool,
+}
+
+/// The bind mount for a persistent VDI home (#366). Podman takes
+/// `nosuid,nodev` on the bind itself. Docker's bind syntax has no such
+/// options (it refuses the mount with "invalid mode"), so on Docker the
+/// protection has to come from how `home_base` is mounted on the host; see
+/// [`mount_is_nosuid_nodev`].
+fn home_bind(host_path: &std::path::Path, username: &str, podman: bool) -> String {
+    if podman {
+        format!("{}:/home/{}:nosuid,nodev", host_path.display(), username)
+    } else {
+        format!("{}:/home/{}", host_path.display(), username)
+    }
+}
+
+/// Whether the file system holding `path` is mounted `nosuid` and `nodev`,
+/// so a set-user-ID file or device node a VDI user leaves in their home is
+/// inert on the host. `None` when it cannot be read.
+fn mount_is_nosuid_nodev(path: &std::path::Path) -> Option<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c` is a valid NUL-terminated path and `st` a valid out-pointer.
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    let flags = st.f_flag;
+    Some(flags & libc::ST_NOSUID != 0 && flags & libc::ST_NODEV != 0)
+}
+
+/// Whether a `/version` answer comes from Podman (its compat API names its
+/// engine component "Podman Engine").
+fn version_is_podman(v: &bollard::models::SystemVersion) -> bool {
+    v.components
+        .iter()
+        .flatten()
+        .any(|c| c.name.to_ascii_lowercase().contains("podman"))
+        || v.platform
+            .as_ref()
+            .is_some_and(|p| p.name.to_ascii_lowercase().contains("podman"))
 }
 
 impl DockerDriver {
@@ -37,7 +81,26 @@ impl DockerDriver {
             host_port_range: None,
             container_hook_script: None,
             container_hook_timeout: Duration::from_secs(10),
+            podman: tokio::sync::OnceCell::new(),
+            warned_home_base: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Whether the socket is Podman's. Asked once; if the question fails,
+    /// Docker is assumed, whose plain bind also works on Podman.
+    async fn is_podman(&self) -> bool {
+        *self
+            .podman
+            .get_or_init(|| async {
+                match self.client.version().await {
+                    Ok(v) => version_is_podman(&v),
+                    Err(e) => {
+                        tracing::warn!("Could not ask the container runtime its version: {}", e);
+                        false
+                    }
+                }
+            })
+            .await
     }
 
     /// Set the timeout for waiting for xrdp readiness.
@@ -587,12 +650,23 @@ impl DockerDriver {
                             ))
                         }
                     }
-                    let mount = format!(
-                        "{}:/home/{}:nosuid,nodev",
-                        host_path.display(),
-                        spec.username
-                    );
-                    tracing::info!(mount = %mount, "VDI home directory bind mount");
+                    let podman = self.is_podman().await;
+                    if !podman
+                        && mount_is_nosuid_nodev(&host_path) == Some(false)
+                        && !self
+                            .warned_home_base
+                            .swap(true, std::sync::atomic::Ordering::Relaxed)
+                    {
+                        tracing::warn!(
+                            home_base = %base,
+                            "VDI home_base is not on a nosuid,nodev mount: a set-user-ID file or \
+                             device node left in a VDI home would work on this host. Docker cannot \
+                             set these options on the bind, so mount home_base with them (see \
+                             docs/vdi.md, Persistent home directories)"
+                        );
+                    }
+                    let mount = home_bind(&host_path, &spec.username, podman);
+                    tracing::info!(mount = %mount, podman, "VDI home directory bind mount");
                     Some(vec![mount])
                 } else {
                     None
@@ -854,6 +928,53 @@ impl DockerDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #366: Docker refuses a bind with nosuid,nodev ("invalid mode"), so a
+    // persistent home only gets them on Podman.
+    #[test]
+    fn home_bind_has_nosuid_nodev_only_on_podman() {
+        let p = std::path::Path::new("/vdi-homes/alice");
+        assert_eq!(home_bind(p, "alice", false), "/vdi-homes/alice:/home/alice");
+        assert_eq!(
+            home_bind(p, "alice", true),
+            "/vdi-homes/alice:/home/alice:nosuid,nodev"
+        );
+    }
+
+    #[test]
+    fn podman_is_told_from_docker_by_its_version_answer() {
+        let v = |json: serde_json::Value| -> bollard::models::SystemVersion {
+            serde_json::from_value(json).unwrap()
+        };
+        // Trimmed from real /version answers.
+        let docker = v(serde_json::json!({
+            "Platform": {"Name": "Docker Engine - Community"},
+            "Components": [{"Name": "Engine", "Version": "29.7.1"},
+                           {"Name": "containerd", "Version": "2.1.4"}],
+            "Version": "29.7.1"
+        }));
+        let podman = v(serde_json::json!({
+            "Platform": {"Name": "linux/amd64/debian-13"},
+            "Components": [{"Name": "Podman Engine", "Version": "5.4.2"}],
+            "Version": "5.4.2"
+        }));
+        assert!(!version_is_podman(&docker));
+        assert!(version_is_podman(&podman));
+        assert!(!version_is_podman(&v(serde_json::json!({}))));
+    }
+
+    #[test]
+    fn mount_flags_are_read_from_the_file_system() {
+        // /proc is mounted nosuid,nodev on Linux; a missing path is unknown.
+        assert_eq!(
+            mount_is_nosuid_nodev(std::path::Path::new("/proc")),
+            Some(true)
+        );
+        assert_eq!(
+            mount_is_nosuid_nodev(std::path::Path::new("/nonexistent/rustguac-test")),
+            None
+        );
+    }
 
     // Sanitization invariants: output must be safe for use as a Docker
     // container-name suffix (Docker requires `[a-zA-Z0-9_.-]` and must not
