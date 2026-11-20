@@ -4425,6 +4425,7 @@ pub fn session_request_from_entry(
         fence_all_targets: false,
         ssh_font_size: entry.ssh_font_size,
         ssh_color_scheme: entry.ssh_color_scheme,
+        ssh_command: entry.ssh_command,
         wol_send_packet: entry.wol_send_packet,
         wol_mac_addr: entry.wol_mac_addr,
         wol_broadcast_addr: entry.wol_broadcast_addr,
@@ -5281,6 +5282,20 @@ fn prepare_entry_body(e: AddressBookEntry) -> Result<AddressBookEntry, String> {
 /// rather than absent (which keeps the stored one).
 fn tidy_entry_body(mut e: AddressBookEntry) -> Result<AddressBookEntry, String> {
     e.check_shape().map_err(|e| e.to_string())?;
+    // An SSH command is checked when it is saved, not first at connect.
+    let commands =
+        std::iter::once(e.ssh_command.clone()).chain(e.protocols.iter().flatten().map(|p| {
+            p.settings
+                .get("ssh_command")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        }));
+    for c in commands {
+        crate::session::ssh_command(c.as_deref()).map_err(|e| match e {
+            crate::session::SessionError::ValidationError(m) => m,
+            other => other.to_string(),
+        })?;
+    }
     fn tidy(
         groups: &mut Option<Vec<String>>,
         users: &mut Option<Vec<String>>,
@@ -8282,6 +8297,7 @@ pub async fn quick_connect(
         fence_all_targets: false,
         ssh_font_size: None,
         ssh_color_scheme: None,
+        ssh_command: None,
         wol_send_packet: None,
         wol_mac_addr: None,
         wol_broadcast_addr: None,
@@ -9250,6 +9266,7 @@ mod tests {
             fence_all_targets: false,
             ssh_font_size: ab_entry.ssh_font_size,
             ssh_color_scheme: ab_entry.ssh_color_scheme.clone(),
+            ssh_command: ab_entry.ssh_command.clone(),
             wol_send_packet: ab_entry.wol_send_packet,
             wol_mac_addr: ab_entry.wol_mac_addr,
             wol_broadcast_addr: ab_entry.wol_broadcast_addr,
@@ -9357,6 +9374,7 @@ mod tests {
             fence_all_targets: false,
             ssh_font_size: ab_entry.ssh_font_size,
             ssh_color_scheme: ab_entry.ssh_color_scheme.clone(),
+            ssh_command: ab_entry.ssh_command.clone(),
             wol_send_packet: ab_entry.wol_send_packet,
             wol_mac_addr: ab_entry.wol_mac_addr,
             wol_broadcast_addr: ab_entry.wol_broadcast_addr,
@@ -9476,7 +9494,7 @@ mod tests {
             "spice_proxy": "http://proxy:3128", "proxmox_url": "https://pve:8006",
             "proxmox_node": "pve1", "proxmox_vmid": 101, "proxmox_token_id": "u@pam!t",
             "proxmox_token_secret": "secret", "proxmox_verify_tls": true,
-            "max_monitors": 2, "ssh_font_size": 14, "wol_send_packet": true,
+            "max_monitors": 2, "ssh_font_size": 14, "ssh_command": "psql -h db -U alice app", "wol_send_packet": true,
             "wol_mac_addr": "00:11:22:33:44:55", "wol_broadcast_addr": "192.0.2.255",
             "wol_udp_port": 9, "wol_wait_time": 30, "external_id": "netbox:device:1"
             }),
@@ -11794,6 +11812,25 @@ mod tests {
             merged.effective(None).unwrap().hostname.as_deref(),
             Some("10.0.0.11")
         );
+    }
+
+    #[test]
+    fn an_ssh_command_is_checked_when_the_entry_is_saved() {
+        let flat = |c: &str| {
+            super::prepare_entry_body(entry(
+                json!({"type": "ssh", "hostname": "h", "ssh_command": c}),
+            ))
+        };
+        assert_eq!(
+            flat("psql -U alice app").unwrap().ssh_command.as_deref(),
+            Some("psql -U alice app")
+        );
+        assert!(flat("psql\nid").is_err());
+        let listed = super::prepare_entry_body(entry(json!({
+            "hostname": "h",
+            "protocols": [{"type": "ssh"}, {"type": "ssh", "name": "db", "ssh_command": "mysql\u{7}"}]
+        })));
+        assert!(listed.is_err(), "a protocol's command is checked too");
     }
 
     #[test]

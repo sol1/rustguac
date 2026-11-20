@@ -227,6 +227,10 @@ pub struct CreateSessionRequest {
     /// SSH terminal colours, one of `guacd::SSH_COLOR_SCHEMES`.
     #[serde(default)]
     pub ssh_color_scheme: Option<String>,
+    /// SSH: a command to run instead of the login shell; the session ends
+    /// when it exits.
+    #[serde(default)]
+    pub ssh_command: Option<String>,
     /// Wake-on-LAN: send a magic packet before connecting (SSH/RDP/VNC).
     pub wol_send_packet: Option<bool>,
     /// Wake-on-LAN: target MAC address.
@@ -1268,6 +1272,7 @@ impl SessionManager {
                         .ssh_font_size
                         .map(|s| s.clamp(MIN_SSH_FONT, MAX_SSH_FONT)),
                     color_scheme: ssh_color_scheme(req.ssh_color_scheme.as_deref())?,
+                    command: ssh_command(req.ssh_command.as_deref())?,
                     wol: wol.clone(),
                 });
                 (
@@ -3026,6 +3031,29 @@ fn checked_spice_ca(ca: Option<String>) -> Result<Option<String>, SessionError> 
 /// starting with '.' or '-' (which rules out `.` and `..`).
 /// An SSH colour scheme from a request: unset or blank for guacd's default,
 /// otherwise one of `guacd::SSH_COLOR_SCHEMES`.
+/// Longest `ssh_command` accepted.
+const MAX_SSH_COMMAND: usize = 4096;
+
+/// Check an SSH command to run instead of the login shell: blank is none, and
+/// it is one line of printable text (no control characters, so no newline
+/// that would run a second command), at most [`MAX_SSH_COMMAND`] bytes.
+pub(crate) fn ssh_command(command: Option<&str>) -> Result<Option<String>, SessionError> {
+    let Some(c) = command.map(str::trim).filter(|c| !c.is_empty()) else {
+        return Ok(None);
+    };
+    if c.len() > MAX_SSH_COMMAND {
+        return Err(SessionError::ValidationError(format!(
+            "ssh_command is at most {MAX_SSH_COMMAND} bytes"
+        )));
+    }
+    if c.chars().any(char::is_control) {
+        return Err(SessionError::ValidationError(
+            "ssh_command must be one line, without control characters".into(),
+        ));
+    }
+    Ok(Some(c.to_string()))
+}
+
 fn ssh_color_scheme(scheme: Option<&str>) -> Result<Option<String>, SessionError> {
     match scheme.map(str::trim) {
         None | Some("") => Ok(None),
@@ -3161,6 +3189,22 @@ pub(crate) fn check_share_token_match(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ssh_commands_are_one_printable_line() {
+        assert_eq!(ssh_command(None).unwrap(), None);
+        assert_eq!(ssh_command(Some("  ")).unwrap(), None);
+        assert_eq!(
+            ssh_command(Some(" psql -h db.internal -U alice appdb "))
+                .unwrap()
+                .as_deref(),
+            Some("psql -h db.internal -U alice appdb")
+        );
+        assert!(ssh_command(Some("psql\nrm -rf ~")).is_err(), "a newline");
+        assert!(ssh_command(Some("mysql\u{1b}[2J")).is_err(), "an escape");
+        assert!(ssh_command(Some(&"x".repeat(MAX_SSH_COMMAND + 1))).is_err());
+        assert!(ssh_command(Some(&"x".repeat(MAX_SSH_COMMAND))).is_ok());
+    }
+
     #[test]
     fn ssh_color_schemes_are_checked() {
         assert_eq!(ssh_color_scheme(None).unwrap(), None);

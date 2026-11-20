@@ -263,6 +263,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `banner` | string | All | Banner message shown before session starts |
 | `ssh_font_size` | integer | SSH | Terminal font size in points (default 12, 6 to 72) |
 | `ssh_color_scheme` | string | SSH | Terminal colours: `gray-black` (default), `white-black`, `green-black` or `black-white` (text on background) |
+| `ssh_command` | string | SSH | A command to run instead of the login shell, for example a database client (`psql -h db.internal -U alice appdb`). The session ends when it exits. One line, at most 4096 bytes |
 | `wol_send_packet` | boolean | SSH, RDP, VNC | Send a Wake-on-LAN magic packet before connecting |
 | `wol_mac_addr` | string | SSH, RDP, VNC | MAC address to wake (required with `wol_send_packet`) |
 | `wol_broadcast_addr` | string | SSH, RDP, VNC | Broadcast address for the packet (guacd default `255.255.255.255`) |
@@ -726,6 +727,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `login_script` | string | Web | Login script filename |
 | `display_name` | string | All | Friendly display name (shown as banner) |
 | `prompt_credentials` | boolean | All | Prompt user for credentials at connect time |
+| `ssh_command` | string | SSH | A command to run instead of the login shell; the session ends when it exits. Shown to everyone who can see the entry, so never put a password in it (a database client can prompt for one, or read it from the host, for example `~/.pgpass`) |
 | `jump_hosts` | array | All | Multi-hop SSH tunnel chain (same format as session creation) |
 | `external_id` | string | All | Stable id of the record the entry is synced from (the [NetBox webhook](netbox.md#create-webhook-device-createdupdated) sends `netbox:device:<id>`). What `PUT ...?move=true` matches on; never used to connect. Preserved on update when omitted. |
 | `protocols` | array | All | The ways to connect to the host, primary first, in place of `type` (see [Multi-protocol entries](#multi-protocol-entries)) |

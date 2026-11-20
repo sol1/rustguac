@@ -512,6 +512,12 @@ pub struct AddressBookEntry {
     /// `black-white`). None uses guacd's default, `gray-black`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_color_scheme: Option<String>,
+    /// SSH: a command to run instead of the login shell, for example a
+    /// database client (`psql -h db.internal -U alice appdb`). The session
+    /// ends when it exits. Shown to everyone who can see the entry, so never
+    /// a place for a password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_command: Option<String>,
     /// Wake-on-LAN: send a magic packet to wake the target before connecting.
     /// Passed through to guacd's `wol-send-packet` param (SSH/RDP/VNC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -766,6 +772,9 @@ pub struct EntryInfo {
     /// SSH terminal colour scheme (SSH only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_color_scheme: Option<String>,
+    /// SSH: the command run instead of the login shell (SSH only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_command: Option<String>,
     /// Wake-on-LAN: send a magic packet before connecting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wol_send_packet: Option<bool>,
@@ -918,6 +927,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             max_monitors: e.max_monitors,
             ssh_font_size: e.ssh_font_size,
             ssh_color_scheme: e.ssh_color_scheme.clone(),
+            ssh_command: e.ssh_command.clone(),
             wol_send_packet: e.wol_send_packet,
             wol_mac_addr: e.wol_mac_addr.clone(),
             wol_broadcast_addr: e.wol_broadcast_addr.clone(),

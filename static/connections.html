@@ -1047,6 +1047,12 @@
                         <option value="black-white">Black on white</option>
                     </select>
                 </label>
+                <div id="em-ssh-command-row">
+                <label>Command <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="text" id="em-ssh-command" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="psql -h db.internal -U alice appdb">
+                </label>
+                <div class="field-hint">Runs instead of the login shell, for example a database client; the session ends when it exits. Anyone who can see the entry can see it, so never put a password in it.</div>
+                </div>
                 <div class="entry-only">
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-ssh-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
@@ -4589,6 +4595,7 @@
             // SSH terminal font size is SSH-only
             document.getElementById('em-ssh-font-size').parentElement.style.display = val === 'ssh' ? '' : 'none';
             document.getElementById('em-ssh-color-row').style.display = val === 'ssh' ? '' : 'none';
+            document.getElementById('em-ssh-command-row').style.display = val === 'ssh' ? '' : 'none';
             // Wake-on-LAN applies to SSH/RDP/VNC (guacd passes the magic packet)
             document.getElementById('em-wol-section').style.display = (val === 'ssh' || val === 'rdp' || val === 'vnc') ? '' : 'none';
         });
@@ -5344,6 +5351,8 @@
                 if (fs > 0) entry.ssh_font_size = fs;
                 var cs = document.getElementById('em-ssh-color-scheme').value;
                 if (cs) entry.ssh_color_scheme = cs;
+                var cmd = document.getElementById('em-ssh-command').value.trim();
+                if (cmd) entry.ssh_command = cmd;
                 if (document.getElementById('em-ssh-prompt-creds').checked) entry.prompt_credentials = true;
             } else if (type === 'rdp') {
                 var h = document.getElementById('em-rdp-hostname').value.trim();
@@ -5576,6 +5585,7 @@
                     document.getElementById('em-username').value = entryData.username || '';
                     document.getElementById('em-ssh-font-size').value = entryData.ssh_font_size || '';
                     document.getElementById('em-ssh-color-scheme').value = entryData.ssh_color_scheme || '';
+                    document.getElementById('em-ssh-command').value = entryData.ssh_command || '';
                     document.getElementById('em-ssh-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'rdp') {
                     document.getElementById('em-rdp-hostname').value = entryData.hostname || '';
@@ -5848,6 +5858,7 @@
             document.getElementById('em-proxmox-verify-tls').checked = false;
             document.getElementById('em-ssh-font-size').value = '';
             document.getElementById('em-ssh-color-scheme').value = '';
+            document.getElementById('em-ssh-command').value = '';
             document.getElementById('em-wol-enabled').checked = false;
             document.getElementById('em-wol-mac').value = '';
             document.getElementById('em-wol-broadcast').value = '';

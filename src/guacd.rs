@@ -62,6 +62,7 @@ fn wol_arg_value(name: &str, w: &WolParams) -> Option<String> {
 }
 
 /// SSH connection parameters to pass to guacd.
+#[derive(Default)]
 pub struct SshParams {
     pub hostname: String,
     pub port: u16,
@@ -92,6 +93,8 @@ pub struct SshParams {
     pub font_size: Option<u32>,
     /// Terminal colours, one of `SSH_COLOR_SCHEMES` (default `gray-black`).
     pub color_scheme: Option<String>,
+    /// A command to run instead of the login shell (guacd's `command`).
+    pub command: Option<String>,
     /// Wake-on-LAN parameters.
     pub wol: WolParams,
 }
@@ -222,6 +225,60 @@ impl SpiceParams {
         } else {
             self.port
         }
+    }
+}
+
+/// The value guacd gets for one SSH connect argument.
+fn ssh_arg_value(name: &str, p: &SshParams) -> String {
+    match name {
+        "hostname" => p.hostname.clone(),
+        "port" => p.port.to_string(),
+        "username" => p.username.clone(),
+        "password" => p.password.clone().unwrap_or_default(),
+        "private-key" => p.private_key.clone().unwrap_or_default(),
+        "width" => p.width.to_string(),
+        "height" => p.height.to_string(),
+        "dpi" => p.dpi.to_string(),
+        "color-scheme" => p
+            .color_scheme
+            .clone()
+            .unwrap_or_else(|| SSH_COLOR_SCHEMES[0].into()),
+        "font-size" => p.font_size.unwrap_or(12).to_string(),
+        "font-name" => "monospace".into(),
+        "terminal-type" => "xterm-256color".into(),
+        "scrollback" => "1000".into(),
+        "backspace" => "127".into(),
+        "enable-sftp" => if p.enable_sftp { "true" } else { "false" }.into(),
+        "sftp-disable-download" => if p.sftp_disable_download {
+            "true"
+        } else {
+            "false"
+        }
+        .into(),
+        "sftp-disable-upload" => if p.sftp_disable_upload {
+            "true"
+        } else {
+            "false"
+        }
+        .into(),
+        "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
+        "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
+        "read-only" => "false".into(),
+        "locale" => "en_US.UTF-8".into(),
+        "server-alive-interval" => "0".into(),
+        "command" => p.command.clone().unwrap_or_default(),
+        "typescript-path" => p.typescript_path.clone().unwrap_or_default(),
+        "typescript-name" => p.typescript_name.clone().unwrap_or_default(),
+        "create-typescript-path" => if p.create_typescript_path {
+            "true"
+        } else {
+            "false"
+        }
+        .into(),
+        _ => wol_arg_value(name, &p.wol).unwrap_or_else(|| {
+            tracing::debug!("Unknown guacd SSH parameter '{}', sending empty", name);
+            String::new()
+        }),
     }
 }
 
@@ -446,56 +503,7 @@ pub async fn connect_and_handshake(
         .args
         .iter()
         .map(|name| match params {
-            ConnectionParams::Ssh(p) => match name.as_str() {
-                "hostname" => p.hostname.clone(),
-                "port" => p.port.to_string(),
-                "username" => p.username.clone(),
-                "password" => p.password.clone().unwrap_or_default(),
-                "private-key" => p.private_key.clone().unwrap_or_default(),
-                "width" => p.width.to_string(),
-                "height" => p.height.to_string(),
-                "dpi" => p.dpi.to_string(),
-                "color-scheme" => p
-                    .color_scheme
-                    .clone()
-                    .unwrap_or_else(|| SSH_COLOR_SCHEMES[0].into()),
-                "font-size" => p.font_size.unwrap_or(12).to_string(),
-                "font-name" => "monospace".into(),
-                "terminal-type" => "xterm-256color".into(),
-                "scrollback" => "1000".into(),
-                "backspace" => "127".into(),
-                "enable-sftp" => if p.enable_sftp { "true" } else { "false" }.into(),
-                "sftp-disable-download" => if p.sftp_disable_download {
-                    "true"
-                } else {
-                    "false"
-                }
-                .into(),
-                "sftp-disable-upload" => if p.sftp_disable_upload {
-                    "true"
-                } else {
-                    "false"
-                }
-                .into(),
-                "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
-                "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
-                "read-only" => "false".into(),
-                "locale" => "en_US.UTF-8".into(),
-                "server-alive-interval" => "0".into(),
-                "command" => String::new(),
-                "typescript-path" => p.typescript_path.clone().unwrap_or_default(),
-                "typescript-name" => p.typescript_name.clone().unwrap_or_default(),
-                "create-typescript-path" => if p.create_typescript_path {
-                    "true"
-                } else {
-                    "false"
-                }
-                .into(),
-                _ => wol_arg_value(name, &p.wol).unwrap_or_else(|| {
-                    tracing::debug!("Unknown guacd SSH parameter '{}', sending empty", name);
-                    String::new()
-                }),
-            },
+            ConnectionParams::Ssh(p) => ssh_arg_value(name.as_str(), p),
             ConnectionParams::Vnc(p) => vnc_arg_value(name.as_str(), p),
             ConnectionParams::Rdp(p) => match name.as_str() {
                 "hostname" => p.hostname.clone(),
@@ -881,6 +889,22 @@ mod tests {
         assert_eq!(vnc_arg_value("disable-display-resize", &vnc(false)), "true");
         assert_eq!(vnc_arg_value("disable-display-resize", &vnc(true)), "false");
         assert_eq!(vnc_arg_value("hostname", &vnc(false)), "192.0.2.10");
+    }
+
+    #[test]
+    fn ssh_command_is_sent_only_when_set() {
+        let mut p = SshParams {
+            hostname: "bastion".into(),
+            port: 22,
+            ..Default::default()
+        };
+        assert_eq!(ssh_arg_value("command", &p), "", "a login shell by default");
+        p.command = Some("psql -h db.internal -U alice appdb".into());
+        assert_eq!(
+            ssh_arg_value("command", &p),
+            "psql -h db.internal -U alice appdb"
+        );
+        assert_eq!(ssh_arg_value("hostname", &p), "bastion");
     }
 
     #[test]

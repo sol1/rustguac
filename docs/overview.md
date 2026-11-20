@@ -91,6 +91,8 @@ SFTP file transfer is available directly between the browser and the target SSH 
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach targets through bastion hosts.
 
+An entry's **Command** (`ssh_command`) runs a program instead of the login shell, and the session ends when it exits. For example, database access without a database protocol: an SSH entry to a bastion that has the clients installed, with the command `psql -h db.internal -U alice appdb` (or `mysql`, `sqlcmd`, `mongosh`, `sqlplus`). The SSH login comes from Vault as usual; the database password is typed at the client's prompt or read from the bastion (`~/.pgpass`, `~/.my.cnf`), never put in the command, which anyone who can see the entry can see. With typescript recording on, the whole session is recorded. A client's own shell escape (`\!` in `psql`) still reaches the bastion's shell, so if that matters, restrict the account on the bastion (for example with `ForceCommand` in `sshd_config`).
+
 ### RDP
 
 Connects guacd to a target RDP server. Supports username/password, domain, and various RDP settings (security mode, certificate ignore, display resize). Drive redirection provides file transfer via a per-session directory on the rustguac server. Optional printer redirection sends remote print jobs to the browser as PDF downloads by default. Set `rdp.printing_method = "trigger_print"` to open the browser's local print dialog without displaying the PDF. It uses a separate RDP device, does not require drive file transfer, and requires Ghostscript on the guacd host. An administrator must enable `rdp.allow_printing`.
