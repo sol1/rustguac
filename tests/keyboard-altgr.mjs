@@ -104,4 +104,39 @@ function keyboard(platform) {
     assert.deepEqual(press[2].map(hex).sort(), ['0xFFE3', '0xFFE9'].sort(), 'Ctrl+Alt+T keeps Ctrl and Alt');
 }
 
+// A dead key (#358). Edge 157 on Windows 11, French layout, AltGr+é then
+// Space for a tilde, as recorded by the reporter: the AltGr key comes as
+// Ctrl then AltGraph, and while AltGr is held the browser reports neither
+// Ctrl nor Alt, only the AltGraph state. The dead key itself is named after
+// the key's plain character, "é", with no keypress. Only the "~" that Space
+// composes may reach the server, not the "é".
+{
+    const { fire, sent } = keyboard('Win32');
+    fire('keydown', { key: 'Control', code: 'ControlLeft', keyCode: 17, location: 1, ctrlKey: true });
+    fire('keydown', { key: 'AltGraph', code: 'AltRight', keyCode: 18, location: 2, altGraph: true });
+    fire('keydown', { key: 'é', code: 'Digit2', keyCode: 50, altGraph: true });
+    fire('keyup', { key: 'é', code: 'Digit2', keyCode: 50, altGraph: true });
+    fire('keyup', { key: 'Control', code: 'ControlLeft', keyCode: 17, location: 1, altGraph: true });
+    fire('keyup', { key: 'AltGraph', code: 'AltRight', keyCode: 18, location: 2 });
+    fire('keydown', { key: '~', code: 'Space', keyCode: 32 });
+    fire('keypress', { key: '~', code: 'Space', charCode: 126, which: 126 });
+    fire('keyup', { key: ' ', code: 'Space', keyCode: 32 });
+
+    const typed = sent.filter(([dir, k]) => dir === 'down' && !MODIFIERS.has(k)).map(([, k]) => hex(k));
+    assert.deepEqual(typed, ['0x7E'], 'only the tilde is typed, not the dead key\'s plain character');
+}
+
+// The same AltGr held for a character that is not a dead key: the keypress
+// follows, and the character is sent.
+{
+    const { fire, sent } = keyboard('Win32');
+    fire('keydown', { key: 'Control', code: 'ControlLeft', keyCode: 17, location: 1, ctrlKey: true });
+    fire('keydown', { key: 'AltGraph', code: 'AltRight', keyCode: 18, location: 2, altGraph: true });
+    fire('keydown', { key: '@', code: 'Digit0', keyCode: 48, altGraph: true });
+    fire('keypress', { key: '@', code: 'Digit0', charCode: 64, which: 64, altGraph: true });
+    fire('keyup', { key: '@', code: 'Digit0', keyCode: 48, altGraph: true });
+    const typed = sent.filter(([dir, k]) => dir === 'down' && !MODIFIERS.has(k)).map(([, k]) => hex(k));
+    assert.deepEqual(typed, ['0x40'], 'AltGr+à still types @');
+}
+
 console.log('keyboard-altgr: ok');

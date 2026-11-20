@@ -193,6 +193,18 @@ Guacamole.Keyboard = function Keyboard(element) {
         this.location = orig ? getEventLocation(orig) : 0;
 
         /**
+         * rustguac (#358): whether AltGr alone was held, as the browser
+         * reports it: the AltGraph state with neither ctrlKey nor altKey set.
+         * (ModifierState counts AltGraph as Ctrl and Alt, so it cannot tell
+         * AltGr from a Ctrl+Alt shortcut.) Used to spot a dead key that Edge
+         * on Windows names after its plain character (see interpret_event).
+         *
+         * @type {!boolean}
+         */
+        this.altGraph = !!(orig && orig.getModifierState && orig.getModifierState('AltGraph')
+                && !orig.ctrlKey && !orig.altKey);
+
+        /**
          * The state of all local keyboard modifiers at the time this event was
          * received.
          *
@@ -1190,6 +1202,17 @@ Guacamole.Keyboard = function Keyboard(element) {
             else if (eventLog[1] instanceof KeypressEvent) {
                 keysym = eventLog[1].keysym;
                 accepted_events = eventLog.splice(0, 2);
+            }
+
+            // rustguac (#358): a printable key pressed with AltGr alone (not
+            // a Ctrl+Alt shortcut) that is followed by anything but a
+            // keypress typed nothing locally: it is a dead key. Edge on Windows names it after the key's plain character
+            // (AltGr+2 on a French layout comes as "é", not "Dead"), which
+            // would type that character on the server. Drop it; the composed
+            // character comes with the next key's keypress.
+            else if (eventLog[1] && first.altGraph && first.keysym && isPrintable(first.keysym)) {
+                keysym = null;
+                accepted_events = eventLog.splice(0, 1);
             }
 
             // If keydown is immediately followed by anything else, then no
