@@ -33,6 +33,9 @@ pub struct RecordingMeta {
     /// Session type (ssh, rdp, vnc, web).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_type: Option<String>,
+    /// Name of the entry protocol the session used (#296).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
 }
 
 /// Get the disk usage percentage for the filesystem containing `path`.

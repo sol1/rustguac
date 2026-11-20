@@ -12,8 +12,10 @@ Go to **Customization > Custom Fields** and create the following fields. Assign 
 |------|------|---------|-------------|
 | `console_enabled` | Boolean | false | Opt-in: enables remote console links on the device page |
 | `console_mode` | Selection: `addressbook`, `adhoc` | — | How to connect: via connections entry (Vault credentials) or ad-hoc (direct to IP) |
-| `remote_protocol` | Selection: `ssh`, `rdp`, `vnc`, `web` | — | Protocol for ad-hoc connections (connections entries have their own) |
-| `remote_port` | Integer | — | Port override for ad-hoc connections (leave blank for protocol default) |
+| `remote_protocol` | Selection: `ssh`, `rdp`, `vnc`, `web` | — | Protocol for ad-hoc connections, and the primary protocol of a synced entry |
+| `remote_port` | Integer | — | Port override for `remote_protocol` (leave blank for protocol default) |
+| `remote_protocols` | Multiple selection: `ssh`, `rdp`, `vnc`, `web` | — | Optional. More protocols for a synced entry, besides `remote_protocol` (see [Multi-protocol entries](#multi-protocol-entries)) |
+| `remote_ports` | JSON | — | Optional. Ports for protocols that do not use the standard one, e.g. `{"ssh": 2222, "web": 8443}` |
 
 The `console_enabled` field is the master switch — no links appear until it's checked. The `console_mode` field controls which link is shown:
 
@@ -44,6 +46,16 @@ https://console.example.com/api/connect?scope=shared&folder=production&entry={{ 
 ```
 
 Replace `production` with your connections folder name. The entry name must match the lowercase device name in Vault.
+
+The link opens the entry's primary protocol. To offer each protocol of a [multi-protocol entry](#multi-protocol-entries), add `&protocol=<name>` (the protocol's name, which is its type unless it was given another, e.g. `ssh`). Create one Custom Link per protocol with the same **Group name** (e.g. `Console`), and NetBox shows them as one Console dropdown:
+
+| Name | Group name | Link text | Link URL ends in |
+|------|-----------|-----------|------------------|
+| Console SSH | Console | `{% if object.cf.console_enabled and object.cf.console_mode == 'addressbook' and ('ssh' == (object.cf.remote_protocol or 'ssh') or 'ssh' in (object.cf.remote_protocols or [])) %}SSH{% endif %}` | `&protocol=ssh` |
+| Console RDP | Console | same, with `'rdp'` | `&protocol=rdp` |
+| Console Web | Console | same, with `'web'` | `&protocol=web` |
+
+A link naming a protocol the entry does not have says so.
 
 ### Link 2: Ad-hoc SSH (blue outline)
 
@@ -147,7 +159,7 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
      ```
      Authorization: Bearer <admin-api-key>
      ```
-   - Body template:
+   - Body template (one protocol per device; see [Multi-protocol entries](#multi-protocol-entries) for the template that syncs several):
      ```json
      {
        "type": "{{ data.custom_fields.remote_protocol | default('ssh') }}",
@@ -170,6 +182,57 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
      **Upgrading from the older `POST` webhook.** `POST` writes the whole entry on every create or update, so a password added by hand to a synced entry was lost on the next sync. Switch both the URL and the method to the template above. Entries the old webhook made have no `external_id` yet; each one takes it on its device's next update, as long as it is still at the same folder and name. If the device has already been moved or renamed in NetBox, it gets a new entry and the old one is left for you to remove.
 
      The first time a device is seen, rustguac reads every entry in the scope to look for its `external_id`, so a first sync of thousands of devices at once is slow. Updates to a device already in place need no scan.
+
+### Multi-protocol entries
+
+An entry can offer several ways into one device, for example RDP, SSH and its web UI, each with its own port and, if needed, credentials. `remote_protocol` stays the primary protocol (what the plain Console link opens) and `remote_port` its port. Add the optional `remote_protocols` and `remote_ports` custom fields from the table above, and use this body template instead of the one above:
+
+```jinja
+{%- set ip = data.primary_ip4.address.split('/')[0] -%}
+{%- set primary = data.custom_fields.remote_protocol or 'ssh' -%}
+{%- set ports = data.custom_fields.remote_ports or {} -%}
+{%- set extra = data.custom_fields.remote_protocols or [] -%}
+{%- macro proto(p, port) -%}
+{"type": "{{ p }}"
+{%- if p == 'web' %}, "url": "https://{{ ip }}{% if port %}:{{ port }}{% endif %}/"
+{%- elif port %}, "port": {{ port }}{% endif %}}
+{%- endmacro -%}
+{
+  "hostname": "{{ ip }}",
+  "display_name": "{{ data.name }} ({{ data.site.name }})",
+  "prompt_credentials": true,
+  "external_id": "netbox:device:{{ data.id }}",
+  "protocols": [
+    {{ proto(primary, data.custom_fields.remote_port or ports.get(primary)) }}
+    {%- for p in extra if p != primary %},
+    {{ proto(p, ports.get(p)) }}
+    {%- endfor %}
+  ]
+}
+```
+
+For a device with `remote_protocol: rdp`, `remote_protocols: [ssh, web]` and `remote_ports: {"ssh": 2222, "web": 8443}` it renders:
+
+```json
+{
+  "hostname": "10.0.0.9",
+  "display_name": "fw01 (DC1)",
+  "prompt_credentials": true,
+  "external_id": "netbox:device:42",
+  "protocols": [
+    {"type": "rdp"},
+    {"type": "ssh", "port": 2222},
+    {"type": "web", "url": "https://10.0.0.9:8443/"}
+  ]
+}
+```
+
+- The host fields (`hostname`, `display_name`, `prompt_credentials`, `external_id`) apply to every protocol. A protocol without a port uses its type's standard one (SSH 22, RDP 3389, VNC 5900); a web protocol gets a URL instead.
+- A device without the new fields renders a single `{"type": "ssh"}` (or its `remote_protocol`), which is stored exactly as the single-protocol template stores it, so you can switch templates without touching existing entries.
+- Passwords and keys stored on an entry are kept per protocol on every sync, matched by protocol name, and so are any host-level ones.
+- The body is the whole list of protocols: a protocol added to a synced entry by hand in rustguac is removed on the device's next sync. Add it in NetBox instead (`remote_protocols`).
+- The single-protocol template above keeps working unchanged. It is the same as a one-item `protocols` list.
+- Every rustguac instance that shares the Vault must be on a version that knows multi-protocol entries before any device gets a second protocol: older versions cannot read such an entry and leave it out (see [Migration](migration.md)).
 
 ### Create webhook: device deleted
 
@@ -214,7 +277,7 @@ Both NetBox and rustguac support OIDC authentication. When configured with the s
 
 1. Configure rustguac with OIDC (see [Integrations > OIDC](integrations.md))
 2. Configure NetBox with the same OIDC provider
-3. Create the four custom fields (`console_enabled`, `console_mode`, `remote_protocol`, `remote_port`)
+3. Create the four custom fields (`console_enabled`, `console_mode`, `remote_protocol`, `remote_port`), plus `remote_protocols` and `remote_ports` for multi-protocol entries
 4. Create the two Custom Links (Console green, Quick SSH blue)
 5. On devices you want to enable: check `console_enabled`, set `console_mode`
 6. For connections mode: ensure matching entries exist in Vault (manually or via webhook sync)
