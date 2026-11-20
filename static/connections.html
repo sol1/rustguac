@@ -919,7 +919,7 @@
             </div>
             <details class="fm-defaults" id="fm-defaults">
                 <summary>Default credentials</summary>
-                <div class="field-hint">Lent to entries in this folder that have no password or key of their own, per session type, so an entry created without secrets (a NetBox webhook, an import) connects straight away. An entry's own credentials always win; subfolders inherit per type, but only those that inherit permissions from this folder and share it with nobody extra. A web entry's default password is typed into the page, where the user can read it. Secrets are write-only: leave a field blank to keep what is stored, tick clear to drop a type.</div>
+                <div class="field-hint">Lent to entries in this folder that have no password or key of their own, per session type, so an entry created without secrets (a NetBox webhook, an import) connects straight away. An entry's own credentials always win; subfolders inherit per type, but only those that inherit permissions from this folder and share it with nobody extra. A web entry's default password is typed into the page, where the user can read it. Secrets are write-only: leave a field blank to keep what is stored, tick clear to drop a type. Tick <em>for $variables</em> to also connect entries that use credential variables with these when the user has set none of their own; a user who has set some is asked for the rest.</div>
                 <table class="fm-defaults-table">
                     <tbody id="fm-defaults-rows"></tbody>
                 </table>
@@ -3289,6 +3289,8 @@
             // Across every protocol the user may use (#296).
             var vars = [];
             ((e.protocols && e.protocols.length) ? e.protocols : [e]).forEach(function(p) {
+                // Covered by the folder's defaults until the user sets their own (#297).
+                if (p.variables_fallback) return;
                 (p.credential_variables || []).forEach(function(v) { if (vars.indexOf(v) < 0) vars.push(v); });
             });
             return vars.filter(function(v) { return !setCredVars.has(v); });
@@ -3568,6 +3570,7 @@
                 var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
                 if (needsPrompt) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials will be prompted at connect time">[prompt]</span>';
                 if (e.inherited_credentials) userCol += ' <span style="color:#888;font-size:0.8em" title="Uses the folder\'s default credentials">[folder]</span>';
+                else if (e.variables_fallback) userCol += ' <span style="color:#888;font-size:0.8em" title="Uses the folder\'s default credentials until you set your own in My Credentials">[folder]</span>';
                 html += '<td>' + userCol + '</td>';
                 var connectLabel = needsPrompt ? 'Login...' : 'Connect';
                 var protoAttr = e.protocol ? ' data-protocol="' + escapeAttr(e.protocol) + '"' : '';
@@ -4389,6 +4392,7 @@
                         : t === 'rdp'
                         ? '<input class="fmd-domain" placeholder="domain" autocomplete="off" value="' + escapeAttr((d && d.domain) || '') + '">'
                         : '') + '</td>' +
+                    '<td><label class="fmd-clear-label" title="Also use these for entries with credential variables, when the user has set none of them"><input type="checkbox" class="fmd-cover"' + (d && d.cover_variables ? ' checked' : '') + '> for $variables</label></td>' +
                     '<td><label class="fmd-clear-label"><input type="checkbox" class="fmd-clear"> clear</label></td></tr>');
             });
             document.getElementById('fm-defaults').open = any;
@@ -4414,6 +4418,8 @@
                 if (pass) part.password = pass;
                 var keyEl = tr.querySelector('.fmd-key');
                 if (keyEl && keyEl.value.trim()) part.private_key = keyEl.value.trim();
+                var cover = tr.querySelector('.fmd-cover').checked;
+                if (cover !== !!(d && d.cover_variables)) part.cover_variables = cover;
                 if (Object.keys(part).length) patch[t] = part;
             });
             return patch;

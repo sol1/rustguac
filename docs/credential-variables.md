@@ -170,6 +170,25 @@ Entries covered by defaults list with `has_credentials: true` and `inherited_cre
 
 A default password or username can be a credential variable such as `$tenant_password`. Defaults are applied before variables are resolved, so each user connects with their own value from My Credentials. The "credentials needed" marker in Connections only checks an entry's own fields, so it won't flag a variable that comes from a folder default.
 
+### Covering entries that use credential variables
+
+An entry whose credentials are variables (`$acme_username`, `$acme_password`) counts as having its own, so plain defaults never reach it: a user who hasn't set the variables is asked for them. A folder can opt in, per session type, to cover such entries too: tick **for $variables** on that type in the folder's default credentials (`"cover_variables": true` in the API). Then, at connect:
+
+1. A user who has set every variable the entry uses connects as themselves, as before.
+2. A user who has set **none** of them connects with the folder's default credentials for the entry's type.
+3. A user who has set some but not all is asked for the rest, as before. Their username is never paired with the folder's password, or the other way round.
+
+The defaults are the same ones a bare entry in that folder would get, through the same inheritance and the same `inherit_from_parent` boundary, so the fallback cannot reach anyone the defaults could not already reach. It does not apply when:
+
+- the entry is set to prompt for credentials;
+- the entry uses a variable in a field defaults cannot fill (RD Gateway or container credentials);
+- the entry has a literal password or key of its own beside its variables;
+- the defaults for its type are themselves variables, or have no password or key.
+
+A literal username on the entry stays its own, as for a bare entry. Covered entries list with `variables_fallback: true` and show `[folder]` in Connections instead of "credentials needed". A connect that uses the fallback is logged with `credential_source="folder_defaults"`, so you can see when the shared account was used.
+
+This suits a folder per customer with a shared service account: engineers who have their own named account for that customer set the variables and connect as themselves, and everyone else connects with the service account, from one entry per host.
+
 ### Inheritance and the `inherit_from_parent` boundary
 
 A subfolder without its own `.defaults` uses its nearest ancestor's, per session type: the nearest folder on the path wins for each type, and a type it lacks comes from the next folder up.

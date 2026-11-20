@@ -787,8 +787,8 @@ The folder's default credentials, secrets stripped. These are lent to entries in
 ```json
 {
   "defaults": {
-    "ssh": { "username": "root", "domain": null, "has_password": false, "has_private_key": true },
-    "web": { "username": null, "domain": null, "has_password": true, "has_private_key": false }
+    "ssh": { "username": "root", "domain": null, "has_password": false, "has_private_key": true, "cover_variables": false },
+    "web": { "username": null, "domain": null, "has_password": true, "has_private_key": false, "cover_variables": false }
   }
 }
 ```
@@ -806,6 +806,8 @@ Set default credentials per session type. Types not mentioned keep what is store
   "rdp": null
 }
 ```
+
+`"cover_variables": true` on a type also lends it to entries that use credential variables when the connecting user has set none of them; see [Covering entries that use credential variables](credential-variables.md#covering-entries-that-use-credential-variables).
 
 Returns the same summary as `GET`. A type left with nothing in it is dropped; a folder left with no types loses its defaults entirely. Audited as `update_folder_defaults`.
 

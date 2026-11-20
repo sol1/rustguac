@@ -3142,6 +3142,7 @@ fn folder_defaults_summary(d: &crate::vault::FolderDefaults) -> serde_json::Valu
                 "domain": c.domain,
                 "has_password": c.password.as_deref().is_some_and(|p| !p.is_empty()),
                 "has_private_key": c.private_key.as_deref().is_some_and(|k| !k.is_empty()),
+                "cover_variables": c.cover_variables,
             }),
         );
     }
@@ -3186,6 +3187,9 @@ pub struct DefaultCredentialsPatch {
     pub private_key: Option<String>,
     #[serde(default)]
     pub domain: Option<String>,
+    /// Also stand in for unset credential variables (#297).
+    #[serde(default)]
+    pub cover_variables: Option<bool>,
 }
 
 /// PUT /api/addressbook/folders/:scope/:folder/defaults — admin only.
@@ -3290,6 +3294,9 @@ pub async fn ab_put_folder_defaults(
                 }
                 if let Some(k) = p.private_key {
                     c.private_key = non_empty(k);
+                }
+                if let Some(v) = p.cover_variables {
+                    c.cover_variables = v;
                 }
             }
         }
@@ -3399,6 +3406,49 @@ async fn lend_folder_defaults<S: DefaultsSource>(
         Err(err) => tracing::warn!("Failed to read folder defaults from Vault: {}", err),
     }
     ab_entry
+}
+
+/// #297: an entry using credential variables whose user has set none of
+/// them connects with the folder's default credentials instead of asking,
+/// when the folder allows it for the entry's type (`cover_variables`). The
+/// defaults are the same ones a bare entry would get, by the same walk and
+/// access boundary (`lend_folder_defaults`). A user who has set some of the
+/// variables is asked for the rest, never given a mix of theirs and the
+/// folder's. `None` to ask as before; a Vault error also asks.
+async fn defaults_for_unset_variables<S: DefaultsSource>(
+    src: &S,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    ab_entry: &AddressBookEntry,
+    missing: &[String],
+) -> Option<AddressBookEntry> {
+    let all: std::collections::BTreeSet<String> =
+        crate::vault::entry_credential_variables(ab_entry)
+            .into_iter()
+            .collect();
+    let missing: std::collections::BTreeSet<String> = missing.iter().cloned().collect();
+    if all.is_empty() || missing != all {
+        return None;
+    }
+    match crate::vault::resolve_effective_defaults(src, scope, folder).await {
+        Ok(Some(d)) => {
+            let e = crate::vault::defaults_for_variables(ab_entry, &d)?;
+            tracing::info!(
+                scope,
+                folder,
+                entry,
+                credential_source = "folder_defaults",
+                "credential variables unset: connecting with the folder's default credentials"
+            );
+            Some(e)
+        }
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!("Failed to read folder defaults from Vault: {}", err);
+            None
+        }
+    }
 }
 
 // ── Address book change log ──
@@ -4550,14 +4600,28 @@ pub async fn ab_connect_entry(
                     match crate::vault::resolve_credential_variables(&ab_entry, &user_creds) {
                         Ok(resolved) => resolved,
                         Err(missing) => {
-                            return (
-                                StatusCode::PRECONDITION_FAILED,
-                                Json(json!({
-                                    "error": "missing credential variables",
-                                    "missing_variables": missing,
-                                })),
+                            match defaults_for_unset_variables(
+                                vault.as_ref(),
+                                &scope,
+                                &folder,
+                                &entry,
+                                &ab_entry,
+                                &missing,
                             )
-                                .into_response()
+                            .await
+                            {
+                                Some(e) => e,
+                                None => {
+                                    return (
+                                        StatusCode::PRECONDITION_FAILED,
+                                        Json(json!({
+                                            "error": "missing credential variables",
+                                            "missing_variables": missing,
+                                        })),
+                                    )
+                                        .into_response()
+                                }
+                            }
                         }
                     }
                 }
@@ -4567,7 +4631,12 @@ pub async fn ab_connect_entry(
                 }
             }
         } else {
-            ab_entry // API key users — no variable resolution
+            // An API key has no variables of its own: the folder's defaults
+            // may stand in, as for a user who has set none.
+            let all = crate::vault::entry_credential_variables(&ab_entry);
+            defaults_for_unset_variables(vault.as_ref(), &scope, &folder, &entry, &ab_entry, &all)
+                .await
+                .unwrap_or(ab_entry)
         }
     } else {
         ab_entry
@@ -8103,13 +8172,27 @@ pub async fn quick_connect(
                         match crate::vault::resolve_credential_variables(&ab_entry, &user_creds) {
                             Ok(resolved) => resolved,
                             Err(missing) => {
-                                return quick_connect_error(
-                                    StatusCode::PRECONDITION_FAILED,
-                                    &format!(
-                                        "Missing credential variables: {}. Set them in My Credentials.",
-                                        missing.join(", ")
-                                    ),
-                                );
+                                match defaults_for_unset_variables(
+                                    vault.as_ref(),
+                                    scope,
+                                    folder,
+                                    entry,
+                                    &ab_entry,
+                                    &missing,
+                                )
+                                .await
+                                {
+                                    Some(e) => e,
+                                    None => {
+                                        return quick_connect_error(
+                                            StatusCode::PRECONDITION_FAILED,
+                                            &format!(
+                                                "Missing credential variables: {}. Set them in My Credentials.",
+                                                missing.join(", ")
+                                            ),
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -8119,7 +8202,10 @@ pub async fn quick_connect(
                     }
                 }
             } else {
-                ab_entry
+                let all = crate::vault::entry_credential_variables(&ab_entry);
+                defaults_for_unset_variables(vault.as_ref(), scope, folder, entry, &ab_entry, &all)
+                    .await
+                    .unwrap_or(ab_entry)
             }
         } else {
             ab_entry
@@ -11167,6 +11253,71 @@ mod tests {
             },
         );
         d
+    }
+
+    #[tokio::test]
+    async fn unset_variables_fall_back_to_folder_defaults_all_or_nothing() {
+        let mut corp = defaults_with_ssh_key("corp-key");
+        corp.get_mut("ssh").unwrap().cover_variables = true;
+        let src = FakeDefaultsSource {
+            defaults: [("corp".to_string(), corp)].into_iter().collect(),
+            inherit: ["corp/linux"].into_iter().map(String::from).collect(),
+        };
+        let vars = AddressBookEntry {
+            session_type: "ssh".into(),
+            hostname: Some("10.0.0.1".into()),
+            username: Some("$corp_user".into()),
+            private_key: Some("$corp_key".into()),
+            ..Default::default()
+        };
+        let all = vec!["corp_user".to_string(), "corp_key".to_string()];
+
+        // The user has set none: the folder's key, through the inheriting subfolder.
+        let e =
+            super::defaults_for_unset_variables(&src, "shared", "corp/linux", "box", &vars, &all)
+                .await
+                .unwrap();
+        assert_eq!(e.private_key.as_deref(), Some("corp-key"));
+        assert_eq!(e.username.as_deref(), Some("root"));
+        // The user has set one of the two: asked for the other, never mixed.
+        assert!(super::defaults_for_unset_variables(
+            &src,
+            "shared",
+            "corp/linux",
+            "box",
+            &vars,
+            &all[..1]
+        )
+        .await
+        .is_none());
+        // Not across the boundary an isolated subfolder draws.
+        assert!(super::defaults_for_unset_variables(
+            &src,
+            "shared",
+            "corp/guests",
+            "box",
+            &vars,
+            &all
+        )
+        .await
+        .is_none());
+        // Not when the folder has not opted in.
+        let off = FakeDefaultsSource {
+            defaults: [("corp".to_string(), defaults_with_ssh_key("corp-key"))]
+                .into_iter()
+                .collect(),
+            inherit: ["corp/linux"].into_iter().map(String::from).collect(),
+        };
+        assert!(super::defaults_for_unset_variables(
+            &off,
+            "shared",
+            "corp/linux",
+            "box",
+            &vars,
+            &all
+        )
+        .await
+        .is_none());
     }
 
     #[tokio::test]

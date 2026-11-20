@@ -106,6 +106,12 @@ pub struct DefaultCredentials {
     pub private_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Also lend these to entries that use credential variables, when the
+    /// connecting user has set none of the entry's variables (#297). Off
+    /// unless a folder turns it on, so an unset variable still prompts by
+    /// default instead of connecting with a shared account.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cover_variables: bool,
 }
 
 impl DefaultCredentials {
@@ -158,6 +164,50 @@ pub fn apply_folder_defaults(entry: &mut AddressBookEntry, defaults: &FolderDefa
     entry.password = d.password.clone().filter(|p| !p.is_empty());
     entry.private_key = d.private_key.clone().filter(|k| !k.is_empty());
     true
+}
+
+/// The entry `e` would be with folder defaults standing in for its credential
+/// variables (#297), when they may: the defaults for its type have a secret
+/// and `cover_variables` set, the entry is not set to prompt, its variables
+/// are all in fields a default can fill (username, password, domain, private
+/// key), and once they are taken out it has no secret of its own (so the
+/// default's password is never paired with a literal one, or the other way
+/// round). `None` otherwise, including for an entry with no variables. The
+/// caller decides that the user has set none of them: a user who has set
+/// some is asked for the rest, never given a mix of theirs and the folder's.
+pub fn defaults_for_variables(
+    e: &AddressBookEntry,
+    defaults: &FolderDefaults,
+) -> Option<AddressBookEntry> {
+    if entry_credential_variables(e).is_empty() || e.prompt_credentials == Some(true) {
+        return None;
+    }
+    let d = defaults.get(&e.session_type)?;
+    if !d.cover_variables || !d.has_secret() {
+        return None;
+    }
+    let mut out = e.clone();
+    for f in [
+        &mut out.username,
+        &mut out.password,
+        &mut out.domain,
+        &mut out.private_key,
+    ] {
+        if f.as_deref().is_some_and(is_credential_variable) {
+            *f = None;
+        }
+    }
+    // A variable left in a field a default cannot fill (an RD Gateway or
+    // container credential): the defaults do not cover this entry.
+    if !entry_credential_variables(&out).is_empty() {
+        return None;
+    }
+    if !apply_folder_defaults(&mut out, defaults) {
+        return None;
+    }
+    // Defaults that are themselves variables (`$tenant_password`) cannot stand
+    // in for the user's: the fallback is for a shared account.
+    entry_credential_variables(&out).is_empty().then_some(out)
 }
 
 /// What the defaults walk reads per folder: its own `.defaults`, and whether
@@ -629,6 +679,11 @@ pub struct EntryInfo {
     /// the entry itself. Omitted when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub inherited_credentials: bool,
+    /// True when the folder's defaults stand in for this entry's credential
+    /// variables while the user has set none of them (#297), so unset
+    /// variables are optional, not "credentials needed". Omitted when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub variables_fallback: bool,
     /// VNC color depth.
     pub color_depth: Option<u8>,
     /// SSH tunnel jump hosts (no credentials exposed).
@@ -819,6 +874,9 @@ impl EntryInfo {
     /// Mark an entry as connectable through folder defaults when it has no
     /// secret of its own and the defaults cover its session type.
     pub fn apply_inherited(&mut self, e: &AddressBookEntry, defaults: Option<&FolderDefaults>) {
+        if defaults.is_some_and(|d| defaults_for_variables(e, d).is_some()) {
+            self.variables_fallback = true;
+        }
         // An entry with secrets of its own, or one set to prompt, never uses
         // the folder's, so it must not be labelled as if it did.
         if self.has_credentials || !entry_takes_folder_defaults(e) {
@@ -874,6 +932,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             prompt_credentials: e.prompt_credentials,
             has_credentials: entry_has_own_credentials(e),
             inherited_credentials: false,
+            variables_fallback: false,
             color_depth: e.color_depth,
             jump_hosts,
             remote_app: e.remote_app.clone(),
@@ -3685,6 +3744,78 @@ mod tests {
             !cfg(false, &[], &[]).shares_parent_audience(),
             "an isolated folder takes nothing from its parent"
         );
+    }
+
+    #[test]
+    fn folder_defaults_stand_in_for_variables_only_when_allowed() {
+        let mut defaults = FolderDefaults::new();
+        defaults.insert(
+            "rdp".into(),
+            DefaultCredentials {
+                username: Some("svc-acme".into()),
+                password: Some("svc-pw".into()),
+                domain: Some("ACME".into()),
+                cover_variables: true,
+                ..Default::default()
+            },
+        );
+        let e = |v: serde_json::Value| -> AddressBookEntry { serde_json::from_value(v).unwrap() };
+        let vars = e(serde_json::json!({"type": "rdp", "hostname": "h",
+            "username": "$acme_username", "password": "$acme_password", "domain": "$acme_domain"}));
+
+        let got = defaults_for_variables(&vars, &defaults).unwrap();
+        assert_eq!(got.username.as_deref(), Some("svc-acme"));
+        assert_eq!(got.password.as_deref(), Some("svc-pw"));
+        assert_eq!(got.domain.as_deref(), Some("ACME"));
+        assert!(entry_credential_variables(&got).is_empty());
+
+        // Off unless the folder turns it on.
+        let mut off = defaults.clone();
+        off.get_mut("rdp").unwrap().cover_variables = false;
+        assert!(defaults_for_variables(&vars, &off).is_none());
+        // A prompting entry still prompts.
+        let mut prompting = vars.clone();
+        prompting.prompt_credentials = Some(true);
+        assert!(defaults_for_variables(&prompting, &defaults).is_none());
+        // No defaults for the type.
+        let ssh = e(serde_json::json!({"type": "ssh", "hostname": "h", "password": "$p"}));
+        assert!(defaults_for_variables(&ssh, &defaults).is_none());
+        // A literal password with a variable username: never paired.
+        let literal = e(serde_json::json!({"type": "rdp", "hostname": "h",
+            "username": "$acme_username", "password": "own"}));
+        assert!(defaults_for_variables(&literal, &defaults).is_none());
+        // A variable a default cannot fill (the gateway's).
+        let gw = e(serde_json::json!({"type": "rdp", "hostname": "h",
+            "password": "$acme_password", "gateway_password": "$gw_password"}));
+        assert!(defaults_for_variables(&gw, &defaults).is_none());
+        // A literal username stays the entry's own, as for a bare entry.
+        let named = e(serde_json::json!({"type": "rdp", "hostname": "h",
+            "username": "Administrator", "password": "$acme_password"}));
+        assert_eq!(
+            defaults_for_variables(&named, &defaults)
+                .unwrap()
+                .username
+                .as_deref(),
+            Some("Administrator")
+        );
+        // Defaults that are variables themselves cannot stand in.
+        let mut var_defaults = defaults.clone();
+        var_defaults.get_mut("rdp").unwrap().password = Some("$tenant_password".into());
+        assert!(defaults_for_variables(&vars, &var_defaults).is_none());
+        // No variables: not this path (plain folder defaults handle it).
+        let bare = e(serde_json::json!({"type": "rdp", "hostname": "h"}));
+        assert!(defaults_for_variables(&bare, &defaults).is_none());
+
+        // The listing says so, so the UI does not ask for the variables.
+        let mut info = EntryInfo::from(("box", &vars));
+        info.apply_inherited(&vars, Some(&defaults));
+        assert!(info.variables_fallback);
+        let mut info = EntryInfo::from(("box", &vars));
+        info.apply_inherited(&vars, Some(&off));
+        assert!(!info.variables_fallback);
+        // And the flag is stored only when on.
+        let stored = serde_json::to_value(&off["rdp"]).unwrap();
+        assert!(stored.get("cover_variables").is_none());
     }
 
     #[test]
