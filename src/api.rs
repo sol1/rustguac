@@ -4691,7 +4691,9 @@ pub async fn ab_connect_entry(
         protocol: protocol_name.clone(),
         session_type: ab_entry.session_type.clone(),
         hostname: ab_entry.hostname.clone(),
-        port: ab_entry.port,
+        port: ab_entry
+            .port
+            .or_else(|| crate::preconnect::standard_port(&ab_entry.session_type)),
         user: id.display_name().to_string(),
     };
     let pre_connect_script = ab_entry.pre_connect_script.clone();
@@ -8322,7 +8324,9 @@ pub async fn quick_connect(
             protocol: protocol_name.clone(),
             session_type: ab_entry.session_type.clone(),
             hostname: ab_entry.hostname.clone(),
-            port: ab_entry.port,
+            port: ab_entry
+                .port
+                .or_else(|| crate::preconnect::standard_port(&ab_entry.session_type)),
             user: id.display_name().to_string(),
         };
         let pre_connect_script = ab_entry.pre_connect_script.clone();

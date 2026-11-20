@@ -32,6 +32,18 @@ pub struct PreConnectInfo {
     pub user: String,
 }
 
+/// The port a session type connects to when the entry sets none, as
+/// `SessionManager::create_session` fills it in. `None` for types without one
+/// (web, VDI, Proxmox).
+pub fn standard_port(session_type: &str) -> Option<u16> {
+    match session_type {
+        "ssh" => Some(22),
+        "rdp" => Some(3389),
+        "vnc" | "spice" => Some(5900),
+        _ => None,
+    }
+}
+
 /// A script name as an entry may give it: a plain file name, no path, not
 /// hidden.
 pub fn valid_script_name(name: &str) -> bool {
@@ -209,6 +221,14 @@ mod tests {
         let d = std::env::temp_dir().join(format!("rustguac-preconnect-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn an_unset_port_is_the_protocols_standard_one() {
+        assert_eq!(standard_port("ssh"), Some(22));
+        assert_eq!(standard_port("rdp"), Some(3389));
+        assert_eq!(standard_port("vnc"), Some(5900));
+        assert_eq!(standard_port("web"), None);
     }
 
     #[test]

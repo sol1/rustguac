@@ -809,7 +809,7 @@ In the entry editor, pick the script under **Before connecting, run** (`pre_conn
 
 ### What the script gets
 
-- **stdin:** JSON with `scope`, `folder`, `entry`, `protocol`, `session_type`, `hostname`, `port` and `user` (who is connecting). Never the entry's credentials.
+- **stdin:** JSON with `scope`, `folder`, `entry`, `protocol`, `session_type`, `hostname`, `port` (the entry's, or the protocol's standard port when it sets none: 22, 3389, 5900) and `user` (who is connecting). Never the entry's credentials.
 - **Environment:** the same as `RUSTGUAC_SCOPE`, `RUSTGUAC_FOLDER`, `RUSTGUAC_ENTRY`, `RUSTGUAC_PROTOCOL`, `RUSTGUAC_SESSION_TYPE`, `RUSTGUAC_HOSTNAME`, `RUSTGUAC_PORT` and `RUSTGUAC_USER`, plus `PATH`, `LANG` and `HOME`. Nothing else of rustguac's environment is passed on (it holds secrets such as `VAULT_SECRET_ID`), so a script that needs an API token reads it from a file of its own.
 - It runs as the `rustguac` user, in its own process group, from the scripts directory.
 
