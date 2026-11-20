@@ -560,6 +560,15 @@ pub struct Config {
     #[serde(default = "default_login_scripts_dir")]
     pub login_scripts_dir: String,
 
+    /// Where pre-connect scripts live (#329). An entry names one; only
+    /// executables in this directory can run.
+    #[serde(default = "default_pre_connect_scripts_dir")]
+    pub pre_connect_scripts_dir: String,
+
+    /// How long a pre-connect script may run before the connection fails.
+    #[serde(default = "default_pre_connect_timeout_secs")]
+    pub pre_connect_timeout_secs: u64,
+
     #[serde(default = "default_site_title")]
     pub site_title: String,
 
@@ -1331,6 +1340,14 @@ fn default_login_scripts_dir() -> String {
     "/opt/rustguac/scripts".into()
 }
 
+fn default_pre_connect_scripts_dir() -> String {
+    "/opt/rustguac/pre-connect".into()
+}
+
+fn default_pre_connect_timeout_secs() -> u64 {
+    120
+}
+
 fn default_site_title() -> String {
     "rustguac".into()
 }
@@ -1358,6 +1375,8 @@ impl Default for Config {
             cdp_port_range_end: default_cdp_port_range_end(),
             login_script_timeout_secs: default_login_script_timeout_secs(),
             login_scripts_dir: default_login_scripts_dir(),
+            pre_connect_scripts_dir: default_pre_connect_scripts_dir(),
+            pre_connect_timeout_secs: default_pre_connect_timeout_secs(),
             site_title: default_site_title(),
             ssh_allowed_networks: default_localhost_networks(),
             rdp_allowed_networks: default_localhost_networks(),

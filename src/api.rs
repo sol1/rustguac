@@ -742,6 +742,47 @@ pub async fn list_login_scripts(
     Json(json!({ "scripts": scripts })).into_response()
 }
 
+/// GET /api/pre-connect-scripts — The scripts an entry may run before
+/// connecting (#329): the executables in `pre_connect_scripts_dir`. For the
+/// entry editor, so connection editors only.
+pub async fn list_pre_connect_scripts(
+    State(manager): State<AppState>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> impl IntoResponse {
+    if !identity
+        .as_ref()
+        .is_some_and(|Extension(id)| id.has_perm(Perm::ConnectionsEdit))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "connections.edit required"})),
+        )
+            .into_response();
+    }
+    let dir = std::path::Path::new(&manager.config().pre_connect_scripts_dir);
+    Json(json!({ "scripts": crate::preconnect::list_scripts(dir) })).into_response()
+}
+
+/// Run a saved entry's pre-connect script, if it has one (#329), before a new
+/// session is made for it. `Err` holds the response that stops the connect.
+async fn run_pre_connect(
+    manager: &AppState,
+    script: Option<&str>,
+    info: crate::preconnect::PreConnectInfo,
+) -> Result<(), String> {
+    let Some(script) = script.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    let cfg = manager.config();
+    crate::preconnect::run(
+        std::path::Path::new(&cfg.pre_connect_scripts_dir),
+        script,
+        std::time::Duration::from_secs(cfg.pre_connect_timeout_secs.max(1)),
+        &info,
+    )
+    .await
+}
+
 /// GET /api/health — Health check.
 pub async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
@@ -4643,6 +4684,17 @@ pub async fn ab_connect_entry(
     };
 
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+    let pre_connect = crate::preconnect::PreConnectInfo {
+        scope: scope.clone(),
+        folder: folder.clone(),
+        entry: entry.clone(),
+        protocol: protocol_name.clone(),
+        session_type: ab_entry.session_type.clone(),
+        hostname: ab_entry.hostname.clone(),
+        port: ab_entry.port,
+        user: id.display_name().to_string(),
+    };
+    let pre_connect_script = ab_entry.pre_connect_script.clone();
     let create_req = match entry_connect_request(ab_entry, req, &ab_entry_key, &folder) {
         Ok(mut r) => {
             r.address_book_protocol = Some(protocol_name.clone());
@@ -4683,6 +4735,11 @@ pub async fn ab_connect_entry(
             "Reusing existing address book session"
         );
         return (StatusCode::CREATED, Json(json!(existing))).into_response();
+    }
+
+    // A new session only: a reused Pending one already had its script run.
+    if let Err(why) = run_pre_connect(&manager, pre_connect_script.as_deref(), pre_connect).await {
+        return (StatusCode::BAD_GATEWAY, Json(json!({ "error": why }))).into_response();
     }
 
     match manager.create_session(create_req, admin_name.clone()).await {
@@ -5364,6 +5421,23 @@ fn tidy_entry_body(mut e: AddressBookEntry) -> Result<AddressBookEntry, String> 
             crate::session::SessionError::ValidationError(m) => m,
             other => other.to_string(),
         })?;
+    }
+    // A pre-connect script is named, never given as a path.
+    let scripts = std::iter::once(e.pre_connect_script.clone()).chain(
+        e.protocols.iter().flatten().map(|p| {
+            p.settings
+                .get("pre_connect_script")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        }),
+    );
+    for s in scripts.flatten() {
+        let s = s.trim();
+        if !s.is_empty() && !crate::preconnect::valid_script_name(s) {
+            return Err(format!(
+                "pre_connect_script {s:?} must be a file name in the pre-connect scripts directory"
+            ));
+        }
     }
     fn tidy(
         groups: &mut Option<Vec<String>>,
@@ -8241,6 +8315,17 @@ pub async fn quick_connect(
             );
         }
 
+        let pre_connect = crate::preconnect::PreConnectInfo {
+            scope: scope.to_string(),
+            folder: folder.to_string(),
+            entry: entry.to_string(),
+            protocol: protocol_name.clone(),
+            session_type: ab_entry.session_type.clone(),
+            hostname: ab_entry.hostname.clone(),
+            port: ab_entry.port,
+            user: id.display_name().to_string(),
+        };
+        let pre_connect_script = ab_entry.pre_connect_script.clone();
         let create_req = match quick_connect_entry_request(ab_entry, &query, scope, folder, entry) {
             Ok(mut r) => {
                 r.address_book_protocol = Some(protocol_name.clone());
@@ -8258,6 +8343,12 @@ pub async fn quick_connect(
             protocol = %protocol_name,
             "Quick connect (address book)"
         );
+
+        if let Err(why) =
+            run_pre_connect(&manager, pre_connect_script.as_deref(), pre_connect).await
+        {
+            return quick_connect_error(StatusCode::BAD_GATEWAY, &why);
+        }
 
         return match manager.create_session(create_req, admin_name).await {
             Ok(info) => {
@@ -9580,7 +9671,7 @@ mod tests {
             "spice_proxy": "http://proxy:3128", "proxmox_url": "https://pve:8006",
             "proxmox_node": "pve1", "proxmox_vmid": 101, "proxmox_token_id": "u@pam!t",
             "proxmox_token_secret": "secret", "proxmox_verify_tls": true,
-            "max_monitors": 2, "ssh_font_size": 14, "ssh_command": "psql -h db -U alice app", "wol_send_packet": true,
+            "max_monitors": 2, "ssh_font_size": 14, "ssh_command": "psql -h db -U alice app", "pre_connect_script": "power-on.sh", "wol_send_packet": true,
             "wol_mac_addr": "00:11:22:33:44:55", "wol_broadcast_addr": "192.0.2.255",
             "wol_udp_port": 9, "wol_wait_time": 30, "external_id": "netbox:device:1"
             }),
@@ -11963,6 +12054,22 @@ mod tests {
             merged.effective(None).unwrap().hostname.as_deref(),
             Some("10.0.0.11")
         );
+    }
+
+    #[test]
+    fn a_pre_connect_script_is_a_name_not_a_path() {
+        let body = |s: &str| {
+            super::prepare_entry_body(entry(
+                json!({"type": "rdp", "hostname": "h", "pre_connect_script": s}),
+            ))
+        };
+        assert_eq!(
+            body("power-on.sh").unwrap().pre_connect_script.as_deref(),
+            Some("power-on.sh")
+        );
+        for bad in ["../power-on.sh", "/usr/bin/id", ".hidden", "a b"] {
+            assert!(body(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

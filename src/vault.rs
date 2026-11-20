@@ -568,6 +568,10 @@ pub struct AddressBookEntry {
     /// a place for a password.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_command: Option<String>,
+    /// A script from `pre_connect_scripts_dir` to run before connecting
+    /// (#329), for example to power on a VM. Saved entries only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_connect_script: Option<String>,
     /// Wake-on-LAN: send a magic packet to wake the target before connecting.
     /// Passed through to guacd's `wol-send-packet` param (SSH/RDP/VNC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -830,6 +834,9 @@ pub struct EntryInfo {
     /// SSH: the command run instead of the login shell (SSH only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_command: Option<String>,
+    /// The script run before connecting (#329).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_connect_script: Option<String>,
     /// Wake-on-LAN: send a magic packet before connecting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wol_send_packet: Option<bool>,
@@ -987,6 +994,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             ssh_font_size: e.ssh_font_size,
             ssh_color_scheme: e.ssh_color_scheme.clone(),
             ssh_command: e.ssh_command.clone(),
+            pre_connect_script: e.pre_connect_script.clone(),
             wol_send_packet: e.wol_send_packet,
             wol_mac_addr: e.wol_mac_addr.clone(),
             wol_broadcast_addr: e.wol_broadcast_addr.clone(),

@@ -145,7 +145,7 @@ RUN mkdir -p /usr/lib/x86_64-linux-gnu/freerdp3 && \
 # Create writable runtime directories
 RUN mkdir -p /opt/rustguac/data /opt/rustguac/recordings /opt/rustguac/tls \
     /opt/rustguac/certs /opt/rustguac/drives /opt/rustguac/scripts \
-    /opt/rustguac/vdi-homes
+    /opt/rustguac/vdi-homes /opt/rustguac/pre-connect
 
 # Chromium policy: web session hardening.
 # DeveloperToolsAvailability=0: CDP needed for login scripts. Users can't reach DevTools

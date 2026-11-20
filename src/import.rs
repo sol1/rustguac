@@ -212,6 +212,7 @@ pub async fn cmd_import_guacamole(
                 .get("color-scheme")
                 .filter(|s| crate::guacd::SSH_COLOR_SCHEMES.contains(s))
                 .map(|s| s.to_string()),
+            pre_connect_script: None,
             ssh_command: param_map
                 .get("command")
                 .map(|s| s.trim())

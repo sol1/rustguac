@@ -10,6 +10,7 @@ mod import;
 mod migrate;
 mod oidc;
 mod perms;
+mod preconnect;
 mod protocol;
 mod pve;
 mod recording;
@@ -1749,6 +1750,10 @@ async fn run_server(config: Config, database: Db) {
         )
         // Login scripts listing
         .route("/api/login-scripts", get(api::list_login_scripts))
+        .route(
+            "/api/pre-connect-scripts",
+            get(api::list_pre_connect_scripts),
+        )
         .route("/api/ws-ticket", post(api::create_ws_ticket))
         // Address book routes
         .route("/api/addressbook", get(api::ab_list_all))

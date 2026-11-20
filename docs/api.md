@@ -728,6 +728,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `display_name` | string | All | Friendly display name (shown as banner) |
 | `prompt_credentials` | boolean | All | Prompt user for credentials at connect time |
 | `ssh_command` | string | SSH | A command to run instead of the login shell; the session ends when it exits. Shown to everyone who can see the entry, so never put a password in it (a database client can prompt for one, or read it from the host, for example `~/.pgpass`) |
+| `pre_connect_script` | string | All but VDI | File name of a [pre-connect script](integrations.md#pre-connect-scripts) to run before connecting, for example to power on a VM. Only scripts in `pre_connect_scripts_dir` can run; a path is refused with `400`. `GET /api/pre-connect-scripts` (with `connections.edit`) lists them |
 | `jump_hosts` | array | All | Multi-hop SSH tunnel chain (same format as session creation) |
 | `external_id` | string | All | Stable id of the record the entry is synced from (the [NetBox webhook](netbox.md#create-webhook-device-createdupdated) sends `netbox:device:<id>`). What `PUT ...?move=true` matches on; never used to connect. Preserved on update when omitted. |
 | `protocols` | array | All | The ways to connect to the host, primary first, in place of `type` (see [Multi-protocol entries](#multi-protocol-entries)) |

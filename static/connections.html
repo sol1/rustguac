@@ -1513,6 +1513,12 @@
                     <div class="field-hint">Seconds to wait after sending the packet before connecting, giving the host time to boot.</div>
                 </div>
             </div>
+            <div id="em-preconnect-section" class="entry-only" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
+                <label>Before connecting, run <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <select id="em-pre-connect-script"><option value="">Nothing</option></select>
+                </label>
+                <div class="field-hint">A script from the server's pre-connect scripts directory, for example one that powers on a VM through its provider's API. The connection waits for it and goes ahead when it exits successfully.</div>
+            </div>
             <div id="em-sharing-section" style="margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <div class="entry-only">
                 <label style="text-transform:none;letter-spacing:0;cursor:pointer">
@@ -2076,6 +2082,36 @@
                 });
             }
             sel.value = selectedValue || '';
+        }
+
+        // Pre-connect scripts (#329), listed for connection editors only.
+        // One fetch; the dropdown always shows the latest value asked for, so
+        // a reset and a fill racing the fetch end on the fill.
+        var preConnectScriptsCache = null, preConnectFetching = false, preConnectWanted = '';
+        function fillPreConnectDropdown() {
+            var sel = document.getElementById('em-pre-connect-script');
+            sel.innerHTML = '<option value="">Nothing</option>';
+            var names = (preConnectScriptsCache || []).slice();
+            // Keep a stored name the directory no longer has, so saving does not drop it.
+            if (preConnectWanted && names.indexOf(preConnectWanted) < 0) names.push(preConnectWanted);
+            names.forEach(function(n) {
+                var opt = document.createElement('option');
+                opt.value = n;
+                opt.textContent = n;
+                sel.appendChild(opt);
+            });
+            sel.value = preConnectWanted;
+        }
+        function populatePreConnectDropdown(selected) {
+            preConnectWanted = selected || '';
+            fillPreConnectDropdown();
+            if (preConnectScriptsCache !== null || preConnectFetching || !canEdit) return;
+            preConnectFetching = true;
+            fetch('/api/pre-connect-scripts', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : { scripts: [] }; })
+                .then(function(d) { preConnectScriptsCache = d.scripts || []; })
+                .catch(function() { preConnectScriptsCache = []; })
+                .then(function() { preConnectFetching = false; fillPreConnectDropdown(); });
         }
 
         function loadLoginScripts(cb) {
@@ -4604,6 +4640,8 @@
             document.getElementById('em-ssh-command-row').style.display = val === 'ssh' ? '' : 'none';
             // Wake-on-LAN applies to SSH/RDP/VNC (guacd passes the magic packet)
             document.getElementById('em-wol-section').style.display = (val === 'ssh' || val === 'rdp' || val === 'vnc') ? '' : 'none';
+            // A pre-connect script (#329) for any saved entry but a VDI desktop.
+            document.getElementById('em-preconnect-section').style.display = val === 'vdi' ? 'none' : '';
         });
 
         // Toggle Wake-on-LAN fields visibility
@@ -5552,6 +5590,9 @@
             // Auto-hide the clipboard/files side tabs when idle
             if (document.getElementById('em-autohide-side-tabs').checked) entry.autohide_side_tabs = true;
 
+            var preConnect = document.getElementById('em-pre-connect-script').value;
+            if (preConnect && type !== 'vdi') entry.pre_connect_script = preConnect;
+
             // Wake-on-LAN (SSH/RDP/VNC)
             if (type === 'ssh' || type === 'rdp' || type === 'vnc') {
                 if (document.getElementById('em-wol-enabled').checked) entry.wol_send_packet = true;
@@ -5765,6 +5806,7 @@
                 document.getElementById('em-fullscreen-on-connect').checked = !!entryData.fullscreen_on_connect;
                 // Populate autohide-side-tabs flag
                 document.getElementById('em-autohide-side-tabs').checked = !!entryData.autohide_side_tabs;
+                populatePreConnectDropdown(entryData.pre_connect_script || '');
                 // Populate Wake-on-LAN fields (SSH/RDP/VNC)
                 if (type === 'ssh' || type === 'rdp' || type === 'vnc') {
                     document.getElementById('em-wol-enabled').checked = !!entryData.wol_send_packet;
@@ -5866,6 +5908,7 @@
             document.getElementById('em-ssh-color-scheme').value = '';
             document.getElementById('em-ssh-command').value = '';
             document.getElementById('em-wol-enabled').checked = false;
+            populatePreConnectDropdown('');
             document.getElementById('em-wol-mac').value = '';
             document.getElementById('em-wol-broadcast').value = '';
             document.getElementById('em-wol-port').value = '';
