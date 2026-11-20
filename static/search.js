@@ -455,8 +455,11 @@
         } else fsRefused();
         var ov = document.createElement('div'); ov.id = 'rg-session-overlay';
         ov.innerHTML = '<div id="rg-session-spinner"></div>' +
+            // Top centre, away from the remote desktop's window controls (#363).
+            '<div id="rg-session-bar">' +
             '<button id="rg-session-fs" class="rg-session-btn" type="button" title="Back to fullscreen" hidden>⛶ Fullscreen</button>' +
             '<button id="rg-session-exit" class="rg-session-btn" type="button" title="Leave the session">× Exit</button>' +
+            '</div>' +
             '<iframe id="rg-session-frame" allow="fullscreen; clipboard-read; clipboard-write" title="Session"></iframe>';
         document.body.appendChild(ov);
         if (btn) { btn.classList.add('loading'); btn.disabled = true; }

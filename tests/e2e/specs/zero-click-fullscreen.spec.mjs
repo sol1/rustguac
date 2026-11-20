@@ -29,6 +29,14 @@ test('Connect on a fullscreen entry launches the embedded frame with the measure
     await expect(overlay).toBeVisible();
     await expect(page.locator('#rg-session-exit')).toBeVisible();
 
+    // The buttons sit at the top centre, clear of the top right corner where
+    // the remote desktop's own window controls are (#363).
+    const bar = await page.locator('#rg-session-bar').boundingBox();
+    const view = page.viewportSize();
+    expect(bar.y).toBe(0);
+    expect(Math.abs(bar.x + bar.width / 2 - view.width / 2)).toBeLessThan(2);
+    expect(view.width - (bar.x + bar.width)).toBeGreaterThan(200);
+
     // The connect request carries the viewport the frame will be shown at.
     await expect.poll(() => api.calls.find(c => c.method === 'POST' && c.path.endsWith('/entries/kiosk/connect'))).toBeTruthy();
     const connect = api.calls.find(c => c.method === 'POST' && c.path.endsWith('/entries/kiosk/connect'));
