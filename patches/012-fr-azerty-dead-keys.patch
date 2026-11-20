@@ -1,0 +1,36 @@
+diff --git a/src/protocols/rdp/keymaps/fr_fr_azerty.keymap b/src/protocols/rdp/keymaps/fr_fr_azerty.keymap
+--- a/src/protocols/rdp/keymaps/fr_fr_azerty.keymap
++++ b/src/protocols/rdp/keymaps/fr_fr_azerty.keymap
+@@ -49,7 +49,13 @@
+ # Keys requiring AltGr (unaffected by Caps Lock, but Shift must not be pressed)
+ #
+ 
+-map +altgr -shift 0x03..0x0D ~ "~#{[|`\^@]}"
++map +altgr -shift 0x04..0x07 ~ "#{[|"
++map +altgr -shift 0x09..0x0D ~ "\^@]}"
++
++# On Windows, AltGr+2 and AltGr+7 are dead keys on the French layout: map
++# them as such, so a literal ~ or ` is typed as the dead key then Space.
++map +altgr -shift 0x03 ~ 0xFE53 # Dead tilde
++map +altgr -shift 0x08 ~ 0xFE50 # Dead grave
+ 
+ map +altgr -shift 0x12 ~ "€"
+ map +altgr -shift 0x1B ~ "¤"
+diff --git a/src/protocols/spice/keymaps/fr_fr_azerty.keymap b/src/protocols/spice/keymaps/fr_fr_azerty.keymap
+--- a/src/protocols/spice/keymaps/fr_fr_azerty.keymap
++++ b/src/protocols/spice/keymaps/fr_fr_azerty.keymap
+@@ -48,7 +48,13 @@
+ # Keys requiring AltGr (unaffected by Caps Lock, but Shift must not be pressed)
+ #
+ 
+-map +altgr -shift 0x03..0x0D ~ "~#{[|`\^@]}"
++map +altgr -shift 0x04..0x07 ~ "#{[|"
++map +altgr -shift 0x09..0x0D ~ "\^@]}"
++
++# On Windows, AltGr+2 and AltGr+7 are dead keys on the French layout: map
++# them as such, so a literal ~ or ` is typed as the dead key then Space.
++map +altgr -shift 0x03 ~ 0xFE53 # Dead tilde
++map +altgr -shift 0x08 ~ 0xFE50 # Dead grave
+ 
+ map +altgr -shift 0x12 ~ "€"
+ map +altgr -shift 0x1B ~ "¤"

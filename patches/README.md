@@ -207,6 +207,14 @@ Vendored as the diff of the PR branch against its merge-base with our pinned gua
 
 **Files patched:** `src/protocols/spice/auth.c`, `src/protocols/spice/settings.{c,h}`.
 
+## 012-fr-azerty-dead-keys.patch
+
+**Bug:** The `fr-fr-azerty` keymap typed `~` as AltGr+2 and `` ` `` as AltGr+7. On a Windows server with the French layout those are dead keys, so the server waited for another key instead of typing the character. See [sol1/rustguac#358](https://github.com/sol1/rustguac/issues/358).
+
+**Fix:** Map AltGr+2 and AltGr+7 as dead tilde and dead grave, as the German, Swiss and Belgian keymaps already do. guacd then types a literal `~` or `` ` `` as the dead key followed by Space. This follows Windows: an xrdp server's French layout has no dead key there, so it types an extra space after the character.
+
+**Files patched:** `src/protocols/{rdp,spice}/keymaps/fr_fr_azerty.keymap` (the SPICE copy comes from `008`).
+
 ## Applying patches
 
 Patches are applied automatically by all build scripts (`build-deb.sh`, `build-rpm.sh`, `install.sh`, `dev.sh`, `Dockerfile`). To apply manually:
