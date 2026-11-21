@@ -925,6 +925,7 @@ pub async fn system_status(
 /// GET /api/auth/status — Returns whether OIDC is enabled. No auth required.
 pub async fn auth_status(
     Extension(oidc_enabled): Extension<OidcEnabled>,
+    Extension(oidc_auto_login): Extension<OidcAutoLogin>,
     Extension(oidc): Extension<OidcHandle>,
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
@@ -949,6 +950,7 @@ pub async fn auth_status(
 
     let mut resp = json!({
         "oidc_enabled": oidc_enabled.0,
+        "oidc_auto_login": oidc_auto_login.0,
         "oidc_available": oidc_available,
         "site_title": site_title.0,
         "drive_configured": drive_configured.configured,
@@ -988,6 +990,10 @@ pub struct ThemeData {
 /// Marker for whether OIDC is configured.
 #[derive(Clone)]
 pub struct OidcEnabled(pub bool);
+
+/// Whether unauthenticated browser visits should start OIDC login automatically.
+#[derive(Clone)]
+pub struct OidcAutoLogin(pub bool);
 
 /// Handle to the live OIDC state (`None` when OIDC is not configured). Lets the
 /// status endpoint report current provider *availability* (metadata discovered)
