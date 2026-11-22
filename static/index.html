@@ -199,8 +199,7 @@
                 document.getElementById('sso-section').style.display = 'block';
                 apiKeyToggle.style.display = 'block';
                 // Hide API key form by default when SSO is available
-                loginForm.style.display = apiKeyLoginOverride ? '' : 'none';
-                if (apiKeyLoginOverride) chevron.className = 'chevron open';
+                loginForm.style.display = 'none';
                 oidcAutoLogin = !!data.oidc_auto_login && !hasSsoError && !apiKeyLoginOverride;
                 applySsoAvailability(!!data.oidc_available);
             }

@@ -60,7 +60,7 @@ Set `auto_login = true` under `[oidc]` to start this flow as soon as an
 unauthenticated visitor opens the login page. The redirect waits until the
 provider is available, preserves the manual SSO button as a fallback, and
 does not retry automatically after a callback error. To bypass automatic SSO
-and use an API key, open `/login`.
+and use an API key, open `/login` and expand **Sign in with API key**.
 
 ### Logout
 
