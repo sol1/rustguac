@@ -2791,6 +2791,13 @@ impl VaultBackends {
             .await
     }
 
+    pub async fn delete_folder_config(&self, scope: &str, folder: &str) -> Result<(), VaultError> {
+        self.scoped(scope)
+            .await?
+            .delete_folder_config(scope, folder)
+            .await
+    }
+
     pub async fn effective_folder_defaults(
         &self,
         scope: &str,
@@ -5395,6 +5402,228 @@ pub async fn ab_delete_folder(
         )
             .into_response(),
     }
+}
+
+#[derive(Deserialize)]
+pub struct MoveFolderRequest {
+    /// Defaults to the folder's own scope.
+    #[serde(default)]
+    pub target_scope: Option<String>,
+    /// The new parent's path; empty for the top level.
+    #[serde(default)]
+    pub target_parent: String,
+    /// Defaults to the folder's current name.
+    #[serde(default)]
+    pub new_name: Option<String>,
+    /// Only say what the move would do.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// One folder move at a time: two at once could each pass the target check
+/// for the same path, or move a folder the other is copying.
+static FOLDER_MOVE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// POST /api/addressbook/folders/:scope/:folder/move (#372)
+///
+/// Moves a folder, everything under it included, to another parent, to the
+/// top level, or to a new name (see `crate::folder_move`). Needs
+/// `folders.manage_access` as well as `connections.edit`, because a folder
+/// that inherits takes its new parent's audience. `dry_run` answers with
+/// what would change and writes nothing.
+#[allow(clippy::too_many_arguments)]
+pub async fn ab_move_folder(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
+    Extension(vault): Extension<VaultState>,
+    Path((scope, folder)): Path<(String, String)>,
+    Json(req): Json<MoveFolderRequest>,
+) -> impl IntoResponse {
+    use crate::folder_move as fm;
+    let admin_email = match require_ab_admin(&identity) {
+        Ok(e) => e,
+        Err((status, msg)) => return ab_error(status, msg),
+    };
+    if !identity
+        .as_ref()
+        .is_some_and(|Extension(id)| id.has_perm(Perm::FoldersManageAccess))
+    {
+        return ab_error(
+            StatusCode::FORBIDDEN,
+            "moving a folder can change who can open it, which needs folders.manage_access",
+        );
+    }
+    let target_scope = req.target_scope.clone().unwrap_or_else(|| scope.clone());
+    let name = req
+        .new_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| fm::folder_name(&folder))
+        .to_string();
+    let parent = req.target_parent.trim().trim_matches('/').to_string();
+    let target = fm::target_path(&parent, &name);
+    if let Err(msg) = fm::check_paths(&scope, &folder, &target_scope, &target) {
+        return ab_error(StatusCode::BAD_REQUEST, msg);
+    }
+    let store = vault.as_ref();
+
+    let _guard = if req.dry_run {
+        None
+    } else {
+        match FOLDER_MOVE.try_lock() {
+            Ok(g) => Some(g),
+            Err(_) => {
+                return ab_error(
+                    StatusCode::CONFLICT,
+                    "another folder move is in progress, try again when it has finished",
+                )
+            }
+        }
+    };
+
+    let tree = match fm::read_tree(store, &scope, &folder).await {
+        Ok(t) => t,
+        Err(e) => return ab_error(StatusCode::BAD_GATEWAY, e.to_string()),
+    };
+    let root = &tree[0];
+    if tree.len() == 1
+        && root.config.is_none()
+        && root.defaults.is_none()
+        && root.entries.is_empty()
+    {
+        return ab_error(StatusCode::NOT_FOUND, "folder not found");
+    }
+    if !parent.is_empty() {
+        match fm::exists(store, &target_scope, &parent).await {
+            Ok(true) => {}
+            Ok(false) => return ab_error(StatusCode::NOT_FOUND, "target parent folder not found"),
+            Err(e) => return ab_error(StatusCode::BAD_GATEWAY, e.to_string()),
+        }
+    }
+    match fm::exists(store, &target_scope, &target).await {
+        Ok(false) => {}
+        Ok(true) => {
+            return ab_error(
+                StatusCode::CONFLICT,
+                format!("{target} already exists in {target_scope}"),
+            )
+        }
+        Err(e) => return ab_error(StatusCode::BAD_GATEWAY, e.to_string()),
+    }
+    let preview = match fm::preview(store, &tree, &scope, &folder, &target_scope, &target).await {
+        Ok(p) => p,
+        Err(e) => return ab_error(StatusCode::BAD_GATEWAY, e.to_string()),
+    };
+    if req.dry_run {
+        return Json(json!({
+            "ok": true,
+            "dry_run": true,
+            "to": { "scope": target_scope, "folder": target },
+            "preview": preview,
+        }))
+        .into_response();
+    }
+
+    let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+    let details = json!({
+        "to_scope": target_scope,
+        "to_folder": target,
+        "subfolders": preview.subfolders,
+        "entries": preview.entries,
+        "access_changed": preview.access_changes,
+        "defaults_changed": preview.defaults_change,
+    })
+    .to_string();
+    let result = fm::execute(store, &tree, &scope, &folder, &target_scope, &target).await;
+    if let Err(fm::MoveFailure::Copy { error, leftover }) = &result {
+        tracing::warn!(scope, folder, target, error, leftover, "Folder move failed");
+        let resp = ab_error(
+            StatusCode::BAD_GATEWAY,
+            if *leftover == 0 {
+                format!("the move failed and nothing was changed: {error}")
+            } else {
+                format!(
+                    "the move failed: {error}. {leftover} item(s) of the partial copy could not be removed from {target}"
+                )
+            },
+        );
+        return if *leftover == 0 {
+            resp
+        } else {
+            with_ab_changes(resp, vec![AbChange::all()])
+        };
+    }
+
+    // The copy is complete, so stars follow it even if the source could not
+    // all be removed.
+    let favourites_moved = {
+        let (db, s, f, ts, t) = (
+            database.clone(),
+            scope.clone(),
+            folder.clone(),
+            target_scope.clone(),
+            target.clone(),
+        );
+        match tokio::task::spawn_blocking(move || db::move_favourites(&db, &s, &f, &ts, &t)).await {
+            Ok(Ok(n)) => n,
+            other => {
+                tracing::warn!(scope, folder, target, "Moving favourites failed: {other:?}");
+                0
+            }
+        }
+    };
+
+    if let Err(fm::MoveFailure::Incomplete { error, failed }) = &result {
+        log_ab_event(
+            &database,
+            &admin_email,
+            "move_folder_incomplete",
+            &scope,
+            &folder,
+            None,
+            &ip,
+            Some(&details),
+        )
+        .await;
+        return with_ab_changes(
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": format!(
+                        "the folder was copied to {target} but {failed} item(s) could not be removed from {folder}: {error}"
+                    ),
+                    "copied": true,
+                    "to": { "scope": target_scope, "folder": target },
+                })),
+            )
+                .into_response(),
+            vec![AbChange::all()],
+        );
+    }
+
+    log_ab_event(
+        &database,
+        &admin_email,
+        "move_folder",
+        &scope,
+        &folder,
+        None,
+        &ip,
+        Some(&details),
+    )
+    .await;
+    Json(json!({
+        "ok": true,
+        "to": { "scope": target_scope, "folder": target },
+        "subfolders": preview.subfolders,
+        "entries": preview.entries,
+        "favourites_moved": favourites_moved,
+    }))
+    .into_response()
 }
 
 /// Check an entry body from the API and tidy it for storage: either form

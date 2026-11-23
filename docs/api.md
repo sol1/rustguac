@@ -669,6 +669,47 @@ The folder's access settings, including `allowed_users`. The folder listings tha
 
 Delete a folder and all its entries.
 
+### `POST /api/addressbook/folders/:scope/:folder/move` (admin)
+
+Move a folder, with everything under it, to another parent, to the top level, or to a new name. Needs `folders.manage_access` as well as `connections.edit`, because a folder that inherits takes its new parent's audience.
+
+```json
+{ "target_parent": "DevOps", "new_name": "Software", "target_scope": "shared", "dry_run": true }
+```
+
+- `target_parent`: the new parent's path, or `""` (the default) for the top level. It must exist.
+- `new_name` (optional): the folder's name at the new place. Defaults to its current name, so `{"target_parent": "DevOps"}` moves `Engineering/Software` to `DevOps/Software`, and `{"target_parent": "Engineering", "new_name": "Platform"}` renames it in place.
+- `target_scope` (optional): defaults to the folder's own scope.
+- `dry_run` (optional): answer with what would change and write nothing.
+
+Every entry is moved with its stored secrets, each folder's access rules (`.config`) and default credentials (`.defaults`) go with it, and users' favourites follow. The folder's own rules move with it; what it inherits comes from the new parent. A dry run says what that changes:
+
+```json
+{
+  "ok": true, "dry_run": true,
+  "to": { "scope": "shared", "folder": "DevOps/Software" },
+  "preview": {
+    "subfolders": 1, "entries": 12,
+    "access_before": { "groups": ["engineers", "software"], "users": [], "from": ["Engineering/Software", "Engineering"] },
+    "access_after":  { "groups": ["devops", "software"], "users": [], "from": ["DevOps/Software", "DevOps"] },
+    "access_changes": true,
+    "defaults_before": [ { "session_type": "ssh", "from": "Engineering" } ],
+    "defaults_after": [],
+    "defaults_change": true
+  }
+}
+```
+
+`access_*` is who can open the folder itself (subfolders that inherit through it change the same way), and `defaults_*` the session types whose [folder default credentials](credential-variables.md#folder-default-credentials) its entries can borrow, and from which folder. The response to a move is `{"ok": true, "to": {...}, "subfolders": 1, "entries": 12, "favourites_moved": 3}`, and it is recorded in the address book audit log as `move_folder`.
+
+Vault cannot rename a path, so the move copies every key and then removes the originals. If any copy fails, what was copied is removed again and the folder stays where it was (`502`, "nothing was changed"). If the copy succeeds but some originals cannot be removed, the response is `502` with `"copied": true`: the folder is then in both places, complete at the new one. Other responses: `400` for a move into the folder itself or to where it already is, `404` if the folder or `target_parent` does not exist, `409` if something already exists at the new path (nothing is ever overwritten) or another folder move is running.
+
+Things to know:
+
+- Each entry's Vault version history stays behind: the copies start at version 1.
+- An entry edited while the move runs can lose that edit. Moves are quick, but pick a quiet moment for a big folder.
+- A [NetBox webhook](netbox.md) that computes the folder (one per tenant) moves its devices back to the computed folder as they update. Change the webhook's folder template to match.
+
 ### `POST /api/addressbook/folders/:scope/:folder/entries` (admin)
 
 Create a connection entry. The body includes a `name` field plus all entry fields:

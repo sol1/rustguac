@@ -1836,6 +1836,22 @@ impl VaultClient {
         }
     }
 
+    /// Remove a folder's `.config`. Absent is fine.
+    pub async fn delete_folder_config(&self, scope: &str, folder: &str) -> Result<(), VaultError> {
+        validate_path(folder)?;
+        let scope_prefix = self.resolve_scope_prefix(scope)?;
+        let path = self.metadata_path(&scope_prefix, &format!("{}/{}", folder, ".config"));
+        let resp = self.request(reqwest::Method::DELETE, &path, None).await?;
+        match resp.status().as_u16() {
+            200 | 204 | 404 => Ok(()),
+            403 => Err(VaultError::Forbidden),
+            s => Err(VaultError::Parse(format!(
+                "delete folder config failed ({})",
+                s
+            ))),
+        }
+    }
+
     /// The defaults that apply to entries in `folder`: see
     /// `resolve_effective_defaults` for the walk and where it stops.
     pub async fn effective_folder_defaults(
@@ -2282,7 +2298,7 @@ fn validate_name(name: &str) -> Result<(), VaultError> {
 /// Validate a folder path that may contain subfolders (e.g. "Clients/Acme/Servers").
 /// Each segment is validated with the same rules as `validate_name`.
 /// Empty segments, trailing slashes, and leading slashes are rejected.
-fn validate_path(path: &str) -> Result<(), VaultError> {
+pub(crate) fn validate_path(path: &str) -> Result<(), VaultError> {
     if path.is_empty() {
         return Err(VaultError::BadName("path cannot be empty".into()));
     }

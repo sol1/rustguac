@@ -5,6 +5,7 @@ mod config;
 mod db;
 mod drive;
 mod entry_protocols;
+mod folder_move;
 mod guacd;
 mod import;
 mod migrate;
@@ -1776,6 +1777,10 @@ async fn run_server(config: Config, database: Db) {
         .route(
             "/api/addressbook/folders/{scope}/{folder}",
             delete(api::ab_delete_folder),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/move",
+            post(api::ab_move_folder),
         )
         .route(
             "/api/addressbook/folders/{scope}/{folder}/config",

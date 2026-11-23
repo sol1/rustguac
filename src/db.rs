@@ -1038,6 +1038,29 @@ pub fn remove_favourite(db: &Db, email: &str, fav: &Favourite) -> rusqlite::Resu
     Ok(())
 }
 
+/// Point every user's favourites in `folder` and below at the folder's new
+/// path, after a folder move (#372). Returns how many were moved. A star the
+/// user already had at the new path (a leftover from a folder of the same
+/// name deleted earlier) is replaced rather than duplicated.
+pub fn move_favourites(
+    db: &Db,
+    scope: &str,
+    folder: &str,
+    new_scope: &str,
+    new_folder: &str,
+) -> rusqlite::Result<usize> {
+    let conn = db.lock().unwrap();
+    // A prefix compare, not LIKE: folder names may contain `_`.
+    conn.execute(
+        "UPDATE OR REPLACE user_favourites
+            SET scope = ?3,
+                folder = ?4 || substr(folder, length(?2) + 1)
+          WHERE scope = ?1
+            AND (folder = ?2 OR substr(folder, 1, length(?2) + 1) = ?2 || '/')",
+        params![scope, folder, new_scope, new_folder],
+    )
+}
+
 // ── Group-to-role mappings ──
 
 /// A mapping from an OIDC group name to a role.
@@ -1916,6 +1939,45 @@ mod tests {
         create_user(&db, "jon@example.com", "", "operator").unwrap();
         delete_user(&db, "jon@example.com").unwrap();
         assert!(list_favourites(&db, "jon@example.com").unwrap().is_empty());
+    }
+
+    #[test]
+    fn favourites_follow_a_folder_move() {
+        let db = test_db();
+        let fav = |s: &str, f: &str, e: &str| Favourite {
+            scope: s.into(),
+            folder: f.into(),
+            entry: e.into(),
+        };
+        for f in [
+            fav("shared", "Eng/Soft", "git01"),
+            fav("shared", "Eng/Soft/Build", "ci01"),
+            // A sibling that starts the same, a folder whose name has the
+            // LIKE wildcard, and the same path in the other scope stay.
+            fav("shared", "Eng/Software", "web01"),
+            fav("shared", "Eng/So_t", "x"),
+            fav("instance", "Eng/Soft", "y"),
+            // A leftover at the new path is replaced, not duplicated.
+            fav("shared", "DevOps/Soft", "git01"),
+        ] {
+            add_favourite(&db, "jon@example.com", &f).unwrap();
+        }
+        assert_eq!(
+            move_favourites(&db, "shared", "Eng/Soft", "shared", "DevOps/Soft").unwrap(),
+            2
+        );
+        let mut got = list_favourites(&db, "jon@example.com").unwrap();
+        got.sort_by(|a, b| (&a.scope, &a.folder, &a.entry).cmp(&(&b.scope, &b.folder, &b.entry)));
+        assert_eq!(
+            got,
+            [
+                fav("instance", "Eng/Soft", "y"),
+                fav("shared", "DevOps/Soft", "git01"),
+                fav("shared", "DevOps/Soft/Build", "ci01"),
+                fav("shared", "Eng/So_t", "x"),
+                fav("shared", "Eng/Software", "web01"),
+            ]
+        );
     }
 
     #[test]

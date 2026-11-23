@@ -198,6 +198,7 @@ Their role, group mappings, tokens and credentials are kept. This is CLI-only on
 | `POST /api/addressbook/folders` | admin | Create folders |
 | `PUT /api/addressbook/folders/:scope/:folder` | admin | Update folder config |
 | `DELETE /api/addressbook/folders/:scope/:folder` | admin | Delete folders |
+| `POST /api/addressbook/folders/:scope/:folder/move` | admin | Move or rename a folder with everything under it. Needs `folders.manage_access` too |
 | `POST .../entries` | admin | Create entries. Setting `allowed_groups` / `allowed_users` needs `folders.manage_access` |
 | `PUT .../entries/:entry` | admin | Update entries. Changing `allowed_groups` / `allowed_users` needs `folders.manage_access` |
 | `DELETE .../entries/:entry` | admin | Delete entries |
@@ -281,6 +282,8 @@ Because folder settings live in Vault, they apply on every rustguac instance sha
 ### Inheritance
 
 A subfolder created with `inherit_from_parent: true` (the default for new subfolders) grants access to anyone who can access its parent. A subfolder with `inherit_from_parent: false` is gated solely by its own `allowed_groups` and `allowed_users`, independent of the parent.
+
+Moving a folder (**move folder** in Connections, or [`POST .../move`](api.md#post-apiaddressbookfoldersscopefoldermove-admin)) keeps its own rules, but a folder that inherits takes its new parent's audience, so it needs `folders.manage_access` and shows who can open the folder before and after the move.
 
 The same rules bound [folder default credentials](credential-variables.md#folder-default-credentials): defaults set on a parent flow only into a subfolder that inherits and grants no groups or users of its own. Isolating a folder, or sharing it with anyone the parent doesn't include, keeps the parent's secrets out of it.
 

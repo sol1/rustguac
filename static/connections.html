@@ -861,6 +861,7 @@
                             <button class="btn-add" data-perm="connections.edit" id="btn-new-entry" style="display:none">+ add entry</button>
                             <button class="btn-add" data-perm="connections.edit" id="btn-new-subfolder" style="display:none" title="Create subfolder under this folder">+ subfolder</button>
                             <button class="btn-small" data-perm="connections.edit" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
+                            <button class="btn-small" id="btn-move-folder" style="display:none" title="Move or rename this folder, with everything in it">move folder</button>
                             <button class="btn-small" data-perm="connections.edit" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
                         </div>
                     </div>
@@ -1627,6 +1628,24 @@
         </div>
     </div>
 
+    <!-- Move a folder (#372) -->
+    <div class="modal-overlay" id="fmove-modal">
+        <div class="modal" style="max-width:600px;min-width:380px">
+            <h3 id="fmove-title">Move folder</h3>
+            <label for="fmove-name">Name</label>
+            <input type="text" id="fmove-name" autocomplete="off" spellcheck="false">
+            <label for="fmove-filter" style="margin-top:var(--s-2)">New parent</label>
+            <input type="search" id="fmove-filter" placeholder="Filter folders..." autocomplete="off">
+            <div class="bulk-folder-list" id="fmove-list"></div>
+            <div class="bulk-preview" id="fmove-preview"></div>
+            <div id="fmove-error" style="color:var(--primary);margin-top:0.5em"></div>
+            <div class="modal-actions">
+                <button class="btn-cancel" id="fmove-cancel">Cancel</button>
+                <button class="btn-add" id="fmove-confirm" disabled>Move</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="share-modal">
         <div class="modal">
             <h3>Share Session</h3>
@@ -2170,6 +2189,9 @@
                 // Changing who can open a folder needs folders.manage_access;
                 // without it the folder form says so in place of those fields.
                 document.getElementById('fm-access-note').style.display = can('folders.manage_access') ? 'none' : '';
+                // Moving a folder can change who inherits it, so it needs both.
+                document.getElementById('btn-move-folder').style.display =
+                    (canEdit && can('folders.manage_access')) ? '' : 'none';
                 // Ad-hoc connections need no Vault, so this is settled before
                 // the no-Vault return below. The button itself is search.js's.
                 canAdhoc = can('connections.adhoc');
@@ -4559,6 +4581,260 @@
                 .catch(function(err) { errEl.textContent = err.message; })
                 .finally(function() { saveBtn.disabled = false; saveBtn.textContent = 'Save'; });
             }
+        });
+
+        // ── Move folder (#372) ──
+        //
+        // Pick a new parent (or the top level) and optionally a new name. Each
+        // choice asks the server for a dry run, which says what moves and
+        // whether who can open the folder, or the default credentials its
+        // entries borrow, would change; Move is enabled only once that answer
+        // is in for the current choice.
+
+        var fmoveState = null;
+
+        function fmoveKey(scope, parent) { return scope + '|' + parent; }
+
+        function openFolderMove() {
+            if (!selectedFolder) return;
+            var path = folderPath(selectedFolder);
+            var i = path.lastIndexOf('/');
+            fmoveState = {
+                scope: selectedFolder.scope,
+                path: path,
+                parent: { scope: selectedFolder.scope, path: i < 0 ? '' : path.slice(0, i) },
+                folders: null,
+                seq: 0,
+                ready: false
+            };
+            document.getElementById('fmove-title').textContent = 'Move folder ' + path;
+            document.getElementById('fmove-name').value = i < 0 ? path : path.slice(i + 1);
+            document.getElementById('fmove-filter').value = '';
+            document.getElementById('fmove-error').textContent = '';
+            document.getElementById('fmove-preview').textContent = '';
+            document.getElementById('fmove-confirm').disabled = true;
+            var list = document.getElementById('fmove-list');
+            list.innerHTML = '<p class="empty" style="padding:0.5em">Loading folders...</p>';
+            document.getElementById('fmove-modal').classList.add('active');
+            fetch('/api/addressbook/folder-paths', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(res) {
+                    if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                    return res.json();
+                })
+                .then(function(data) {
+                    if (!fmoveState) return;
+                    fmoveState.folders = data.folders || [];
+                    renderFolderMoveList();
+                    checkFolderMove();
+                })
+                .catch(function(err) {
+                    list.innerHTML = '';
+                    document.getElementById('fmove-error').textContent = 'Could not load folders: ' + err.message;
+                });
+        }
+
+        function renderFolderMoveList() {
+            var st = fmoveState;
+            var list = document.getElementById('fmove-list');
+            var q = document.getElementById('fmove-filter').value.trim().toLowerCase();
+            list.innerHTML = '';
+            var scopes = [];
+            st.folders.forEach(function(f) { if (scopes.indexOf(f.scope) < 0) scopes.push(f.scope); });
+            if (scopes.indexOf(st.scope) < 0) scopes.unshift(st.scope);
+            var options = scopes.map(function(sc) { return { scope: sc, path: '', label: '(top level)' }; });
+            st.folders.forEach(function(f) {
+                // Not the folder itself, nor anything inside it.
+                if (f.scope === st.scope && (f.path === st.path || f.path.indexOf(st.path + '/') === 0)) return;
+                options.push({ scope: f.scope, path: f.path, label: f.path });
+            });
+            var shown = 0;
+            options.forEach(function(o) {
+                if (q && o.label.toLowerCase().indexOf(q) < 0) return;
+                var label = document.createElement('label');
+                var radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'fmove-parent';
+                radio.value = fmoveKey(o.scope, o.path);
+                radio.checked = fmoveKey(o.scope, o.path) === fmoveKey(st.parent.scope, st.parent.path);
+                radio.addEventListener('change', function() {
+                    st.parent = { scope: o.scope, path: o.path };
+                    checkFolderMove();
+                });
+                label.appendChild(radio);
+                var name = document.createElement('span');
+                name.textContent = o.label;
+                label.appendChild(name);
+                var tag = document.createElement('span');
+                tag.className = 'scope-tag';
+                var current = o.scope === st.scope && o.path === (st.path.lastIndexOf('/') < 0 ? '' : st.path.slice(0, st.path.lastIndexOf('/')));
+                tag.textContent = (current ? 'current, ' : '') + o.scope;
+                label.appendChild(tag);
+                list.appendChild(label);
+                shown++;
+            });
+            if (shown === 0) list.innerHTML = '<p class="empty" style="padding:0.5em">No matching folders.</p>';
+        }
+
+        function folderMoveBody(dryRun) {
+            var st = fmoveState;
+            return JSON.stringify({
+                target_scope: st.parent.scope,
+                target_parent: st.parent.path,
+                new_name: document.getElementById('fmove-name').value.trim(),
+                dry_run: dryRun
+            });
+        }
+
+        function folderMoveUrl() {
+            return '/api/addressbook/folders/' + encodeURIComponent(fmoveState.scope) + '/' +
+                encodeURIComponent(fmoveState.path) + '/move';
+        }
+
+        function describeAudience(a) {
+            var parts = [];
+            if (a.groups.length) parts.push('groups ' + a.groups.join(', '));
+            if (a.users.length) parts.push('users ' + a.users.join(', '));
+            return parts.length ? parts.join('; ') : 'nobody but connection editors';
+        }
+
+        function describeLent(list) {
+            if (!list.length) return 'none';
+            return list.map(function(l) { return l.session_type + ' (from ' + l.from + ')'; }).join(', ');
+        }
+
+        function checkFolderMove() {
+            var st = fmoveState;
+            if (!st || !st.folders) return;
+            var seq = ++st.seq;
+            st.ready = false;
+            var confirmBtn = document.getElementById('fmove-confirm');
+            confirmBtn.disabled = true;
+            var preview = document.getElementById('fmove-preview');
+            var errEl = document.getElementById('fmove-error');
+            errEl.textContent = '';
+            // Where it already is: nothing to check yet.
+            var name = document.getElementById('fmove-name').value.trim();
+            if (st.parent.scope === st.scope && (st.parent.path ? st.parent.path + '/' : '') + name === st.path) {
+                preview.innerHTML = '';
+                var hint = document.createElement('p');
+                hint.className = 'empty';
+                hint.textContent = 'Pick a new parent or change the name.';
+                preview.appendChild(hint);
+                return;
+            }
+            preview.textContent = 'Checking...';
+            fetch(folderMoveUrl(), {
+                method: 'POST',
+                headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeaders()),
+                credentials: 'same-origin',
+                body: folderMoveBody(true)
+            }).then(function(res) {
+                return res.json().catch(function() { return {}; }).then(function(data) { return { ok: res.ok, data: data }; });
+            }).then(function(r) {
+                if (!fmoveState || seq !== st.seq) return; // a later choice won
+                preview.innerHTML = '';
+                if (!r.ok) {
+                    errEl.textContent = r.data.error || 'Cannot move it there.';
+                    return;
+                }
+                var p = r.data.preview;
+                var to = r.data.to;
+                var line = document.createElement('p');
+                var what = p.entries + ' entr' + (p.entries === 1 ? 'y' : 'ies');
+                if (p.subfolders) what += ' in ' + (p.subfolders + 1) + ' folders';
+                line.textContent = st.path + ' (' + what + ') will move to ' + to.folder + ' (' + to.scope + '), with stored credentials, access rules, default credentials and favourites.';
+                preview.appendChild(line);
+                var access = document.createElement('p');
+                if (p.access_changes) {
+                    access.className = 'bulk-warn';
+                    access.textContent = 'Who can open it changes: now ' + describeAudience(p.access_before) +
+                        '; after the move ' + describeAudience(p.access_after) + '.';
+                } else {
+                    access.textContent = 'Who can open it stays the same: ' + describeAudience(p.access_after) + '.';
+                }
+                preview.appendChild(access);
+                if (p.defaults_change) {
+                    var d = document.createElement('p');
+                    d.className = 'bulk-warn';
+                    d.textContent = 'Default credentials its entries can borrow change: now ' + describeLent(p.defaults_before) +
+                        '; after the move ' + describeLent(p.defaults_after) + '.';
+                    preview.appendChild(d);
+                }
+                st.ready = true;
+                confirmBtn.disabled = false;
+            }).catch(function(err) {
+                if (!fmoveState || seq !== st.seq) return;
+                preview.textContent = '';
+                errEl.textContent = 'Could not check the move: ' + err.message;
+            });
+        }
+
+        function closeFolderMove() {
+            fmoveState = null;
+            document.getElementById('fmove-modal').classList.remove('active');
+        }
+
+        function confirmFolderMove() {
+            var st = fmoveState;
+            if (!st || !st.ready) return;
+            var confirmBtn = document.getElementById('fmove-confirm');
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = 'Moving...';
+            fetch(folderMoveUrl(), {
+                method: 'POST',
+                headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeaders()),
+                credentials: 'same-origin',
+                body: folderMoveBody(false)
+            }).then(function(res) {
+                return res.json().catch(function() { return {}; }).then(function(data) { return { ok: res.ok, data: data }; });
+            }).then(function(r) {
+                confirmBtn.textContent = 'Move';
+                if (!r.ok && !r.data.copied) {
+                    document.getElementById('fmove-error').textContent = r.data.error || 'The move failed.';
+                    confirmBtn.disabled = false;
+                    return;
+                }
+                var to = r.data.to;
+                closeFolderMove();
+                if (r.ok) {
+                    showInfo('Moved ' + st.path + ' to ' + to.folder + '.');
+                } else {
+                    showError(r.data.error);
+                }
+                // Open the folder where it now is: expand its new ancestors
+                // so the tree can find it, and select it.
+                var parts = to.folder.split('/');
+                for (var n = 1; n < parts.length; n++) {
+                    expandedPaths[folderKey(to.scope, parts.slice(0, n).join('/'))] = true;
+                }
+                saveExpandedPaths();
+                selectedFolder = null;
+                try {
+                    localStorage.setItem(SELECTED_STORAGE_KEY, JSON.stringify({ scope: to.scope, path: to.folder }));
+                } catch (e) {}
+                subfolderCache = {};
+                if (typeof loadFavourites === 'function') loadFavourites();
+                loadFolders();
+            }).catch(function(err) {
+                confirmBtn.textContent = 'Move';
+                confirmBtn.disabled = false;
+                document.getElementById('fmove-error').textContent = 'The move failed: ' + err.message;
+            });
+        }
+
+        var fmoveNameTimer = null;
+        document.getElementById('btn-move-folder').addEventListener('click', openFolderMove);
+        document.getElementById('fmove-cancel').addEventListener('click', closeFolderMove);
+        document.getElementById('fmove-confirm').addEventListener('click', confirmFolderMove);
+        document.getElementById('fmove-filter').addEventListener('input', function() {
+            if (fmoveState && fmoveState.folders) renderFolderMoveList();
+        });
+        document.getElementById('fmove-name').addEventListener('input', function() {
+            if (!fmoveState) return;
+            fmoveState.ready = false;
+            document.getElementById('fmove-confirm').disabled = true;
+            clearTimeout(fmoveNameTimer);
+            fmoveNameTimer = setTimeout(checkFolderMove, 300);
         });
 
         document.getElementById('btn-delete-folder').addEventListener('click', function() {
