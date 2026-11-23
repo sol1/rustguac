@@ -42,7 +42,7 @@ hmac = "0.13"
 sha1 = "0.11"
 
 # Database
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -97,4 +97,4 @@ pulldown-cmark = "0.13"
 assert_cmd = "2.2.2"
 # Integration tests read the SQLite the CLI wrote. Already a runtime
 # dependency, so this adds nothing new to the tree.
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
