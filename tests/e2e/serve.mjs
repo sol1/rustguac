@@ -31,7 +31,7 @@ const TYPES = {
 
 createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    let path = url.pathname === '/' ? '/index.html' : url.pathname;
+    let path = url.pathname === '/' || url.pathname === '/login' ? '/index.html' : url.pathname;
     const file = join(root, normalize(path).replace(/^(\.\.[/\\])+/, ''));
     if (!file.startsWith(root)) { res.writeHead(403); res.end(); return; }
     try {

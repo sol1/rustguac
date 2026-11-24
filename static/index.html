@@ -109,21 +109,40 @@
 
         // Show SSO error if redirected back from a failed callback
         var ssoError = new URLSearchParams(window.location.search).get('sso_error');
+        var hasSsoError = !!ssoError;
+        var apiKeyLoginOverride = window.location.pathname === '/login';
         if (ssoError) {
             ssoErrorEl.textContent = Object.prototype.hasOwnProperty.call(ssoMessages, ssoError)
                 ? ssoMessages[ssoError] : ssoMessages.failed;
             history.replaceState(null, '', '/');
         }
 
+        var authenticated = false;
+        var authCheckComplete = false;
+        var oidcAutoLogin = false;
+        var oidcAvailable = false;
+        var autoLoginStarted = false;
+
         // If already logged in via API key, redirect
         if (sessionStorage.getItem('rustguac_api_key')) {
+            authenticated = true;
+            autoLoginStarted = true;
             window.location.href = '/connections.html';
         }
 
         // Check if already authenticated via cookie
         fetch('/api/me', { credentials: 'same-origin' })
         .then(function(res) {
-            if (res.ok) window.location.href = '/connections.html';
+            if (res.ok) {
+                authenticated = true;
+                autoLoginStarted = true;
+                window.location.href = '/connections.html';
+            }
+        })
+        .catch(function() {})
+        .then(function() {
+            authCheckComplete = true;
+            maybeStartOidcLogin();
         });
 
         function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
@@ -137,11 +156,19 @@
         var ssoBtn = document.getElementById('sso-btn');
         var ssoPollTimer = null;
 
+        function maybeStartOidcLogin() {
+            if (!oidcAutoLogin || hasSsoError || !authCheckComplete || authenticated
+                    || !oidcAvailable || autoLoginStarted) return;
+            autoLoginStarted = true;
+            window.location.href = '/auth/login';
+        }
+
         // Reflect live SSO availability: when the OIDC provider is reachable the
         // button is active; when it's down (e.g. provider not yet up after a
         // restart) the button is disabled with a notice, and we poll until the
         // provider recovers — no page reload or click needed.
         function applySsoAvailability(available) {
+            oidcAvailable = available;
             if (available) {
                 ssoBtn.disabled = false;
                 ssoBtn.textContent = 'Sign in with SSO';
@@ -161,6 +188,7 @@
                     }, 5000);
                 }
             }
+            maybeStartOidcLogin();
         }
 
         // Check if OIDC is enabled
@@ -172,6 +200,7 @@
                 apiKeyToggle.style.display = 'block';
                 // Hide API key form by default when SSO is available
                 loginForm.style.display = 'none';
+                oidcAutoLogin = !!data.oidc_auto_login && !hasSsoError && !apiKeyLoginOverride;
                 applySsoAvailability(!!data.oidc_available);
             }
             if (data.site_title) {
@@ -183,6 +212,7 @@
 
         ssoBtn.addEventListener('click', function() {
             if (ssoBtn.disabled) return;
+            autoLoginStarted = true;
             window.location.href = '/auth/login';
         });
 

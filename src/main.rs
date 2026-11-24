@@ -1313,6 +1313,8 @@ async fn run_server(config: Config, database: Db) {
     });
 
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
+    let oidc_auto_login =
+        api::OidcAutoLogin(config.oidc.as_ref().is_some_and(|oidc| oidc.auto_login));
     let vault_configured = VaultConfigured(config.vault.is_some());
     let ab_changes = api::AddressBookChanges::default();
     let credential_default_scope =
@@ -1893,6 +1895,7 @@ async fn run_server(config: Config, database: Db) {
     let html_routes = Router::new()
         .route("/", get(serve_branded_page))
         .route("/index.html", get(serve_branded_page))
+        .route("/login", get(serve_branded_page))
         .route("/connections.html", get(serve_branded_page))
         // Legacy path — the page was renamed from Address Book → Connections.
         // Permanent redirect so bookmarks keep working.
@@ -1965,6 +1968,7 @@ async fn run_server(config: Config, database: Db) {
         .layer(middleware::from_fn(security_headers))
         .layer(Extension(tls_enabled))
         .layer(Extension(oidc_enabled))
+        .layer(Extension(oidc_auto_login))
         .layer(Extension(OidcHandle(oidc_state.clone())))
         .layer(Extension(drive_configured))
         .layer(Extension(rdp_printing_allowed))
@@ -2391,7 +2395,11 @@ async fn serve_branded_page(
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     let path = request.uri().path().trim_start_matches('/');
-    let key = if path.is_empty() { "index.html" } else { path };
+    let key = if path.is_empty() || path == "login" {
+        "index.html"
+    } else {
+        path
+    };
     // Whoever the page is for decides which navigation it carries. An API-key
     // user sends no credential on the page GET and gets the anonymous
     // variant; the page reconciles that from /api/me.

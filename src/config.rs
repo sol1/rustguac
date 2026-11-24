@@ -52,6 +52,10 @@ pub struct OidcConfig {
     /// client_secret and tokens to MITM attacks.
     #[serde(default)]
     pub tls_skip_verify: bool,
+    /// Redirect unauthenticated visitors directly to the OIDC provider
+    /// instead of waiting for them to click the SSO button. Default false.
+    #[serde(default)]
+    pub auto_login: bool,
     /// Path to a custom CA certificate (PEM) for verifying the OIDC provider.
     /// Use this when your identity provider uses a private or internal CA.
     pub ca_cert: Option<String>,
@@ -74,6 +78,7 @@ impl std::fmt::Debug for OidcConfig {
             .field("groups_claim", &self.groups_claim)
             .field("extra_scopes", &self.extra_scopes)
             .field("tls_skip_verify", &self.tls_skip_verify)
+            .field("auto_login", &self.auto_login)
             .field("ca_cert", &self.ca_cert)
             .finish()
     }
@@ -1797,6 +1802,7 @@ mod tests {
             groups_claim: default_groups_claim(),
             extra_scopes: vec![],
             tls_skip_verify: false,
+            auto_login: false,
             ca_cert: None,
         };
         let dbg = format!("{:?}", config);

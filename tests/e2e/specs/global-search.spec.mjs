@@ -173,7 +173,7 @@ test('logging out forgets the cached index before the login page shows', async (
     expect(await cacheKeys(page)).toEqual([IDX_KEY, VER_KEY, WHO_KEY]);
     signedIn = false;
     await page.locator('#logout-item').click();
-    await page.waitForURL(/\/(index\.html)?$/);
+    await page.waitForURL(/\/login$/);
     await settle(page);
     expect(await cacheKeys(page)).toEqual([]);
     await expect(page.locator('#rg-search')).toHaveCount(0);
