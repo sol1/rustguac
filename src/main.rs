@@ -4,11 +4,14 @@ mod browser;
 mod config;
 mod db;
 mod drive;
+mod entry_protocols;
+mod folder_move;
 mod guacd;
 mod import;
 mod migrate;
 mod oidc;
 mod perms;
+mod preconnect;
 mod protocol;
 mod pve;
 mod recording;
@@ -1750,6 +1753,10 @@ async fn run_server(config: Config, database: Db) {
         )
         // Login scripts listing
         .route("/api/login-scripts", get(api::list_login_scripts))
+        .route(
+            "/api/pre-connect-scripts",
+            get(api::list_pre_connect_scripts),
+        )
         .route("/api/ws-ticket", post(api::create_ws_ticket))
         // Address book routes
         .route("/api/addressbook", get(api::ab_list_all))
@@ -1772,6 +1779,10 @@ async fn run_server(config: Config, database: Db) {
         .route(
             "/api/addressbook/folders/{scope}/{folder}",
             delete(api::ab_delete_folder),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/move",
+            post(api::ab_move_folder),
         )
         .route(
             "/api/addressbook/folders/{scope}/{folder}/config",

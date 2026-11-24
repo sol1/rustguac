@@ -12,6 +12,12 @@ test('starring an entry puts it in Favourites, and Connect there uses its folder
 
     await page.locator('.folder-row').filter({ hasText: /beta/ }).first().click();
     const row = page.locator('.main .entries-table tbody tr').filter({ hasText: 'app01' });
+    // Hovering the star lights it gold, with no button box behind it.
+    await row.locator('.fav-star').hover();
+    await expect.poll(() => row.locator('.fav-star').evaluate(el => {
+        const cs = getComputedStyle(el);
+        return [cs.backgroundColor, cs.color];
+    })).toEqual(['rgba(0, 0, 0, 0)', 'rgb(245, 197, 24)']);
     await row.locator('.fav-star').click();
     await expect.poll(() => api.calls.find(c => c.method === 'PUT' && c.path === '/api/me/favourites')?.body?.entry).toBe('app01');
 

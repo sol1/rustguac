@@ -39,6 +39,8 @@ See `config.example.toml` for a fully commented reference.
 | `cdp_port_range_end` | `9299` | Last CDP port |
 | `login_scripts_dir` | `/opt/rustguac/scripts` | Directory containing login scripts |
 | `login_script_timeout_secs` | `120` | Maximum runtime for login scripts before they are killed |
+| `pre_connect_scripts_dir` | `/opt/rustguac/pre-connect` | Directory of [pre-connect scripts](integrations.md#pre-connect-scripts) an entry can name; only executables here can run |
+| `pre_connect_timeout_secs` | `120` | How long a pre-connect script may run before it is killed and the connection fails |
 
 ## Connection allowlists
 

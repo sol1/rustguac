@@ -106,6 +106,12 @@ pub struct DefaultCredentials {
     pub private_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Also lend these to entries that use credential variables, when the
+    /// connecting user has set none of the entry's variables (#297). Off
+    /// unless a folder turns it on, so an unset variable still prompts by
+    /// default instead of connecting with a shared account.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cover_variables: bool,
 }
 
 impl DefaultCredentials {
@@ -158,6 +164,50 @@ pub fn apply_folder_defaults(entry: &mut AddressBookEntry, defaults: &FolderDefa
     entry.password = d.password.clone().filter(|p| !p.is_empty());
     entry.private_key = d.private_key.clone().filter(|k| !k.is_empty());
     true
+}
+
+/// The entry `e` would be with folder defaults standing in for its credential
+/// variables (#297), when they may: the defaults for its type have a secret
+/// and `cover_variables` set, the entry is not set to prompt, its variables
+/// are all in fields a default can fill (username, password, domain, private
+/// key), and once they are taken out it has no secret of its own (so the
+/// default's password is never paired with a literal one, or the other way
+/// round). `None` otherwise, including for an entry with no variables. The
+/// caller decides that the user has set none of them: a user who has set
+/// some is asked for the rest, never given a mix of theirs and the folder's.
+pub fn defaults_for_variables(
+    e: &AddressBookEntry,
+    defaults: &FolderDefaults,
+) -> Option<AddressBookEntry> {
+    if entry_credential_variables(e).is_empty() || e.prompt_credentials == Some(true) {
+        return None;
+    }
+    let d = defaults.get(&e.session_type)?;
+    if !d.cover_variables || !d.has_secret() {
+        return None;
+    }
+    let mut out = e.clone();
+    for f in [
+        &mut out.username,
+        &mut out.password,
+        &mut out.domain,
+        &mut out.private_key,
+    ] {
+        if f.as_deref().is_some_and(is_credential_variable) {
+            *f = None;
+        }
+    }
+    // A variable left in a field a default cannot fill (an RD Gateway or
+    // container credential): the defaults do not cover this entry.
+    if !entry_credential_variables(&out).is_empty() {
+        return None;
+    }
+    if !apply_folder_defaults(&mut out, defaults) {
+        return None;
+    }
+    // Defaults that are themselves variables (`$tenant_password`) cannot stand
+    // in for the user's: the fallback is for a shared account.
+    entry_credential_variables(&out).is_empty().then_some(out)
 }
 
 /// What the defaults walk reads per folder: its own `.defaults`, and whether
@@ -274,8 +324,11 @@ impl FolderConfig {
 /// A connection entry stored in Vault.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AddressBookEntry {
-    #[serde(rename = "type")]
-    pub session_type: String, // "ssh", "rdp", "vnc", "web"
+    /// Session type of an entry in the single-protocol form ("ssh", "rdp",
+    /// "vnc", "web", ...). Empty, and not stored, for an entry that lists
+    /// its `protocols` instead (see `crate::entry_protocols`).
+    #[serde(rename = "type", default, skip_serializing_if = "String::is_empty")]
+    pub session_type: String,
     pub hostname: Option<String>,
     pub port: Option<u16>,
     pub username: Option<String>,
@@ -509,6 +562,16 @@ pub struct AddressBookEntry {
     /// `black-white`). None uses guacd's default, `gray-black`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_color_scheme: Option<String>,
+    /// SSH: a command to run instead of the login shell, for example a
+    /// database client (`psql -h db.internal -U alice appdb`). The session
+    /// ends when it exits. Shown to everyone who can see the entry, so never
+    /// a place for a password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_command: Option<String>,
+    /// A script from `pre_connect_scripts_dir` to run before connecting
+    /// (#329), for example to power on a VM. Saved entries only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_connect_script: Option<String>,
     /// Wake-on-LAN: send a magic packet to wake the target before connecting.
     /// Passed through to guacd's `wol-send-packet` param (SSH/RDP/VNC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -536,6 +599,19 @@ pub struct AddressBookEntry {
     /// the edit form does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
+    /// The ways to connect to this host (#296), the primary first. Each
+    /// inherits the fields above and overrides any of them. Absent for an
+    /// entry in the single-protocol form, which has a top-level `type`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocols: Option<Vec<crate::entry_protocols::ProtocolEntry>>,
+    /// Who may use this entry, within the folder's audience: OIDC groups,
+    /// as in a folder `.config`. Unset or empty: everyone who can open the
+    /// folder. A protocol's own rule replaces it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_groups: Option<Vec<String>>,
+    /// Login emails allowed to use this entry, alongside `allowed_groups`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_users: Option<Vec<String>>,
 }
 
 impl AddressBookEntry {
@@ -607,6 +683,11 @@ pub struct EntryInfo {
     /// the entry itself. Omitted when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub inherited_credentials: bool,
+    /// True when the folder's defaults stand in for this entry's credential
+    /// variables while the user has set none of them (#297), so unset
+    /// variables are optional, not "credentials needed". Omitted when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub variables_fallback: bool,
     /// VNC color depth.
     pub color_depth: Option<u8>,
     /// SSH tunnel jump hosts (no credentials exposed).
@@ -750,6 +831,12 @@ pub struct EntryInfo {
     /// SSH terminal colour scheme (SSH only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_color_scheme: Option<String>,
+    /// SSH: the command run instead of the login shell (SSH only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_command: Option<String>,
+    /// The script run before connecting (#329).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_connect_script: Option<String>,
     /// Wake-on-LAN: send a magic packet before connecting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wol_send_packet: Option<bool>,
@@ -769,12 +856,34 @@ pub struct EntryInfo {
     /// `AddressBookEntry::external_id`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
+    /// Name of the protocol the fields above describe: the first one the
+    /// caller may use, the primary unless it is closed to them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    /// Every protocol the caller may use, in order, each described as the
+    /// fields above describe the first (#296). Empty inside a protocol.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<EntryInfo>,
+    /// Connection editors only: the access rule set at this level (the host's on the
+    /// entry, the protocol's own on a protocol).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_groups: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_users: Option<Vec<String>>,
+    /// Connection editors only: the fields set at this level, as stored, for
+    /// the editor: the host's own on the entry, a protocol's overrides on a
+    /// protocol. Secrets appear only as `has_<field>` flags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings: Option<serde_json::Value>,
 }
 
 impl EntryInfo {
     /// Mark an entry as connectable through folder defaults when it has no
     /// secret of its own and the defaults cover its session type.
     pub fn apply_inherited(&mut self, e: &AddressBookEntry, defaults: Option<&FolderDefaults>) {
+        if defaults.is_some_and(|d| defaults_for_variables(e, d).is_some()) {
+            self.variables_fallback = true;
+        }
         // An entry with secrets of its own, or one set to prompt, never uses
         // the folder's, so it must not be labelled as if it did.
         if self.has_credentials || !entry_takes_folder_defaults(e) {
@@ -830,6 +939,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             prompt_credentials: e.prompt_credentials,
             has_credentials: entry_has_own_credentials(e),
             inherited_credentials: false,
+            variables_fallback: false,
             color_depth: e.color_depth,
             jump_hosts,
             remote_app: e.remote_app.clone(),
@@ -883,13 +993,71 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             max_monitors: e.max_monitors,
             ssh_font_size: e.ssh_font_size,
             ssh_color_scheme: e.ssh_color_scheme.clone(),
+            ssh_command: e.ssh_command.clone(),
+            pre_connect_script: e.pre_connect_script.clone(),
             wol_send_packet: e.wol_send_packet,
             wol_mac_addr: e.wol_mac_addr.clone(),
             wol_broadcast_addr: e.wol_broadcast_addr.clone(),
             wol_udp_port: e.wol_udp_port,
             wol_wait_time: e.wol_wait_time,
             external_id: e.external_id.clone(),
+            protocol: None,
+            protocols: Vec::new(),
+            allowed_groups: None,
+            allowed_users: None,
+            settings: None,
         }
+    }
+}
+
+impl EntryInfo {
+    /// What `who` may see of an entry: the fields of the first protocol they
+    /// may use, and every protocol they may use under `protocols`. `None`
+    /// when they may use none, so the entry is not shown at all. `who` is
+    /// `None` for a connection editor (`connections.edit`), who sees every
+    /// protocol, the access rules and each level's own fields (secrets as
+    /// flags only).
+    pub fn for_viewer(
+        name: &str,
+        e: &AddressBookEntry,
+        defaults: Option<&FolderDefaults>,
+        who: Option<FolderSubject<'_>>,
+    ) -> Option<EntryInfo> {
+        use crate::entry_protocols::{editor_settings, host_settings};
+        let editor = who.is_none();
+        let mut protocols: Vec<EntryInfo> = e
+            .visible_protocols(who)
+            .into_iter()
+            .map(|(p, eff)| {
+                let mut info = EntryInfo::from((name, &eff));
+                info.apply_inherited(&eff, defaults);
+                info.protocol = Some(p.name().to_string());
+                if editor {
+                    info.allowed_groups = p.allowed_groups.clone();
+                    info.allowed_users = p.allowed_users.clone();
+                    info.settings = Some(editor_settings(&p.settings));
+                }
+                info
+            })
+            .collect();
+        if protocols.is_empty() {
+            return None;
+        }
+        let mut top = protocols[0].clone();
+        top.allowed_groups = None;
+        top.allowed_users = None;
+        top.settings = None;
+        if editor {
+            let (host, _) = e.split();
+            top.allowed_groups = host.allowed_groups.clone();
+            top.allowed_users = host.allowed_users.clone();
+            top.settings = Some(editor_settings(&host_settings(&host)));
+        }
+        for p in &mut protocols {
+            p.protocols = Vec::new();
+        }
+        top.protocols = protocols;
+        Some(top)
     }
 }
 
@@ -1668,6 +1836,22 @@ impl VaultClient {
         }
     }
 
+    /// Remove a folder's `.config`. Absent is fine.
+    pub async fn delete_folder_config(&self, scope: &str, folder: &str) -> Result<(), VaultError> {
+        validate_path(folder)?;
+        let scope_prefix = self.resolve_scope_prefix(scope)?;
+        let path = self.metadata_path(&scope_prefix, &format!("{}/{}", folder, ".config"));
+        let resp = self.request(reqwest::Method::DELETE, &path, None).await?;
+        match resp.status().as_u16() {
+            200 | 204 | 404 => Ok(()),
+            403 => Err(VaultError::Forbidden),
+            s => Err(VaultError::Parse(format!(
+                "delete folder config failed ({})",
+                s
+            ))),
+        }
+    }
+
     /// The defaults that apply to entries in `folder`: see
     /// `resolve_effective_defaults` for the walk and where it stops.
     pub async fn effective_folder_defaults(
@@ -2114,7 +2298,7 @@ fn validate_name(name: &str) -> Result<(), VaultError> {
 /// Validate a folder path that may contain subfolders (e.g. "Clients/Acme/Servers").
 /// Each segment is validated with the same rules as `validate_name`.
 /// Empty segments, trailing slashes, and leading slashes are rejected.
-fn validate_path(path: &str) -> Result<(), VaultError> {
+pub(crate) fn validate_path(path: &str) -> Result<(), VaultError> {
     if path.is_empty() {
         return Err(VaultError::BadName("path cannot be empty".into()));
     }
@@ -3584,6 +3768,78 @@ mod tests {
             !cfg(false, &[], &[]).shares_parent_audience(),
             "an isolated folder takes nothing from its parent"
         );
+    }
+
+    #[test]
+    fn folder_defaults_stand_in_for_variables_only_when_allowed() {
+        let mut defaults = FolderDefaults::new();
+        defaults.insert(
+            "rdp".into(),
+            DefaultCredentials {
+                username: Some("svc-acme".into()),
+                password: Some("svc-pw".into()),
+                domain: Some("ACME".into()),
+                cover_variables: true,
+                ..Default::default()
+            },
+        );
+        let e = |v: serde_json::Value| -> AddressBookEntry { serde_json::from_value(v).unwrap() };
+        let vars = e(serde_json::json!({"type": "rdp", "hostname": "h",
+            "username": "$acme_username", "password": "$acme_password", "domain": "$acme_domain"}));
+
+        let got = defaults_for_variables(&vars, &defaults).unwrap();
+        assert_eq!(got.username.as_deref(), Some("svc-acme"));
+        assert_eq!(got.password.as_deref(), Some("svc-pw"));
+        assert_eq!(got.domain.as_deref(), Some("ACME"));
+        assert!(entry_credential_variables(&got).is_empty());
+
+        // Off unless the folder turns it on.
+        let mut off = defaults.clone();
+        off.get_mut("rdp").unwrap().cover_variables = false;
+        assert!(defaults_for_variables(&vars, &off).is_none());
+        // A prompting entry still prompts.
+        let mut prompting = vars.clone();
+        prompting.prompt_credentials = Some(true);
+        assert!(defaults_for_variables(&prompting, &defaults).is_none());
+        // No defaults for the type.
+        let ssh = e(serde_json::json!({"type": "ssh", "hostname": "h", "password": "$p"}));
+        assert!(defaults_for_variables(&ssh, &defaults).is_none());
+        // A literal password with a variable username: never paired.
+        let literal = e(serde_json::json!({"type": "rdp", "hostname": "h",
+            "username": "$acme_username", "password": "own"}));
+        assert!(defaults_for_variables(&literal, &defaults).is_none());
+        // A variable a default cannot fill (the gateway's).
+        let gw = e(serde_json::json!({"type": "rdp", "hostname": "h",
+            "password": "$acme_password", "gateway_password": "$gw_password"}));
+        assert!(defaults_for_variables(&gw, &defaults).is_none());
+        // A literal username stays the entry's own, as for a bare entry.
+        let named = e(serde_json::json!({"type": "rdp", "hostname": "h",
+            "username": "Administrator", "password": "$acme_password"}));
+        assert_eq!(
+            defaults_for_variables(&named, &defaults)
+                .unwrap()
+                .username
+                .as_deref(),
+            Some("Administrator")
+        );
+        // Defaults that are variables themselves cannot stand in.
+        let mut var_defaults = defaults.clone();
+        var_defaults.get_mut("rdp").unwrap().password = Some("$tenant_password".into());
+        assert!(defaults_for_variables(&vars, &var_defaults).is_none());
+        // No variables: not this path (plain folder defaults handle it).
+        let bare = e(serde_json::json!({"type": "rdp", "hostname": "h"}));
+        assert!(defaults_for_variables(&bare, &defaults).is_none());
+
+        // The listing says so, so the UI does not ask for the variables.
+        let mut info = EntryInfo::from(("box", &vars));
+        info.apply_inherited(&vars, Some(&defaults));
+        assert!(info.variables_fallback);
+        let mut info = EntryInfo::from(("box", &vars));
+        info.apply_inherited(&vars, Some(&off));
+        assert!(!info.variables_fallback);
+        // And the flag is stored only when on.
+        let stored = serde_json::to_value(&off["rdp"]).unwrap();
+        assert!(stored.get("cover_variables").is_none());
     }
 
     #[test]

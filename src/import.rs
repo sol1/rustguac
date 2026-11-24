@@ -212,6 +212,12 @@ pub async fn cmd_import_guacamole(
                 .get("color-scheme")
                 .filter(|s| crate::guacd::SSH_COLOR_SCHEMES.contains(s))
                 .map(|s| s.to_string()),
+            pre_connect_script: None,
+            ssh_command: param_map
+                .get("command")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
             wol_send_packet: param_map
                 .get("wol-send-packet")
                 .map(|s| s.eq_ignore_ascii_case("true")),
@@ -221,6 +227,9 @@ pub async fn cmd_import_guacamole(
             wol_wait_time: param_map.get("wol-wait-time").and_then(|s| s.parse().ok()),
             // A Guacamole dump is a one-off import, not a sync source.
             external_id: None,
+            protocols: None,
+            allowed_groups: None,
+            allowed_users: None,
         };
 
         if !cred_maps.is_empty()

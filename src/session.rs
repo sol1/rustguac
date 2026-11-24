@@ -103,6 +103,9 @@ pub struct CreateSessionRequest {
     pub address_book_entry: Option<String>,
     /// Address book folder name (for reporting).
     pub address_book_folder: Option<String>,
+    /// Name of the entry protocol (#296); set by the API for an entry.
+    #[serde(default)]
+    pub address_book_protocol: Option<String>,
     /// Display name of the address book entry (for reporting).
     pub entry_display_name: Option<String>,
     /// Per-entry max recordings to keep.
@@ -224,6 +227,10 @@ pub struct CreateSessionRequest {
     /// SSH terminal colours, one of `guacd::SSH_COLOR_SCHEMES`.
     #[serde(default)]
     pub ssh_color_scheme: Option<String>,
+    /// SSH: a command to run instead of the login shell; the session ends
+    /// when it exits.
+    #[serde(default)]
+    pub ssh_command: Option<String>,
     /// Wake-on-LAN: send a magic packet before connecting (SSH/RDP/VNC).
     pub wol_send_packet: Option<bool>,
     /// Wake-on-LAN: target MAC address.
@@ -242,6 +249,7 @@ impl CreateSessionRequest {
     /// session belongs to and carry its admin's policy:
     ///
     /// - `address_book_entry` / `address_book_folder` / `entry_display_name`
+    ///   / `address_book_protocol`
     ///   attribute the session and its recording to an entry. Claimed by an
     ///   ad-hoc caller together with `max_recordings`, per-entry rotation
     ///   would delete that entry's older recordings when the session ended.
@@ -260,6 +268,7 @@ impl CreateSessionRequest {
     pub fn clear_entry_only_fields(&mut self) {
         self.address_book_entry = None;
         self.address_book_folder = None;
+        self.address_book_protocol = None;
         self.entry_display_name = None;
         self.max_recordings = None;
         self.record_typescript = None;
@@ -421,6 +430,10 @@ pub struct SessionInfo {
     pub address_book_entry: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address_book_folder: Option<String>,
+    /// Name of the entry protocol the session connects with (#296), for
+    /// entries with more than one way in (`ssh`, `rdp`, `ssh-2222`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address_book_protocol: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -481,6 +494,8 @@ pub struct Session {
     pub address_book_entry: Option<String>,
     /// Address book folder name (for reporting).
     pub address_book_folder: Option<String>,
+    /// Name of the entry protocol the session uses (#296).
+    pub address_book_protocol: Option<String>,
     /// Display name of the address book entry (for reporting).
     pub entry_display_name: Option<String>,
     /// Per-entry max recordings to keep (from address book entry).
@@ -925,6 +940,7 @@ impl Session {
             url: self.url.clone(),
             address_book_entry: self.address_book_entry.clone(),
             address_book_folder: self.address_book_folder.clone(),
+            address_book_protocol: self.address_book_protocol.clone(),
             entry_display_name: self.entry_display_name.clone(),
             thumbnail_url: Some(format!("/api/sessions/{}/thumbnail", self.id)),
             fullscreen_on_connect: self.fullscreen_on_connect,
@@ -1256,6 +1272,7 @@ impl SessionManager {
                         .ssh_font_size
                         .map(|s| s.clamp(MIN_SSH_FONT, MAX_SSH_FONT)),
                     color_scheme: ssh_color_scheme(req.ssh_color_scheme.as_deref())?,
+                    command: ssh_command(req.ssh_command.as_deref())?,
                     wol: wol.clone(),
                 });
                 (
@@ -2245,6 +2262,7 @@ impl SessionManager {
             recording_enabled,
             address_book_entry: req.address_book_entry,
             address_book_folder: req.address_book_folder,
+            address_book_protocol: req.address_book_protocol,
             entry_display_name: req.entry_display_name,
             max_recordings: req.max_recordings,
             login_script_handle,
@@ -3013,6 +3031,29 @@ fn checked_spice_ca(ca: Option<String>) -> Result<Option<String>, SessionError> 
 /// starting with '.' or '-' (which rules out `.` and `..`).
 /// An SSH colour scheme from a request: unset or blank for guacd's default,
 /// otherwise one of `guacd::SSH_COLOR_SCHEMES`.
+/// Longest `ssh_command` accepted.
+const MAX_SSH_COMMAND: usize = 4096;
+
+/// Check an SSH command to run instead of the login shell: blank is none, and
+/// it is one line of printable text (no control characters, so no newline
+/// that would run a second command), at most [`MAX_SSH_COMMAND`] bytes.
+pub(crate) fn ssh_command(command: Option<&str>) -> Result<Option<String>, SessionError> {
+    let Some(c) = command.map(str::trim).filter(|c| !c.is_empty()) else {
+        return Ok(None);
+    };
+    if c.len() > MAX_SSH_COMMAND {
+        return Err(SessionError::ValidationError(format!(
+            "ssh_command is at most {MAX_SSH_COMMAND} bytes"
+        )));
+    }
+    if c.chars().any(char::is_control) {
+        return Err(SessionError::ValidationError(
+            "ssh_command must be one line, without control characters".into(),
+        ));
+    }
+    Ok(Some(c.to_string()))
+}
+
 fn ssh_color_scheme(scheme: Option<&str>) -> Result<Option<String>, SessionError> {
     match scheme.map(str::trim) {
         None | Some("") => Ok(None),
@@ -3149,6 +3190,22 @@ pub(crate) fn check_share_token_match(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn ssh_commands_are_one_printable_line() {
+        assert_eq!(ssh_command(None).unwrap(), None);
+        assert_eq!(ssh_command(Some("  ")).unwrap(), None);
+        assert_eq!(
+            ssh_command(Some(" psql -h db.internal -U alice appdb "))
+                .unwrap()
+                .as_deref(),
+            Some("psql -h db.internal -U alice appdb")
+        );
+        assert!(ssh_command(Some("psql\nrm -rf ~")).is_err(), "a newline");
+        assert!(ssh_command(Some("mysql\u{1b}[2J")).is_err(), "an escape");
+        assert!(ssh_command(Some(&"x".repeat(MAX_SSH_COMMAND + 1))).is_err());
+        assert!(ssh_command(Some(&"x".repeat(MAX_SSH_COMMAND))).is_ok());
+    }
+
+    #[test]
     fn ssh_color_schemes_are_checked() {
         assert_eq!(ssh_color_scheme(None).unwrap(), None);
         assert_eq!(ssh_color_scheme(Some(" ")).unwrap(), None);
@@ -3223,6 +3280,7 @@ mod tests {
             "hostname": "10.0.0.1",
             "address_book_entry": "shared/prod/db01",
             "address_book_folder": "prod",
+            "address_book_protocol": "ssh",
             "entry_display_name": "db01",
             "max_recordings": 1,
             "record_typescript": true,
@@ -3232,6 +3290,7 @@ mod tests {
         req.clear_entry_only_fields();
         assert_eq!(req.address_book_entry, None);
         assert_eq!(req.address_book_folder, None);
+        assert_eq!(req.address_book_protocol, None);
         assert_eq!(req.entry_display_name, None);
         assert_eq!(req.max_recordings, None);
         assert_eq!(req.record_typescript, None);
@@ -3271,6 +3330,7 @@ mod tests {
             "enable_recording": false,
             "enable_drive": true,
             "address_book_entry": "shared/prod/db01",
+            "address_book_protocol": "ssh-2222",
             "max_recordings": 1,
             "record_typescript": true,
             "wol_send_packet": true,
@@ -3292,6 +3352,7 @@ mod tests {
         assert_eq!(req.kerberos_cache, None);
         assert_eq!(req.allow_sharing, None);
         assert_eq!(req.address_book_entry, None);
+        assert_eq!(req.address_book_protocol, None);
         assert_eq!(req.max_recordings, None);
         assert_eq!(req.record_typescript, None);
         assert_eq!(req.wol_send_packet, None);
@@ -3744,6 +3805,7 @@ mod tests {
             recording_enabled: false,
             address_book_entry: None,
             address_book_folder: None,
+            address_book_protocol: None,
             entry_display_name: None,
             max_recordings: None,
             login_script_handle: None,
@@ -4477,6 +4539,8 @@ mod tests {
             ("disable_copy", serde_json::json!(true)),
             ("allow_sharing", serde_json::json!(true)),
             ("container_env", serde_json::json!({"A": "1"})),
+            // Another protocol of the same entry is another session (#296).
+            ("address_book_protocol", serde_json::json!("ssh-2222")),
         ] {
             let other = entry_request(serde_json::json!({ key: value }));
             assert_ne!(

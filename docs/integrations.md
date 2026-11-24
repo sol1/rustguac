@@ -801,6 +801,57 @@ Tunnel errors include the hop index for easier debugging. For example, if hop 2 
 
 ---
 
+## Pre-connect scripts
+
+A saved entry can run a script before rustguac connects to it, for example to power on a VM that is off most of the time through its provider's API ([#329](https://github.com/sol1/rustguac/issues/329)). Wake-on-LAN covers hosts whose network card wakes on a magic packet; a script covers everything else.
+
+The entry only names the script. Scripts live in `pre_connect_scripts_dir` (default `/opt/rustguac/pre-connect`), and only executables in that directory can run, so editing connections never lets anyone run a program of their choosing. Keep the directory owned by root and not writable by the `rustguac` user:
+
+```bash
+sudo install -d -m 0755 /opt/rustguac/pre-connect
+sudo install -m 0755 power-on.sh /opt/rustguac/pre-connect/
+```
+
+In the entry editor, pick the script under **Before connecting, run** (`pre_connect_script` in the API). It runs when someone connects to the entry, from Connections or a quick-connect link, before the session is made, and not again for a repeat click that reuses the same pending session. It never runs for an ad-hoc connection, or for a VDI desktop.
+
+### What the script gets
+
+- **stdin:** JSON with `scope`, `folder`, `entry`, `protocol`, `session_type`, `hostname`, `port` (the entry's, or the protocol's standard port when it sets none: 22, 3389, 5900) and `user` (who is connecting). Never the entry's credentials.
+- **Environment:** the same as `RUSTGUAC_SCOPE`, `RUSTGUAC_FOLDER`, `RUSTGUAC_ENTRY`, `RUSTGUAC_PROTOCOL`, `RUSTGUAC_SESSION_TYPE`, `RUSTGUAC_HOSTNAME`, `RUSTGUAC_PORT` and `RUSTGUAC_USER`, plus `PATH`, `LANG` and `HOME`. Nothing else of rustguac's environment is passed on (it holds secrets such as `VAULT_SECRET_ID`), so a script that needs an API token reads it from a file of its own.
+- It runs as the `rustguac` user, in its own process group, from the scripts directory.
+
+### What it decides
+
+- **Exit 0:** the connection goes ahead.
+- **Anything else:** the connection fails with `pre-connect script "power-on.sh" failed (exit N): <last line of stderr>`, so write a reason for the user to stderr. The whole stderr goes to rustguac's log.
+- **Still running after `pre_connect_timeout_secs`** (default 120): the script and everything it started are killed, and the connection fails.
+
+The connection waits for the script, so a script that starts a VM should also wait until it answers (see below) rather than sleep a fixed time.
+
+### Example: start a Proxmox VM
+
+```bash
+#!/bin/bash
+# /opt/rustguac/pre-connect/power-on.sh
+# Starts the VM named after the entry and waits until its RDP or SSH port answers.
+set -euo pipefail
+PVE=https://pve.example.com:8006
+TOKEN=$(cat /etc/rustguac-pre-connect/pve-token)   # PVEAPIToken=user@pve!rustguac=...
+VMID=$(case "$RUSTGUAC_ENTRY" in win11) echo 101 ;; build01) echo 102 ;; *) echo "no VM for $RUSTGUAC_ENTRY" >&2; exit 2 ;; esac)
+NODE=pve1
+
+status=$(curl -fsS -H "Authorization: $TOKEN" "$PVE/api2/json/nodes/$NODE/qemu/$VMID/status/current" | jq -r .data.status)
+if [ "$status" != running ]; then
+    curl -fsS -X POST -H "Authorization: $TOKEN" "$PVE/api2/json/nodes/$NODE/qemu/$VMID/status/start" >/dev/null
+fi
+for _ in $(seq 1 90); do
+    if timeout 1 bash -c "</dev/tcp/$RUSTGUAC_HOSTNAME/$RUSTGUAC_PORT" 2>/dev/null; then exit 0; fi
+    sleep 1
+done
+echo "VM $VMID started but $RUSTGUAC_HOSTNAME:$RUSTGUAC_PORT is not answering yet, try again in a minute" >&2
+exit 1
+```
+
 ## RDP Kerberos NLA Authentication
 
 rustguac includes a patched guacd with Kerberos NLA (Network Level Authentication) support. This allows RDP connections to authenticate using Kerberos instead of NTLM, which is important as Microsoft is phasing out NTLM.

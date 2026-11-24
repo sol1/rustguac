@@ -1174,14 +1174,19 @@ html:not([data-role-level="4"]) .admin-only { display: none !important; }
     border: 3px solid rgba(255,255,255,0.25); border-top-color: var(--accent, #5bc0be);
     border-radius: 50%; animation: rg-btn-spin 0.8s linear infinite;
 }
-#rg-session-exit { position: absolute; top: 10px; right: 14px; }
-#rg-session-fs { position: absolute; top: 10px; right: 104px; }
+/* Top centre, like a remote desktop connection bar: a remote window's own
+   controls (close, maximise) sit at the top right, where these used to be
+   and where a click meant for the remote window landed on Exit (#363). */
+#rg-session-bar {
+    position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    z-index: 5001; display: flex; gap: var(--s-1, 4px);
+}
 #rg-session-fs[hidden] { display: none; }
 .rg-session-btn {
-    z-index: 5001;
-    height: 32px; padding: 0 var(--s-3, 14px);
+    height: 28px; padding: 0 var(--s-3, 14px);
     background: rgba(20,24,38,0.72); color: var(--text, #e0e0e0);
-    border: 1px solid var(--border, #333); border-radius: var(--radius, 2px);
+    border: 1px solid var(--border, #333); border-top: 0;
+    border-radius: 0 0 var(--radius, 2px) var(--radius, 2px);
     font-family: monospace; font-size: var(--fz-sm, 16px); cursor: pointer;
     opacity: 0.35; transition: opacity 0.15s;
 }

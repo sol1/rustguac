@@ -550,6 +550,8 @@
                 var date = r.modified ? new Date(r.modified).toLocaleString() : (r.created_at ? new Date(r.created_at).toLocaleString() : '');
                 var entryName = r.entry_display_name || r.address_book_entry || r.name;
                 var typeBadge = r.session_type ? '<span class="type-badge type-' + escapeAttr(r.session_type) + '">' + escapeHtml(r.session_type) + '</span>' : '';
+                // The entry protocol's name, when it says more than the type (#296).
+                if (r.protocol && r.protocol !== r.session_type) typeBadge += ' <span style="color:var(--text-muted);font-size:0.8em">' + escapeHtml(r.protocol) + '</span>';
                 html += '<tr>' +
                     '<td title="' + escapeAttr(r.name) + '">' + entryNameHtml(entryName) + '</td>' +
                     '<td>' + escapeHtml(r.user || '') + '</td>' +
