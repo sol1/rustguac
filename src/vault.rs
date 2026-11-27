@@ -1939,6 +1939,23 @@ impl VaultClient {
         }
     }
 
+    pub async fn put_rdp_password(&self, username: &str, password: &str) -> Result<(), VaultError> {
+        let path = format!("/v1/{}/data/rdp-users/{}", self.mount, username);
+        let body = serde_json::json!({
+            "data": { "password": password, "rotated_at": chrono::Utc::now() }
+        });
+        let response = self
+            .request(reqwest::Method::POST, &path, Some(&body))
+            .await?;
+        match response.status().as_u16() {
+            200 | 204 => Ok(()),
+            403 => Err(VaultError::Forbidden),
+            status => Err(VaultError::Parse(format!(
+                "RDP password write failed ({status})"
+            ))),
+        }
+    }
+
     // ── Internal helpers ──
 
     /// Resolve "shared" or "instance" scope label to the actual Vault path prefix.
@@ -3328,6 +3345,12 @@ mod tests {
             .expect("openssl needed");
         assert!(status.status.success(), "CSR gen failed");
 
+        let extensions = dir.join("client.ext");
+        std::fs::write(
+            &extensions,
+            "basicConstraints=CA:FALSE\nextendedKeyUsage=clientAuth\n",
+        )
+        .unwrap();
         let status = std::process::Command::new("openssl")
             .args([
                 "x509",
@@ -3341,6 +3364,8 @@ mod tests {
                 "-CAcreateserial",
                 "-out",
                 cert_path.to_str().unwrap(),
+                "-extfile",
+                extensions.to_str().unwrap(),
                 "-days",
                 "1",
             ])
@@ -3426,6 +3451,12 @@ mod tests {
             .expect("openssl needed");
         assert!(status.status.success());
 
+        let extensions = dir.join("client.ext");
+        std::fs::write(
+            &extensions,
+            "basicConstraints=CA:FALSE\nextendedKeyUsage=clientAuth\n",
+        )
+        .unwrap();
         let status = std::process::Command::new("openssl")
             .args([
                 "x509",
@@ -3439,6 +3470,8 @@ mod tests {
                 "-CAcreateserial",
                 "-out",
                 leaf_path.to_str().unwrap(),
+                "-extfile",
+                extensions.to_str().unwrap(),
                 "-days",
                 "1",
             ])

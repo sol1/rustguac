@@ -158,6 +158,8 @@
             border: 1px solid var(--border) !important;
         }
         #btn-reconnect:hover { background: var(--border); }
+        #rdp-password-fallback { margin: 1rem 0; }
+        #rdp-password-fallback input { margin: .4rem; padding: .35rem; }
         #fs-bar {
             display: none;
             position: fixed;
@@ -252,12 +254,17 @@
     <script src="/guac/Object.js"></script>
     <script src="/guac/RawAudioFormat.js"></script>
     <script src="/guac/SessionRecording.js"></script>
+    <script src="/rdp-launch.js"></script>
 </head>
 <body>
     <div id="disconnected-overlay">
         <div id="disconnected-box">
             <h2 id="disconnected-title">Session Ended</h2>
             <p id="disconnected-message">The remote session has been disconnected.</p>
+            <form id="rdp-password-fallback" method="post" action="/rdp/launch" hidden>
+                <label>Windows password <input name="password" type="password" autocomplete="current-password" required></label>
+                <button type="submit">Sign in</button>
+            </form>
             <div>
                 <button id="btn-reconnect">Reconnect</button>
                 <button id="btn-close-session">Close</button>
@@ -333,6 +340,8 @@
         var statusEl = document.getElementById('status');
         var urlParams = new URLSearchParams(window.location.search);
         var shareToken = urlParams.get('token');
+        var rdpTarget = urlParams.get('connectTo');
+        var isRdpSso = urlParams.get('rdpSso') === '1';
         var apiKey = sessionStorage.getItem('rustguac_api_key');
         // Pre-minted single-use WebSocket ticket passed in the URL. Lets a
         // headless API integration authenticate the owner connection without an
@@ -355,6 +364,12 @@
         function rgGo(url) {
             if (embedded) { try { window.top.location.href = url; return; } catch (e) {} }
             window.location.href = url;
+        }
+        function withRdpTarget(url) {
+            return rdpTarget ? url + '?connectTo=' + encodeURIComponent(rdpTarget) : url;
+        }
+        function connectionsPage() {
+            return isRdpSso ? '/?quickConnect' : '/connections.html';
         }
         // Embedded: the launcher enters fullscreen, waits for the viewport to
         // stop changing and creates the session at that measured size, so the
@@ -500,7 +515,7 @@
         } else {
             var fetchHeaders = {};
             if (apiKey) fetchHeaders['Authorization'] = 'Bearer ' + apiKey;
-            fetch('/api/sessions/' + sessionId, { headers: fetchHeaders, credentials: 'same-origin' })
+            fetch(withRdpTarget('/api/sessions/' + sessionId), { headers: fetchHeaders, credentials: 'same-origin' })
             .then(function(res) {
                 if (!res.ok) { statusEl.textContent = 'Error: Session not found'; throw new Error('Session not found'); }
                 return res.json();
@@ -529,13 +544,12 @@
         function connectWebSocket(ticketParam) {
             var wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
             var wsUrl = wsProtocol + '//' + window.location.host + '/ws/' + sessionId;
-            if (ticketParam) wsUrl += '?ticket=' + encodeURIComponent(ticketParam);
 
             var tunnel = new Guacamole.WebSocketTunnel(wsUrl);
             var client = new Guacamole.Client(tunnel);
             // Expose for console debugging
             window.__guac_client = client;
-            setupClient(client, tunnel);
+            setupClient(client, tunnel, ticketParam);
         }
 
         function startGuacamole() {
@@ -573,7 +587,7 @@
             connectWebSocket(null);
         }
 
-        function setupClient(client, tunnel) {
+        function setupClient(client, tunnel, ticketParam) {
 
             // ── Draw-op diagnostics (#118 black-tile investigation) ──
             // The browser receives exactly what guacd emits, so tapping the
@@ -732,7 +746,7 @@
                     // back to Connections. Session may keep running until
                     // socket closes; user can explicitly terminate from
                     // Connections' active-session card.
-                    rgGo('/connections.html');
+                    rgGo(connectionsPage());
                 });
                 document.getElementById('cp-fullscreen').addEventListener('click', function() {
                     rgEnterFullscreen();
@@ -1890,7 +1904,7 @@
             document.getElementById('fs-disconnect').addEventListener('click', function() {
                 rgExitFullscreen();
                 try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
-                rgGo('/connections.html');
+                rgGo(connectionsPage());
             });
 
             var sessionEndStatus = null;
@@ -1919,6 +1933,7 @@
                 if (embedded && normalEnd) { if (firstEnd) rgNotifyParent('end'); return; }
                 document.getElementById('disconnected-title').textContent = normalEnd ? 'Session Ended' : 'Connection Error';
                 document.getElementById('disconnected-message').textContent = message;
+                document.getElementById('rdp-password-fallback').hidden = !isRdpSso || normalEnd;
                 document.getElementById('disconnected-overlay').className = 'visible';
                 if (rgFullscreenEl()) rgExitFullscreen();
             }
@@ -2056,6 +2071,24 @@
             };
 
             // Disconnected overlay buttons
+            var rdpLogin = document.getElementById('rdp-password-fallback');
+            rdpLogin.addEventListener('submit', async function(event) {
+                event.preventDefault();
+                var password = rdpLogin.elements.password.value;
+                rdpLogin.reset();
+                var submit = rdpLogin.querySelector('button');
+                var message = document.getElementById('disconnected-message');
+                submit.disabled = true;
+                message.textContent = 'Opening Remote Desktop…';
+                try {
+                    rgGo(await launchRdp(rdpTarget, password));
+                } catch (error) {
+                    message.textContent = error.message;
+                    submit.disabled = false;
+                    rdpLogin.elements.password.focus();
+                }
+            });
+
             document.getElementById('btn-close-session').addEventListener('click', function() {
                 // Embedded: the launcher closes the frame and the tab is back
                 // on Connections.
@@ -2084,7 +2117,7 @@
                 // Ad-hoc sessions have no entry to relaunch from. Send the
                 // user back to Connections so they can pick where to go.
                 if (!relaunchInfo) {
-                    rgGo('/connections.html');
+                    rgGo(connectionsPage());
                     return;
                 }
 
@@ -2096,7 +2129,7 @@
                 var firstSlash = key.indexOf('/');
                 var lastSlash = key.lastIndexOf('/');
                 if (firstSlash < 0 || lastSlash <= firstSlash) {
-                    rgGo('/connections.html');
+                    rgGo(connectionsPage());
                     return;
                 }
                 var scope = key.substring(0, firstSlash);
@@ -2135,7 +2168,7 @@
                         // none of those are fixable from this page. Punt to
                         // Connections where the user can fill in what's
                         // missing or pick a different entry.
-                        rgGo('/connections.html');
+                        rgGo(connectionsPage());
                         return;
                     }
                     return res.json().then(function(data) {
@@ -2146,12 +2179,12 @@
                             }
                             rgGo(dest);
                         } else {
-                            rgGo('/connections.html');
+                            rgGo(connectionsPage());
                         }
                     });
                 })
                 .catch(function() {
-                    rgGo('/connections.html');
+                    rgGo(connectionsPage());
                 });
             });
 
@@ -2423,8 +2456,11 @@
             });
 
             if (wantFullscreen) rgStartFullscreenOnConnect();
-            var connectData = shareToken ? 'token=' + encodeURIComponent(shareToken) : '';
-            client.connect(connectData);
+            var connectData = new URLSearchParams();
+            if (shareToken) connectData.set('token', shareToken);
+            if (ticketParam) connectData.set('ticket', ticketParam);
+            if (rdpTarget) connectData.set('connectTo', rdpTarget);
+            client.connect(connectData.toString());
         }
     </script>
     <script src="/ui.js"></script>

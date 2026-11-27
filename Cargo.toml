@@ -4,6 +4,9 @@ version = "1.15.3"
 edition = "2021"
 description = "Lightweight Rust replacement for Apache Guacamole client"
 
+[features]
+rdp-cloudflare-example = ["dep:jsonwebtoken"]
+
 [dependencies]
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
@@ -61,6 +64,8 @@ rustls-pemfile = "2"
 openidconnect = "4"
 url = "2"
 tower-cookies = "0.11"
+jsonwebtoken = { version = "12", optional = true, default-features = false, features = ["aws_lc_rs"] }
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 
 # SSH key generation
 

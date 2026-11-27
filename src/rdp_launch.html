@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote Desktop</title>
+<style>
+    :root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
+    body { margin: 0; }
+    main { max-width: 30rem; margin: 12vh auto; padding: 1.25rem; }
+    h1 { font-size: 1.65rem; margin: 0 0 1rem; }
+    ul { list-style: none; padding: 0; display: grid; gap: .6rem; }
+    button, input { font: inherit; padding: .65rem .8rem; border: 1px solid GrayText; border-radius: .4rem; }
+    button { cursor: pointer; }
+    li button { width: 100%; text-align: left; }
+    form label { display: block; margin-block: .65rem; }
+    input { box-sizing: border-box; width: 100%; }
+</style>
+<script src="/rdp-launch.js"></script>
+</head>
+<body>
+<main data-autolaunch="@@AUTO@@">
+    <h1>Remote Desktop</h1>
+    <ul id="desktops">@@TARGETS@@</ul>
+    <p id="status" role="status"></p>
+    <form id="windows-login" method="post" action="/rdp/launch" hidden>
+        <label>Windows username <input name="username" autocomplete="username" value="@@USERNAME@@" readonly></label>
+        <label>Windows password <input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Sign in</button>
+    </form>
+</main>
+<script>
+const statusText = document.getElementById('status');
+const login = document.getElementById('windows-login');
+const desktops = [...document.querySelectorAll('#desktops button')];
+let selected = desktops[0];
+
+async function openDesktop(button, password) {
+    selected = button;
+    login.hidden = true;
+    desktops.forEach(item => { item.disabled = true; });
+    login.querySelector('button').disabled = true;
+    statusText.textContent = 'Opening Remote Desktop…';
+    try {
+        window.location.replace(await launchRdp(button.dataset.target, password));
+    } catch (error) {
+        statusText.textContent = error.message;
+        login.hidden = false;
+        desktops.forEach(item => { item.disabled = false; });
+        login.querySelector('button').disabled = false;
+        login.elements.password.focus();
+    }
+}
+
+desktops.forEach(button => button.addEventListener('click', () => openDesktop(button)));
+login.addEventListener('submit', event => {
+    event.preventDefault();
+    const password = login.elements.password.value;
+    login.reset();
+    openDesktop(selected, password);
+});
+
+if (document.querySelector('main').dataset.autolaunch === 'true') openDesktop(selected);
+</script>
+</body>
+</html>
