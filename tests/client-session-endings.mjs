@@ -16,11 +16,11 @@ assert.ok(start !== -1 && end > start, 'session-ending handlers must exist');
 const handlers = html.slice(start, end);
 const statusSource = await readFile(join(root, 'static/guac/Status.js'), 'utf8');
 
-function setup(embedded = false) {
+function setup(embedded = false, isRdpSso = false) {
     const elements = new Map();
     let state = 3;
     const ctx = {
-        embedded, statusEl: {}, _thumbInterval: 42, cleared: [], notifications: [], monitors: [],
+        embedded, isRdpSso, statusEl: {}, _thumbInterval: 42, cleared: [], notifications: [], monitors: [],
         console: { log() {} },
         document: { getElementById(id) {
             if (!elements.has(id)) elements.set(id, {});
@@ -92,6 +92,16 @@ for (const [codeName, message, title] of [
     assert.ok(h.ctx.statusEl.textContent.endsWith(message));
     h.cleanup();
 }
+
+// Password fallback is available only after an SSO connection error.
+for (const isRdpSso of [true, false]) {
+    const h = setup(false, isRdpSso);
+    h.ctx.client.onerror({ code: h.codes.CLIENT_UNAUTHORIZED, message: 'Authentication failure' });
+    assert.equal(h.elements.get('rdp-password-fallback').hidden, !isRdpSso);
+}
+const cleanSso = setup(false, true);
+cleanSso.closed();
+assert.equal(cleanSso.elements.get('rdp-password-fallback').hidden, true);
 
 // Abnormal transport closure still reports an error and performs cleanup.
 for (const message of [undefined, 'Server timeout.']) {

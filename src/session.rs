@@ -37,7 +37,7 @@ pub enum SessionType {
 /// `Serialize` exists only so `reuse_fingerprint()` can hash the whole
 /// request. Never send a serialised request anywhere or log it: it carries
 /// every secret the session connects with.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct CreateSessionRequest {
     #[serde(default)]
     pub session_type: SessionType,
