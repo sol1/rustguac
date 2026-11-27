@@ -140,7 +140,11 @@ mod tests {
 
         for role in ["viewer", "operator"] {
             let email = format!("{role}@example.com");
-            let user = db::upsert_user(&db, &email, role, Some(role), role, &[], true).unwrap();
+            let db::OidcLogin::User(user) =
+                db::upsert_user(&db, &email, role, Some(role), role, &[], true).unwrap()
+            else {
+                panic!("expected an OIDC user");
+            };
             let token = db::create_auth_session(&db, user.id, 60).unwrap();
             headers.insert(
                 axum::http::header::COOKIE,
